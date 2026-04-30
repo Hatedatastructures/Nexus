@@ -1,0 +1,54 @@
+# Nexus Agent —— Taskfile.yml
+# 用法: task <task-name>
+# 安装: go install github.com/go-task/task/v3/cmd/task@latest
+
+version: "3"
+
+vars:
+  BIN_DIR: bin
+  BUILD_FLAGS: -ldflags="-s -w"
+
+tasks:
+  default:
+    cmds:
+      - task: build
+
+  build:
+    desc: 编译所有入口点
+    cmds:
+      - go build {{.BUILD_FLAGS}} -o {{.BIN_DIR}}/nexus ./cmd/nexus
+      - go build {{.BUILD_FLAGS}} -o {{.BIN_DIR}}/nexus-gateway ./cmd/nexus-gateway
+      - go build {{.BUILD_FLAGS}} -o {{.BIN_DIR}}/nexus-acp ./cmd/nexus-acp
+
+  test:
+    desc: 运行单元测试
+    cmds:
+      - go test -race -cover ./...
+
+  vet:
+    desc: 静态分析
+    cmds:
+      - go vet ./...
+
+  lint:
+    desc: 运行 golangci-lint
+    cmds:
+      - golangci-lint run ./...
+
+  tidy:
+    desc: 整理依赖
+    cmds:
+      - go mod tidy
+
+  clean:
+    desc: 清理构建产物
+    cmds:
+      - rm -rf {{.BIN_DIR}} nexus.exe nexus-gateway.exe nexus-acp.exe
+
+  check:
+    desc: 完整检查 (tidy + vet + test + build)
+    cmds:
+      - task: tidy
+      - task: vet
+      - task: test
+      - task: build

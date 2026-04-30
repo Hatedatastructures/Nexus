@@ -1,0 +1,375 @@
+// Package gateway 提供网关运行器。
+// GatewayRunner 是消息网关的主控器，负责:
+//   - 连接所有启用的平台适配器
+//   - 消息路由到 AIAgent
+//   - 流式响应投递
+//   - 会话生命周期管理
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"sync"
+	"time"
+
+	"nexus-agent/internal/agent"
+	"nexus-agent/internal/config"
+	"nexus-agent/internal/cron"
+	"nexus-agent/internal/gateway/platforms"
+	"nexus-agent/internal/llm"
+	"nexus-agent/internal/state"
+)
+
+// ───────────────────────────── 网关运行器 ─────────────────────────────
+
+// GatewayRunner 是消息网关的中央编排器。
+// 管理平台适配器、代理缓存、会话路由和流式投递。
+type GatewayRunner struct {
+	config      *config.GatewayConfig
+	adapters    []platforms.PlatformAdapter // 所有已启用的平台适配器
+	agentCache  *AgentCache                 // 代理实例缓存
+	sessionMgr  *SessionManager             // 会话管理
+	deliveryMgr *DeliveryManager            // 消息投递管理
+	hookReg     *HookRegistry               // 消息钩子
+	agentConfig *config.AgentConfig         // 代理配置
+	state       *state.Store                // 持久化存储
+	cronSched   *cron.Scheduler             // 定时调度器
+	wg          sync.WaitGroup              // goroutine 计数器
+	shutdownCh  chan struct{}               // 关闭信号通道
+}
+
+// NewGatewayRunner 创建网关运行器。
+// cfg 为网关配置，agentCfg 为代理配置，state 为持久化存储，cronSched 为定时调度器。
+func NewGatewayRunner(cfg *config.GatewayConfig, agentCfg *config.AgentConfig, state *state.Store, cronSched *cron.Scheduler) *GatewayRunner {
+	// 初始化缓存
+	cacheSize := cfg.Cache.MaxSize
+	if cacheSize <= 0 {
+		cacheSize = 128
+	}
+	idleTTL := cfg.Cache.IdleTTL
+	if idleTTL <= 0 {
+		idleTTL = time.Hour
+	}
+
+	return &GatewayRunner{
+		config:      cfg,
+		agentCache:  NewAgentCache(cacheSize, idleTTL),
+		sessionMgr:  NewSessionManager(),
+		deliveryMgr: NewDeliveryManager(4096),
+		hookReg:     NewHookRegistry(),
+		agentConfig: agentCfg,
+		state:       state,
+		cronSched:   cronSched,
+		shutdownCh:  make(chan struct{}),
+	}
+}
+
+// RegisterAdapter 注册一个平台适配器。
+// 在 Start 之前调用。
+func (g *GatewayRunner) RegisterAdapter(adapter platforms.PlatformAdapter) {
+	g.adapters = append(g.adapters, adapter)
+	slog.Info("registered platform adapter",
+		"name", adapter.Name(),
+		"platform", string(adapter.PlatformType()),
+	)
+}
+
+// Start 启动网关。
+// 连接所有平台适配器，启动消息处理循环和后台维护任务。
+func (g *GatewayRunner) Start(ctx context.Context) error {
+	slog.Info("starting gateway runner",
+		"adapters", len(g.adapters),
+	)
+
+	// 启动 cron 调度器 (阻塞运行，在独立 goroutine 中启动)
+	if g.cronSched != nil {
+		g.wg.Add(1)
+		go func() {
+			defer g.wg.Done()
+			if err := g.cronSched.Run(ctx); err != nil && err != context.Canceled {
+				slog.Warn("cron scheduler run failed", "err", err)
+			}
+		}()
+	}
+
+	// 启动缓存清理 goroutine (每 5 分钟扫描一次)
+	g.wg.Add(1)
+	go g.cacheCleaner(ctx)
+
+	// 连接所有平台
+	for _, adapter := range g.adapters {
+		msgCh, err := adapter.Connect(ctx)
+		if err != nil {
+			slog.Error("failed to connect platform adapter",
+				"name", adapter.Name(),
+				"err", err,
+			)
+			continue
+		}
+
+		// 为每个平台启动消息处理 goroutine
+		g.wg.Add(1)
+		go g.handlePlatform(ctx, adapter, msgCh)
+	}
+
+	return nil
+}
+
+// Stop 优雅关闭网关。
+// 断开所有平台连接，停止后台任务。
+func (g *GatewayRunner) Stop(ctx context.Context) error {
+	slog.Info("stopping gateway runner")
+
+	// 发送关闭信号
+	close(g.shutdownCh)
+
+	// 停止 cron 调度器
+	if g.cronSched != nil {
+		g.cronSched.Stop()
+	}
+
+	// 断开所有平台连接
+	for _, adapter := range g.adapters {
+		if err := adapter.Disconnect(ctx); err != nil {
+			slog.Warn("failed to disconnect platform adapter",
+				"name", adapter.Name(),
+				"err", err,
+			)
+		}
+	}
+
+	// 等待所有 goroutine 退出 (带超时)
+	done := make(chan struct{})
+	go func() {
+		g.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-ctx.Done():
+		slog.Warn("gateway stop timed out waiting for goroutines")
+	case <-done:
+		slog.Info("gateway stopped gracefully")
+	}
+
+	return nil
+}
+
+// ───────────────────────────── 内部方法 ─────────────────────────────
+
+// handlePlatform 处理单个平台的消息循环。
+// 从 msgCh 接收消息，为每条消息启动处理 goroutine。
+func (g *GatewayRunner) handlePlatform(ctx context.Context, adapter platforms.PlatformAdapter, msgCh <-chan *platforms.MessageEvent) {
+	defer g.wg.Done()
+
+	slog.Info("platform handler started",
+		"name", adapter.Name(),
+	)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-g.shutdownCh:
+			return
+		case msg, ok := <-msgCh:
+			if !ok {
+				slog.Info("platform message channel closed",
+					"name", adapter.Name(),
+				)
+				return
+			}
+
+			// 每个消息在独立 goroutine 中处理
+			g.wg.Add(1)
+			go func(m *platforms.MessageEvent) {
+				defer g.wg.Done()
+				if err := g.processMessage(ctx, adapter, m); err != nil {
+					slog.Error("failed to process message",
+						"platform", adapter.Name(),
+						"chat_id", m.Source.ChatID,
+						"user_id", m.Source.UserID,
+						"err", err,
+					)
+				}
+			}(msg)
+		}
+	}
+}
+
+// processMessage 处理单条入站消息。
+// 完整的消息处理流水线: 钩子 → 会话 → 缓存 → AIAgent → 流式投递。
+func (g *GatewayRunner) processMessage(ctx context.Context, adapter platforms.PlatformAdapter, msg *platforms.MessageEvent) error {
+	// 1. 执行投递前钩子
+	event, err := g.hookReg.Run(ctx, HookPreDispatch, msg)
+	if err != nil {
+		slog.Warn("pre-dispatch hook failed", "err", err)
+		return err
+	}
+	if event == nil {
+		// 钩子中止了消息处理
+		return nil
+	}
+	msg = event
+
+	// 2. 分析消息来源 → sessionKey
+	source := msg.Source
+	if source == nil {
+		slog.Warn("message has no source, skipping")
+		return nil
+	}
+	sessionKey := platforms.BuildSessionKey(source)
+
+	// 3. 查找/创建会话
+	session := g.sessionMgr.GetOrCreate(source)
+	slog.Debug("message session",
+		"key", sessionKey,
+		"agent_id", session.AgentID,
+		"reset_count", session.ResetCount,
+	)
+
+	// 4. 获取或创建代理实例
+	sessionAgent, err := g.agentCache.GetOrCreate(sessionKey, func() (*agent.AIAgent, string) {
+		// 工厂函数: 创建新的 AIAgent 实例
+		// 基于配置构建，设置会话信息
+		a := agent.DefaultAgentFromConfig(g.agentConfig)
+		// 注: 实际使用时会通过更多选项配置 agent
+		return a, g.agentConfig.Model // signature = 模型名
+	})
+	if err != nil {
+		slog.Error("failed to get agent from cache", "err", err)
+		return err
+	}
+	defer g.agentCache.ReleaseInUse(sessionKey)
+
+	// 5. 创建流式消费者
+	streamCfg := g.config.Stream
+	consumer := NewStreamConsumer(
+		adapter,
+		source.ChatID,
+		streamCfg.BufferSize,
+		streamCfg.EditInterval,
+	)
+
+	// 6. 设置流式回调并启动消费者
+	sessionAgent.SetStreamCallback(consumer.OnDelta)
+	consumerCtx, consumerCancel := context.WithCancel(ctx)
+	defer consumerCancel()
+
+	go consumer.Run(consumerCtx)
+
+	// 7. 发送输入中指示器
+	_ = adapter.SendTyping(ctx, source.ChatID)
+
+	// 8. 执行对话
+	// 加载历史消息 (最近 50 条)
+	history, _ := g.loadMessageHistory(ctx, session.AgentID, 50)
+
+	result, err := sessionAgent.RunConversation(ctx, msg.Text, history, "")
+	if err != nil {
+		slog.Error("conversation failed",
+			"session_key", sessionKey,
+			"err", err,
+		)
+		// 对话失败，向用户发送错误提示
+		_, _ = adapter.Send(ctx, source.ChatID, "抱歉，处理您的消息时遇到了错误。请稍后重试。", nil)
+		return err
+	}
+
+	// 9. 保存对话到状态存储
+	if g.state != nil {
+		if result.FinalResponse != "" {
+			_ = g.state.InsertMessage(ctx, &state.MessageRecord{
+				SessionID: session.AgentID,
+				Role:      "assistant",
+				Content:   result.FinalResponse,
+			})
+		}
+	}
+
+	// 10. 等待流式消费完成 (如果已有回调投递，则此处仅为同步点)
+	if result.FinalResponse != "" {
+		// 如果流式回调已投递了内容，Finish 仅作为同步点
+		consumer.Finish(ctx)
+	} else {
+		// 兜底: 非流式发送最终回复
+		_, _ = adapter.Send(ctx, source.ChatID, result.FinalResponse, nil)
+	}
+
+	// 11. 执行投递后钩子
+	finalEvent := &platforms.MessageEvent{
+		Text:        result.FinalResponse,
+		MessageType: platforms.MsgText,
+		Source:      source,
+		Timestamp:   time.Now(),
+	}
+	_, _ = g.hookReg.Run(ctx, HookPostDelivery, finalEvent)
+
+	slog.Debug("message processed",
+		"platform", adapter.Name(),
+		"session_key", sessionKey,
+	)
+
+	return nil
+}
+
+// cacheCleaner 定期清理缓存中的空闲代理。
+// 每 5 分钟扫描一次，驱逐空闲超时的条目。
+func (g *GatewayRunner) cacheCleaner(ctx context.Context) {
+	defer g.wg.Done()
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-g.shutdownCh:
+			return
+		case <-ticker.C:
+			_ = g.agentCache.SweepIdle(ctx)
+			g.agentCache.EnforceCap()
+		}
+	}
+}
+
+// loadMessageHistory 从状态存储中加载会话的最近消息。
+func (g *GatewayRunner) loadMessageHistory(ctx context.Context, sessionID string, limit int) ([]llm.Message, error) {
+	if g.state == nil || sessionID == "" {
+		return nil, nil
+	}
+
+	records, err := g.state.GetMessages(ctx, sessionID, limit, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	messages := make([]llm.Message, 0, len(records))
+	for _, r := range records {
+		msg := llm.Message{
+			Role:    llm.MessageRole(r.Role),
+			Content: r.Content,
+		}
+		// 恢复工具调用信息 (从 ToolCalls 字段反序列化为 []llm.ToolCall)
+		if r.ToolCalls != "" {
+			var toolCalls []llm.ToolCall
+			if err := json.Unmarshal([]byte(r.ToolCalls), &toolCalls); err != nil {
+				slog.Warn("failed to deserialize tool_calls from message history",
+					"session_id", sessionID,
+					"tool_calls_json", r.ToolCalls[:min(80, len(r.ToolCalls))],
+					"err", err,
+				)
+			} else {
+				msg.ToolCalls = toolCalls
+			}
+		}
+		if r.ToolCallID != "" {
+			msg.ToolCallID = r.ToolCallID
+		}
+		messages = append(messages, msg)
+	}
+
+	return messages, nil
+}

@@ -1,0 +1,36 @@
+# Binaries
+nexus.exe
+nexus-gateway.exe
+nexus-acp.exe
+*.exe
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Go
+*.test
+*.out
+
+# Build output
+dist/
+bin/
+
+# Environment
+*.env
+
+# Nexus runtime data
+.nexus/
+logs/
+hermes.db
+nexus.db
+
+# Cron output
+cron-output/

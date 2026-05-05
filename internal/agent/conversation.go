@@ -109,7 +109,7 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 		// ── 4b. 调用 LLM (带重试和错误恢复) ──
 		resp, err := a.callLLMWithRetry(ctx, req)
 		if err != nil {
-			if isContextOverflow(err) && compressionAttempts < maxCompressionAttempts {
+			if llm.ClassifyFromError(err).ShouldCompress && compressionAttempts < maxCompressionAttempts {
 				compressionAttempts++
 				slog.Warn("上下文溢出，触发压缩",
 					"session_id", a.sessionID,
@@ -393,7 +393,7 @@ func (a *AIAgent) callLLMWithRetry(ctx context.Context, req *llm.ChatRequest) (*
 		lastErr = err
 
 		// 分类错误并执行恢复策略
-		classified := classifyError(err)
+		classified := llm.ClassifyFromError(err)
 		slog.Warn("LLM 调用失败",
 			"session_id", a.sessionID,
 			"attempt", attempt+1,
@@ -407,8 +407,8 @@ func (a *AIAgent) callLLMWithRetry(ctx context.Context, req *llm.ChatRequest) (*
 			return nil, err
 		}
 
-		// 认证错误: 尝试轮换凭证
-		if classified.ShouldRotateCred && a.credentialPool != nil {
+		// 认证/计费错误: 尝试轮换凭证
+		if (classified.Reason == llm.ReasonAuth || classified.Reason == llm.ReasonBilling) && a.credentialPool != nil {
 			a.credentialPool.MarkExhausted(ctx, classified.StatusCode, err.Error())
 		}
 
@@ -634,81 +634,6 @@ func parseToolArguments(argsJSON string) map[string]any {
 	return args
 }
 
-// ───────────────────────────── 错误分类 ─────────────────────────────
-
-// classifiedError 分类后的错误
-type classifiedError struct {
-	Reason            string
-	StatusCode        int
-	Retryable         bool
-	ShouldCompress    bool
-	ShouldRotateCred  bool
-}
-
-func classifyError(err error) *classifiedError {
-	if err == nil {
-		return &classifiedError{Retryable: true}
-	}
-	msg := strings.ToLower(err.Error())
-
-	// 上下文溢出
-	if strings.Contains(msg, "context") && (strings.Contains(msg, "overflow") ||
-		strings.Contains(msg, "exceeded") || strings.Contains(msg, "too long") ||
-		strings.Contains(msg, "too many tokens")) {
-		return &classifiedError{
-			Reason: "context_overflow", Retryable: true, ShouldCompress: true,
-		}
-	}
-
-	// 速率限制
-	if strings.Contains(msg, "429") || strings.Contains(msg, "rate limit") ||
-		strings.Contains(msg, "rate_limit") || strings.Contains(msg, "too many requests") {
-		return &classifiedError{
-			Reason: "rate_limit", StatusCode: 429, Retryable: true,
-		}
-	}
-
-	// 认证错误 — 不可重试（无效 Key 重试也没用）
-	if strings.Contains(msg, "401") || strings.Contains(msg, "unauthorized") {
-		return &classifiedError{
-			Reason: "auth", StatusCode: 401, Retryable: false, ShouldRotateCred: true,
-		}
-	}
-
-	// 计费
-	if strings.Contains(msg, "402") || strings.Contains(msg, "billing") || strings.Contains(msg, "exhausted") {
-		return &classifiedError{
-			Reason: "billing", StatusCode: 402, ShouldRotateCred: true,
-		}
-	}
-
-	// 模型不存在
-	if strings.Contains(msg, "404") || strings.Contains(msg, "not found") {
-		return &classifiedError{
-			Reason: "model_not_found", StatusCode: 404,
-		}
-	}
-
-	// 服务端错误
-	if strings.Contains(msg, "500") || strings.Contains(msg, "502") ||
-		strings.Contains(msg, "503") || strings.Contains(msg, "server error") {
-		return &classifiedError{
-			Reason: "server_error", Retryable: true,
-		}
-	}
-
-	// 超时
-	if strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline") {
-		return &classifiedError{
-			Reason: "timeout", Retryable: true,
-		}
-	}
-
-	return &classifiedError{
-		Reason: "unknown", Retryable: true,
-	}
-}
-
 // ───────────────────────────── 辅助函数 ─────────────────────────────
 
 func estimateTokensRough(messages []llm.Message) int {
@@ -723,29 +648,3 @@ func estimateTokensRough(messages []llm.Message) int {
 	return total
 }
 
-func isContextOverflow(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "context") && (strings.Contains(msg, "overflow") ||
-		strings.Contains(msg, "exceeded") || strings.Contains(msg, "too long") ||
-		strings.Contains(msg, "maximum") || strings.Contains(msg, "too many tokens"))
-}
-
-func isRetryable(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "401") || strings.Contains(msg, "unauthorized") {
-		return false
-	}
-	if strings.Contains(msg, "404") || strings.Contains(msg, "not found") {
-		return false
-	}
-	if strings.Contains(msg, "invalid") && strings.Contains(msg, "format") {
-		return false
-	}
-	return true
-}

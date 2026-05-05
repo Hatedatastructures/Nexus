@@ -39,6 +39,34 @@ func NewMatrixAdapter(homeServer, accessToken, userID string) *MatrixAdapter {
 	}
 }
 
+// ───────────────────────────── 自注册 ─────────────────────────────
+
+func init() {
+	GetRegistry().Register(&AdapterEntry{
+		Platform: PlatformMatrix,
+		Name:     "Matrix",
+		Factory:  func() PlatformAdapter { return &MatrixAdapter{} },
+	})
+}
+
+// Configure 注入 Matrix 平台配置。
+// settings 应包含 "home_server"、"access_token" 和 "user_id" 键。
+func (m *MatrixAdapter) Configure(settings map[string]any) error {
+	homeServer, _ := settings["home_server"].(string)
+	accessToken, _ := settings["access_token"].(string)
+	userID, _ := settings["user_id"].(string)
+	if homeServer == "" || accessToken == "" {
+		return fmt.Errorf("matrix 平台缺少 home_server 或 access_token 配置")
+	}
+	m.homeServer = strings.TrimRight(homeServer, "/")
+	m.accessToken = accessToken
+	m.userID = userID
+	m.client = &http.Client{Timeout: 30 * time.Second}
+	m.msgCh = make(chan *MessageEvent, 128)
+	m.shutdown = make(chan struct{})
+	return nil
+}
+
 func (m *MatrixAdapter) Name() string { return "Matrix" }
 func (m *MatrixAdapter) PlatformType() Platform { return PlatformMatrix }
 func (m *MatrixAdapter) MaxMessageLength() int { return 4096 }

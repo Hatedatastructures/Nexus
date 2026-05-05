@@ -151,6 +151,32 @@ func (s *SlackAdapter) SendDocument(ctx context.Context, chatID string, filePath
 	return &SendResult{Success: false, Error: "file upload via raw HTTP not supported on Slack"}, nil
 }
 
+// ───────────────────────────── 自注册 ─────────────────────────────
+
+func init() {
+	GetRegistry().Register(&AdapterEntry{
+		Platform: PlatformSlack,
+		Name:     "Slack",
+		Factory:  func() PlatformAdapter { return &SlackAdapter{} },
+	})
+}
+
+// Configure 注入 Slack 平台配置。
+// settings 必须包含 "bot_token" 和 "app_token" 键。
+func (s *SlackAdapter) Configure(settings map[string]any) error {
+	botToken, _ := settings["bot_token"].(string)
+	appToken, _ := settings["app_token"].(string)
+	if botToken == "" || appToken == "" {
+		return fmt.Errorf("slack 平台缺少 bot_token 或 app_token 配置")
+	}
+	s.botToken = botToken
+	s.appToken = appToken
+	s.client = &http.Client{Timeout: 30 * time.Second}
+	s.baseURL = "https://slack.com/api"
+	s.msgCh = make(chan *MessageEvent, 128)
+	return nil
+}
+
 // ───────────────────────────── 内部方法 ─────────────────────────────
 
 // socketLoop Socket Mode 连接循环。

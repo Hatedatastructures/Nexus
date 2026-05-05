@@ -43,7 +43,8 @@ func (t *WebSearchTool) Emoji() string { return "🌐" }
 func (t *WebSearchTool) IsAvailable() bool {
 	return os.Getenv("TAVILY_API_KEY") != "" ||
 		os.Getenv("EXA_API_KEY") != "" ||
-		os.Getenv("FIRECRAWL_API_KEY") != ""
+		os.Getenv("FIRECRAWL_API_KEY") != "" ||
+		os.Getenv("PARALLEL_API_KEY") != ""
 }
 
 // MaxResultChars 返回结果最大字符数。
@@ -95,12 +96,31 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (strin
 	var results []map[string]any
 	var err error
 
-	if apiKey := os.Getenv("TAVILY_API_KEY"); apiKey != "" {
-		results, err = t.searchTavily(ctx, apiKey, query, numResults)
-	} else if apiKey := os.Getenv("EXA_API_KEY"); apiKey != "" {
-		results, err = t.searchExa(ctx, apiKey, query, numResults)
-	} else {
-		return ToolError("未配置搜索后端。请设置 TAVILY_API_KEY 或 EXA_API_KEY 环境变量。"), nil
+	backend := os.Getenv("NEXUS_WEB_SEARCH_BACKEND")
+	switch backend {
+	case "firecrawl":
+		if apiKey := os.Getenv("FIRECRAWL_API_KEY"); apiKey != "" {
+			results, err = t.searchFirecrawl(ctx, apiKey, query, numResults)
+		}
+	case "exa":
+		if apiKey := os.Getenv("EXA_API_KEY"); apiKey != "" {
+			results, err = t.searchExa(ctx, apiKey, query, numResults)
+		}
+	case "parallel":
+		if apiKey := os.Getenv("PARALLEL_API_KEY"); apiKey != "" {
+			results, err = t.searchParallel(ctx, apiKey, query, numResults)
+		}
+	default:
+		// 自动检测
+		if apiKey := os.Getenv("TAVILY_API_KEY"); apiKey != "" {
+			results, err = t.searchTavily(ctx, apiKey, query, numResults)
+		} else if apiKey := os.Getenv("EXA_API_KEY"); apiKey != "" {
+			results, err = t.searchExa(ctx, apiKey, query, numResults)
+		} else if apiKey := os.Getenv("FIRECRAWL_API_KEY"); apiKey != "" {
+			results, err = t.searchFirecrawl(ctx, apiKey, query, numResults)
+		} else {
+			return ToolError("未配置搜索后端。请设置 TAVILY_API_KEY / EXA_API_KEY / FIRECRAWL_API_KEY 环境变量。"), nil
+		}
 	}
 
 	if err != nil {
@@ -139,6 +159,11 @@ func (t *WebSearchTool) searchTavily(ctx context.Context, apiKey, query string, 
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("Tavily API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+	}
 
 	var result struct {
 		Answer  string `json:"answer"`
@@ -196,6 +221,11 @@ func (t *WebSearchTool) searchExa(ctx context.Context, apiKey, query string, num
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("Exa API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
 	var result struct {
 		Results []struct {
 			Title   string `json:"title"`
@@ -216,6 +246,243 @@ func (t *WebSearchTool) searchExa(ctx context.Context, apiKey, query string, num
 		})
 	}
 	return results, nil
+}
+
+// searchFirecrawl 使用 Firecrawl API 进行搜索。
+func (t *WebSearchTool) searchFirecrawl(ctx context.Context, apiKey, query string, numResults int) ([]map[string]any, error) {
+	reqBody := map[string]any{
+		"query":        query,
+		"pageOptions":  map[string]any{"onlyMainContent": true},
+		"searchOptions": map[string]any{"limit": numResults},
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.firecrawl.dev/v1/search", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("Firecrawl API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Success bool `json:"success"`
+		Data    []struct {
+			Title   string `json:"title"`
+			URL     string `json:"url"`
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	var results []map[string]any
+	for _, r := range result.Data {
+		results = append(results, map[string]any{
+			"title":   r.Title,
+			"url":     r.URL,
+			"content": r.Content,
+		})
+	}
+	return results, nil
+}
+
+// searchParallel 使用 Parallel API 进行搜索。
+func (t *WebSearchTool) searchParallel(ctx context.Context, apiKey, query string, numResults int) ([]map[string]any, error) {
+	reqBody := map[string]any{
+		"query":  query,
+		"limit":  numResults,
+		"depth":  "basic",
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.parallel.ai/v1/search", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", apiKey)
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("Parallel API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Results []struct {
+			Title   string `json:"title"`
+			URL     string `json:"url"`
+			Content string `json:"content"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	var results []map[string]any
+	for _, r := range result.Results {
+		results = append(results, map[string]any{
+			"title":   r.Title,
+			"url":     r.URL,
+			"content": r.Content,
+		})
+	}
+	return results, nil
+}
+
+// ───────────────────────────── 网页爬取工具 ─────────────────────────────
+
+// WebCrawlTool 实现带指令的网页爬取功能。
+type WebCrawlTool struct {
+	client *http.Client
+}
+
+// Name 返回工具名称。
+func (t *WebCrawlTool) Name() string { return "web_crawl" }
+
+// Description 返回工具描述。
+func (t *WebCrawlTool) Description() string {
+	return "爬取指定网站并按指令提取信息。支持深度爬取和自定义提取规则。"
+}
+
+func (t *WebCrawlTool) Toolset() string  { return "web" }
+func (t *WebCrawlTool) Emoji() string    { return "🕷️" }
+func (t *WebCrawlTool) MaxResultChars() int { return 100000 }
+
+// IsAvailable 检查是否有可用的爬取后端。
+func (t *WebCrawlTool) IsAvailable() bool {
+	return os.Getenv("FIRECRAWL_API_KEY") != ""
+}
+
+// Schema 返回工具的 JSON Schema。
+func (t *WebCrawlTool) Schema() *ToolSchema {
+	return &ToolSchema{
+		Name:        "web_crawl",
+		Description: t.Description(),
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url": map[string]any{
+					"type":        "string",
+					"description": "要爬取的起始 URL",
+				},
+				"instructions": map[string]any{
+					"type":        "string",
+					"description": "提取指令，描述需要从页面中提取什么信息",
+				},
+				"max_pages": map[string]any{
+					"type":        "integer",
+					"description": "最大爬取页面数，默认 5",
+				},
+			},
+			"required": []string{"url", "instructions"},
+		},
+	}
+}
+
+// Execute 执行网页爬取。
+func (t *WebCrawlTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+	targetURL, _ := args["url"].(string)
+	if targetURL == "" {
+		return ToolError("参数 url 是必填项"), nil
+	}
+
+	instructions, _ := args["instructions"].(string)
+	if instructions == "" {
+		return ToolError("参数 instructions 是必填项"), nil
+	}
+
+	maxPages := 5
+	if v, ok := args["max_pages"].(float64); ok && v > 0 {
+		maxPages = int(v)
+		if maxPages > 20 {
+			maxPages = 20
+		}
+	}
+
+	apiKey := os.Getenv("FIRECRAWL_API_KEY")
+	if apiKey == "" {
+		return ToolError("爬取功能需要 FIRECRAWL_API_KEY 环境变量"), nil
+	}
+
+	if t.client == nil {
+		t.client = &http.Client{Timeout: 120 * time.Second}
+	}
+
+	// 使用 Firecrawl 的 crawl 端点
+	reqBody := map[string]any{
+		"url":         targetURL,
+		"limit":       maxPages,
+		"scrapeOptions": map[string]any{
+			"formats":           []string{"markdown"},
+			"onlyMainContent":   true,
+		},
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.firecrawl.dev/v1/crawl", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return ToolError(fmt.Sprintf("创建请求失败: %v", err)), nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return ToolError(fmt.Sprintf("爬取请求失败: %v", err)), nil
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Success bool `json:"success"`
+		Data    []struct {
+			Markdown string `json:"markdown"`
+			Metadata struct {
+				SourceURL string `json:"sourceURL"`
+				Title    string `json:"title"`
+			} `json:"metadata"`
+		} `json:"data"`
+		Total int `json:"total"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return ToolError(fmt.Sprintf("解析响应失败: %v", err)), nil
+	}
+
+	var pages []map[string]any
+	for _, d := range result.Data {
+		pages = append(pages, map[string]any{
+			"url":      d.Metadata.SourceURL,
+			"title":    d.Metadata.Title,
+			"content":  truncateString(d.Markdown, 20000),
+		})
+	}
+
+	output, _ := json.Marshal(map[string]any{
+		"url":          targetURL,
+		"instructions": instructions,
+		"pages_crawled": len(pages),
+		"total":        result.Total,
+		"pages":        pages,
+	})
+
+	return string(output), nil
 }
 
 // ───────────────────────────── 网页提取工具 ─────────────────────────────
@@ -459,6 +726,12 @@ func init() {
 	// web_extract 注册并标记为异步工具
 	reg.Register(&WebExtractTool{})
 	if entry := reg.GetEntry("web_extract"); entry != nil {
+		entry.IsAsync = true
+	}
+
+	// web_crawl 注册并标记为异步工具
+	reg.Register(&WebCrawlTool{})
+	if entry := reg.GetEntry("web_crawl"); entry != nil {
 		entry.IsAsync = true
 	}
 }

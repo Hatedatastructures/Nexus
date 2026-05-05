@@ -181,6 +181,33 @@ func (w *WeChatAdapter) VerifySignature(signature string, timestamp string, nonc
 	return hash == signature
 }
 
+// ───────────────────────────── 自注册 ─────────────────────────────
+
+func init() {
+	GetRegistry().Register(&AdapterEntry{
+		Platform: PlatformWeChat,
+		Name:     "WeChat",
+		Factory:  func() PlatformAdapter { return &WeChatAdapter{} },
+	})
+}
+
+// Configure 注入微信公众号平台配置。
+// settings 必须包含 "app_id"、"secret" 和 "token" 键。
+func (w *WeChatAdapter) Configure(settings map[string]any) error {
+	appID, _ := settings["app_id"].(string)
+	secret, _ := settings["secret"].(string)
+	token, _ := settings["token"].(string)
+	if appID == "" || secret == "" || token == "" {
+		return fmt.Errorf("wechat 平台缺少 app_id、secret 或 token 配置")
+	}
+	w.appID = appID
+	w.secret = secret
+	w.token = token
+	w.client = &http.Client{Timeout: 30 * time.Second}
+	w.msgCh = make(chan *MessageEvent, 128)
+	return nil
+}
+
 // ───────────────────────────── 内部方法 ─────────────────────────────
 
 // buildReplyXML 构建微信被动回复 XML。

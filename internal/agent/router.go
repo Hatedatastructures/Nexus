@@ -7,7 +7,6 @@ import (
 	"context"
 	"log/slog"
 	"math"
-	"strings"
 	"sync"
 	"time"
 
@@ -345,134 +344,21 @@ func (r *ProviderRouter) runHealthChecks() {
 // ───────────────────────────── 错误分类 ─────────────────────────────
 
 // shouldFallback 判断给定错误是否应该触发降级（切换到下一个提供者）。
-// 基于 HTTP 状态码和错误消息内容进行分类。
+// 使用统一的 llm.ClassifyFromError 进行分类。
 func (r *ProviderRouter) shouldFallback(err error) bool {
 	if err == nil {
 		return false
 	}
-
-	errMsg := err.Error()
-	errMsgLower := strings.ToLower(errMsg)
-
-	// 提取 HTTP 状态码（从错误字符串中模式匹配）
-	statusCode := extractStatusCode(err)
-
-	// 使用内置的分类逻辑
-	if statusCode > 0 {
-		classified := llm.ClassifyError(statusCode, errMsgLower)
-		return classified.ShouldFallback
-	}
-
-	// 无状态码时，通过消息内容判断
-	return classifyMessageForFallback(errMsgLower)
-}
-
-// extractStatusCode 从错误中提取 HTTP 状态码。
-// 通过错误字符串中的模式匹配提取（如 "HTTP 402" / "status: 429"）。
-func extractStatusCode(err error) int {
-	errStr := err.Error()
-	// 匹配三位数字，且值在 400-599 范围内
-	for i := 0; i+2 < len(errStr); i++ {
-		if isDigit(errStr[i]) && isDigit(errStr[i+1]) && isDigit(errStr[i+2]) {
-			code := (int(errStr[i]-'0'))*100 + (int(errStr[i+1]-'0'))*10 + (int(errStr[i+2]) - '0')
-			if code >= 400 && code < 600 {
-				return code
-			}
-		}
-	}
-	return 0
-}
-
-func isDigit(c byte) bool {
-	return c >= '0' && c <= '9'
-}
-
-// classifyMessageForFallback 通过消息内容判断是否应该降级。
-func classifyMessageForFallback(msgLower string) bool {
-	// 计费耗尽：应降级
-	billingKeywords := []string{
-		"insufficient credits", "insufficient_quota", "credit balance",
-		"credits have been exhausted", "top up your credits",
-		"payment required", "billing hard limit", "exceeded your current quota",
-		"account is deactivated",
-	}
-	for _, kw := range billingKeywords {
-		if strings.Contains(msgLower, kw) {
-			return true
-		}
-	}
-
-	// 速率限制：应降级
-	rateLimitKeywords := []string{
-		"rate limit", "rate_limit", "too many requests", "throttled",
-		"requests per minute", "tokens per minute", "resource_exhausted",
-		"throttlingexception", "too many concurrent requests",
-	}
-	for _, kw := range rateLimitKeywords {
-		if strings.Contains(msgLower, kw) {
-			return true
-		}
-	}
-
-	// 过载/服务不可用：应降级
-	overloadKeywords := []string{
-		"overloaded", "service unavailable", "model is overloaded",
-		"currently unavailable", "try again later",
-	}
-	for _, kw := range overloadKeywords {
-		if strings.Contains(msgLower, kw) {
-			return true
-		}
-	}
-
-	// 模型不存在：应降级（切换提供者或模型）
-	modelKeywords := []string{
-		"is not a valid model", "invalid model", "model not found",
-		"model_not_found", "does not exist", "no such model",
-		"unknown model", "unsupported model",
-	}
-	for _, kw := range modelKeywords {
-		if strings.Contains(msgLower, kw) {
-			return true
-		}
-	}
-
-	// 认证错误：应降级（可能是该提供者的 key 失效）
-	authKeywords := []string{
-		"invalid api key", "invalid_api_key", "unauthorized",
-		"forbidden", "invalid token", "token expired", "token revoked",
-	}
-	for _, kw := range authKeywords {
-		if strings.Contains(msgLower, kw) {
-			return true
-		}
-	}
-
+	classified := llm.ClassifyFromError(err)
 	// 上下文溢出不应降级（需要压缩而非切换）
-	contextKeywords := []string{
-		"context length", "maximum context", "token limit",
-		"too many tokens", "prompt is too long", "context window",
+	if classified.Reason == llm.ReasonContextOverflow {
+		return false
 	}
-	for _, kw := range contextKeywords {
-		if strings.Contains(msgLower, kw) {
-			return false
-		}
+	// 格式错误不应降级（是请求本身的问题）
+	if classified.Reason == llm.ReasonFormatError {
+		return false
 	}
-
-	// 网络/超时错误：可重试，不立即降级
-	networkKeywords := []string{
-		"connection refused", "connection reset", "timeout",
-		"no such host", "network is unreachable", "i/o timeout",
-		"temporary failure", "context deadline exceeded",
-	}
-	for _, kw := range networkKeywords {
-		if strings.Contains(msgLower, kw) {
-			return false
-		}
-	}
-
-	// 默认可降级
-	return true
+	return classified.ShouldFallback
 }
 
 // noHealthyProviderError 表示没有健康的提供者可用。

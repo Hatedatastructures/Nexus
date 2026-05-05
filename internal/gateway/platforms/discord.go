@@ -440,6 +440,30 @@ func (d *DiscordAdapter) getGatewayURL() (string, error) {
 	return wsURL, nil
 }
 
+// ───────────────────────────── 自注册 ─────────────────────────────
+
+func init() {
+	GetRegistry().Register(&AdapterEntry{
+		Platform: PlatformDiscord,
+		Name:     "Discord",
+		Factory:  func() PlatformAdapter { return &DiscordAdapter{} },
+	})
+}
+
+// Configure 注入 Discord 平台配置。
+// settings 必须包含 "token" 键。
+func (d *DiscordAdapter) Configure(settings map[string]any) error {
+	token, _ := settings["token"].(string)
+	if token == "" {
+		return fmt.Errorf("discord 平台缺少 token 配置")
+	}
+	d.token = token
+	d.client = &http.Client{Timeout: 30 * time.Second}
+	d.baseURL = "https://discord.com/api/v10"
+	d.msgCh = make(chan *MessageEvent, 128)
+	return nil
+}
+
 // closeWS 关闭 WebSocket 连接。
 func (d *DiscordAdapter) closeWS() {
 	d.wsMu.Lock()

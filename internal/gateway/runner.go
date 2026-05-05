@@ -75,6 +75,52 @@ func (g *GatewayRunner) RegisterAdapter(adapter platforms.PlatformAdapter) {
 	)
 }
 
+// RegisterFromRegistry 从全局适配器注册中心创建并注册所有适配器。
+// 仅注册配置中启用的平台，对支持 ConfigurableAdapter 接口的适配器注入配置。
+func (g *GatewayRunner) RegisterFromRegistry(gwCfg *config.GatewayConfig) {
+	registry := platforms.GetRegistry()
+
+	for _, entry := range gwCfg.Platforms {
+		if !entry.Enabled {
+			slog.Info("跳过未启用的平台", "platform", entry.Platform)
+			continue
+		}
+
+		platform := platforms.Platform(entry.Platform)
+		adapter, err := registry.Create(platform)
+		if err != nil {
+			slog.Warn("平台适配器未注册，跳过",
+				"platform", entry.Platform,
+				"err", err,
+			)
+			continue
+		}
+
+		// 对支持配置注入的适配器，注入平台配置参数
+		if configurable, ok := adapter.(platforms.ConfigurableAdapter); ok {
+			settings := make(map[string]any)
+			// 复制 settings
+			for k, v := range entry.Settings {
+				settings[k] = v
+			}
+			// Token 字段以 "token" 键传入
+			if entry.Token != "" {
+				settings["token"] = entry.Token
+			}
+
+			if err := configurable.Configure(settings); err != nil {
+				slog.Warn("平台适配器配置失败，跳过",
+					"platform", entry.Platform,
+					"err", err,
+				)
+				continue
+			}
+		}
+
+		g.RegisterAdapter(adapter)
+	}
+}
+
 // Start 启动网关。
 // 连接所有平台适配器，启动消息处理循环和后台维护任务。
 func (g *GatewayRunner) Start(ctx context.Context) error {

@@ -188,6 +188,32 @@ func (w *WhatsAppAdapter) VerifyWebhook(mode string, challenge string, verifyTok
 	return "", false
 }
 
+// ───────────────────────────── 自注册 ─────────────────────────────
+
+func init() {
+	GetRegistry().Register(&AdapterEntry{
+		Platform: PlatformWhatsApp,
+		Name:     "WhatsApp",
+		Factory:  func() PlatformAdapter { return &WhatsAppAdapter{} },
+	})
+}
+
+// Configure 注入 WhatsApp 平台配置。
+// settings 必须包含 "token" 和 "phone_id" 键。
+func (w *WhatsAppAdapter) Configure(settings map[string]any) error {
+	token, _ := settings["token"].(string)
+	phoneID, _ := settings["phone_id"].(string)
+	if token == "" || phoneID == "" {
+		return fmt.Errorf("whatsapp 平台缺少 token 或 phone_id 配置")
+	}
+	w.token = token
+	w.phoneID = phoneID
+	w.client = &http.Client{Timeout: 30 * time.Second}
+	w.baseURL = "https://graph.facebook.com/v18.0"
+	w.msgCh = make(chan *MessageEvent, 128)
+	return nil
+}
+
 // ───────────────────────────── 内部方法 ─────────────────────────────
 
 // convertMessage 将 WhatsApp 消息转换为 MessageEvent。

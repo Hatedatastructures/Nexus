@@ -16,7 +16,6 @@ import (
 	"nexus-agent/internal/config"
 	"nexus-agent/internal/cron"
 	"nexus-agent/internal/gateway"
-	"nexus-agent/internal/gateway/platforms"
 	"nexus-agent/internal/state"
 	"nexus-agent/internal/tool"
 	"nexus-agent/pkg/logutil"
@@ -85,8 +84,8 @@ func main() {
 	// 5. 创建 GatewayRunner
 	runner := gateway.NewGatewayRunner(&cfg.Gateway, &cfg.Agent, st, cronSched)
 
-	// 6. 根据配置注册平台适配器
-	registerPlatformAdapters(runner, &cfg.Gateway)
+	// 6. 根据配置注册平台适配器 (从全局注册中心自动发现)
+	runner.RegisterFromRegistry(&cfg.Gateway)
 
 	// 7. 启动 GatewayRunner
 	ctx, cancel := context.WithCancel(context.Background())
@@ -139,113 +138,3 @@ func createCronScheduler(cfg *config.Config, st *state.Store) (*cron.Scheduler, 
 	return cron.NewScheduler(jobMgr, executor), nil
 }
 
-// registerPlatformAdapters 根据配置创建并注册平台适配器。
-func registerPlatformAdapters(runner *gateway.GatewayRunner, gwCfg *config.GatewayConfig) {
-	for _, entry := range gwCfg.Platforms {
-		if !entry.Enabled {
-			slog.Info("跳过未启用的平台", "platform", entry.Platform)
-			continue
-		}
-
-		adapter := createPlatformAdapter(entry)
-		if adapter == nil {
-			slog.Warn("无法创建平台适配器，跳过", "platform", entry.Platform)
-			continue
-		}
-
-		runner.RegisterAdapter(adapter)
-	}
-}
-
-// createPlatformAdapter 根据平台配置创建对应的适配器实例。
-func createPlatformAdapter(entry config.PlatformEntry) platforms.PlatformAdapter {
-	settings := entry.Settings
-	getSetting := func(key string) string {
-		if v, ok := settings[key]; ok {
-			if s, ok := v.(string); ok {
-				return s
-			}
-		}
-		return ""
-	}
-
-	switch entry.Platform {
-	case "telegram":
-		token := entry.Token
-		if token == "" {
-			token = getSetting("token")
-		}
-		if token == "" {
-			slog.Warn("telegram 平台缺少 token 配置")
-			return nil
-		}
-		return platforms.NewTelegramAdapter(token)
-
-	case "discord":
-		token := entry.Token
-		if token == "" {
-			token = getSetting("token")
-		}
-		if token == "" {
-			slog.Warn("discord 平台缺少 token 配置")
-			return nil
-		}
-		return platforms.NewDiscordAdapter(token)
-
-	case "slack":
-		botToken := entry.Token
-		if botToken == "" {
-			botToken = getSetting("bot_token")
-		}
-		appToken := getSetting("app_token")
-		if botToken == "" || appToken == "" {
-			slog.Warn("slack 平台缺少 bot_token 或 app_token 配置")
-			return nil
-		}
-		return platforms.NewSlackAdapter(botToken, appToken)
-
-	case "whatsapp":
-		token := entry.Token
-		if token == "" {
-			token = getSetting("token")
-		}
-		phoneID := getSetting("phone_id")
-		if token == "" || phoneID == "" {
-			slog.Warn("whatsapp 平台缺少 token 或 phone_id 配置")
-			return nil
-		}
-		return platforms.NewWhatsAppAdapter(token, phoneID)
-
-	case "wechat":
-		appID := getSetting("app_id")
-		secret := getSetting("secret")
-		token := getSetting("token")
-		if appID == "" || secret == "" || token == "" {
-			slog.Warn("wechat 平台缺少 app_id、secret 或 token 配置")
-			return nil
-		}
-		return platforms.NewWeChatAdapter(appID, secret, token)
-
-	case "feishu":
-		appID := getSetting("app_id")
-		appSecret := getSetting("app_secret")
-		if appID == "" || appSecret == "" {
-			slog.Warn("feishu 平台缺少 app_id 或 app_secret 配置")
-			return nil
-		}
-		return platforms.NewFeishuAdapter(appID, appSecret)
-
-	case "dingtalk":
-		appKey := getSetting("app_key")
-		appSecret := getSetting("app_secret")
-		if appKey == "" || appSecret == "" {
-			slog.Warn("dingtalk 平台缺少 app_key 或 app_secret 配置")
-			return nil
-		}
-		return platforms.NewDingTalkAdapter(appKey, appSecret)
-
-	default:
-		slog.Warn("未知的平台类型，跳过", "platform", entry.Platform)
-		return nil
-	}
-}

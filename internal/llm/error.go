@@ -131,6 +131,34 @@ var longContextTierPatterns = []string{"extra usage", "long context"}
 
 // ── 分类函数 ──────────────────────────────────────────────────────────────
 
+// ClassifyFromError 从 error 中提取 HTTP 状态码并分类。
+// 这是统一的错误分类入口，内部调用 ClassifyError。
+func ClassifyFromError(err error) *ClassifiedError {
+	if err == nil {
+		return &ClassifiedError{Reason: ReasonUnknown, Retryable: true}
+	}
+	statusCode := ExtractHTTPStatus(err.Error())
+	return ClassifyError(statusCode, err.Error())
+}
+
+// ExtractHTTPStatus 从错误字符串中提取 HTTP 状态码。
+// 匹配 400-599 范围内的三位数字。
+func ExtractHTTPStatus(errStr string) int {
+	for i := 0; i+2 < len(errStr); i++ {
+		if isDigit(errStr[i]) && isDigit(errStr[i+1]) && isDigit(errStr[i+2]) {
+			code := (int(errStr[i]-'0'))*100 + (int(errStr[i+1]-'0'))*10 + (int(errStr[i+2]) - '0')
+			if code >= 400 && code < 600 {
+				return code
+			}
+		}
+	}
+	return 0
+}
+
+func isDigit(c byte) bool {
+	return c >= '0' && c <= '9'
+}
+
 // ClassifyError 按 HTTP 状态码 + 消息内容模式匹配分类 API 错误。
 //
 // 分类优先级:

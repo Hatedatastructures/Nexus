@@ -224,6 +224,31 @@ func (f *FeishuAdapter) ReceiveEvent(payload []byte) error {
 	return nil
 }
 
+// ───────────────────────────── 自注册 ─────────────────────────────
+
+func init() {
+	GetRegistry().Register(&AdapterEntry{
+		Platform: PlatformFeishu,
+		Name:     "Feishu",
+		Factory:  func() PlatformAdapter { return &FeishuAdapter{} },
+	})
+}
+
+// Configure 注入飞书平台配置。
+// settings 必须包含 "app_id" 和 "app_secret" 键。
+func (f *FeishuAdapter) Configure(settings map[string]any) error {
+	appID, _ := settings["app_id"].(string)
+	appSecret, _ := settings["app_secret"].(string)
+	if appID == "" || appSecret == "" {
+		return fmt.Errorf("feishu 平台缺少 app_id 或 app_secret 配置")
+	}
+	f.appID = appID
+	f.appSecret = appSecret
+	f.client = &http.Client{Timeout: 30 * time.Second}
+	f.msgCh = make(chan *MessageEvent, 128)
+	return nil
+}
+
 // ───────────────────────────── 内部方法 ─────────────────────────────
 
 // doAPI 发送飞书 API 请求。

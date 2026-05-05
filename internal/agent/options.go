@@ -135,6 +135,15 @@ func WithReasoningCallback(fn func(reasoning string)) AgentOption {
 	return func(a *AIAgent) { a.reasoningCallback = fn }
 }
 
+// WithClarifyCallback 设置澄清工具回调。
+// 用于在不确定用户意图时请求澄清或决策。
+func WithClarifyCallback(fn func(question string, choices []string) string) AgentOption {
+	return func(a *AIAgent) {
+		// 设置到工具包的全局回调
+		tool.SetClarifyCallback(fn)
+	}
+}
+
 // WithToolRegistry 设置工具注册中心
 func WithToolRegistry(r *tool.Registry) AgentOption {
 	return func(a *AIAgent) { a.registry = r }
@@ -238,6 +247,13 @@ func (a *AIAgent) SetReasoningCallback(fn func(reasoning string)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.reasoningCallback = fn
+}
+
+// SetClarifyCallback 设置澄清工具回调。
+// 同时设置到全局工具注册中心，供 ClarifyTool 使用。
+func (a *AIAgent) SetClarifyCallback(fn func(question string, choices []string) string) {
+	// 设置到工具包的全局回调
+	tool.SetClarifyCallback(fn)
 }
 
 // WithConfig 从配置对象批量设置选项

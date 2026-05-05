@@ -404,6 +404,30 @@ type telegramSticker struct {
 	FileID string `json:"file_id"`
 }
 
+// ───────────────────────────── 自注册 ─────────────────────────────
+
+func init() {
+	GetRegistry().Register(&AdapterEntry{
+		Platform: PlatformTelegram,
+		Name:     "Telegram",
+		Factory:  func() PlatformAdapter { return &TelegramAdapter{} },
+	})
+}
+
+// Configure 注入 Telegram 平台配置。
+// settings 必须包含 "token" 键。
+func (t *TelegramAdapter) Configure(settings map[string]any) error {
+	token, _ := settings["token"].(string)
+	if token == "" {
+		return fmt.Errorf("telegram 平台缺少 token 配置")
+	}
+	t.token = token
+	t.client = &http.Client{Timeout: 30 * time.Second}
+	t.baseURL = "https://api.telegram.org/bot" + token
+	t.msgCh = make(chan *MessageEvent, 128)
+	return nil
+}
+
 // ───────────────────────────── 辅助函数 ─────────────────────────────
 
 // formatInt 将整数格式化为字符串。

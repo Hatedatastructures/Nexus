@@ -216,6 +216,31 @@ func (d *DingTalkAdapter) ReceiveCallback(payload []byte) error {
 	return nil
 }
 
+// ───────────────────────────── 自注册 ─────────────────────────────
+
+func init() {
+	GetRegistry().Register(&AdapterEntry{
+		Platform: PlatformDingTalk,
+		Name:     "DingTalk",
+		Factory:  func() PlatformAdapter { return &DingTalkAdapter{} },
+	})
+}
+
+// Configure 注入钉钉平台配置。
+// settings 必须包含 "app_key" 和 "app_secret" 键。
+func (d *DingTalkAdapter) Configure(settings map[string]any) error {
+	appKey, _ := settings["app_key"].(string)
+	appSecret, _ := settings["app_secret"].(string)
+	if appKey == "" || appSecret == "" {
+		return fmt.Errorf("dingtalk 平台缺少 app_key 或 app_secret 配置")
+	}
+	d.appKey = appKey
+	d.appSecret = appSecret
+	d.client = &http.Client{Timeout: 30 * time.Second}
+	d.msgCh = make(chan *MessageEvent, 128)
+	return nil
+}
+
 // ───────────────────────────── 内部方法 ─────────────────────────────
 
 // doAPI 发送钉钉 API 请求。

@@ -30,6 +30,16 @@ type Config struct {
 	Sandbox     SandboxConfig            `yaml:"sandbox"`     // 沙箱执行配置
 	MCP         MCPConfig                `yaml:"mcp"`         // MCP 协议配置
 	Credentials CredentialConfig         `yaml:"credentials"` // 凭证配置
+
+	// ── 扩展配置 (Phase 1+ 模块预留) ──
+	Plugins     PluginsConfig            `yaml:"plugins"`      // 插件系统配置
+	Insights    InsightsConfig           `yaml:"insights"`     // 使用洞察配置
+	Trajectory  TrajectoryConfig         `yaml:"trajectory"`   // 轨迹记录配置
+	Redact      RedactConfig             `yaml:"redact"`       // 密钥脱敏配置
+	Batch       BatchConfig              `yaml:"batch"`        // 批处理配置
+	URLSafety   URLSafetyConfig          `yaml:"url_safety"`   // URL 安全配置
+	ToolOutput  ToolOutputConfig         `yaml:"tool_output"`  // 工具输出限制配置
+	ShellHooks  ShellHooksConfig         `yaml:"shell_hooks"`  // Shell Hook 配置
 }
 
 // ───────────────────────────── 代理配置 ─────────────────────────────
@@ -188,6 +198,71 @@ type CredentialConfig struct {
 	FallbackKey string `yaml:"fallback_key"` // 备选 API Key 环境变量名
 }
 
+// ───────────────────────────── 插件配置 ─────────────────────────────
+
+// PluginsConfig 定义插件系统的配置
+type PluginsConfig struct {
+	Enabled bool     `yaml:"enabled"` // 是否启用插件系统
+	Dirs    []string `yaml:"dirs"`    // 插件目录列表
+}
+
+// ───────────────────────────── 洞察配置 ─────────────────────────────
+
+// InsightsConfig 定义使用洞察的配置
+type InsightsConfig struct {
+	Enabled bool `yaml:"enabled"` // 是否启用使用洞察
+}
+
+// ───────────────────────────── 轨迹配置 ─────────────────────────────
+
+// TrajectoryConfig 定义轨迹记录的配置
+type TrajectoryConfig struct {
+	Enabled bool   `yaml:"enabled"` // 是否保存轨迹
+	Dir     string `yaml:"dir"`     // 轨迹保存目录
+	Format  string `yaml:"format"`  // 轨迹格式: sharegpt / openai
+}
+
+// ───────────────────────────── 脱敏配置 ─────────────────────────────
+
+// RedactConfig 定义密钥脱敏的配置
+type RedactConfig struct {
+	Enabled  bool     `yaml:"enabled"`  // 是否启用脱敏
+	Patterns []string `yaml:"patterns"` // 额外的自定义脱敏模式
+}
+
+// ───────────────────────────── 批处理配置 ─────────────────────────────
+
+// BatchConfig 定义批处理运行器的配置
+type BatchConfig struct {
+	MaxWorkers          int `yaml:"max_workers"`           // 最大并行 worker 数
+	CheckpointInterval  int `yaml:"checkpoint_interval"`   // 检查点间隔 (秒)
+}
+
+// ───────────────────────────── URL 安全配置 ─────────────────────────────
+
+// URLSafetyConfig 定义 URL 安全检查的配置
+type URLSafetyConfig struct {
+	AllowPrivateURLs bool     `yaml:"allow_private_urls"` // 是否允许访问私有 IP URL
+	BlockedIPs       []string `yaml:"blocked_ips"`        // 额外屏蔽的 IP 列表
+}
+
+// ───────────────────────────── 工具输出配置 ─────────────────────────────
+
+// ToolOutputConfig 定义工具输出限制
+type ToolOutputConfig struct {
+	MaxBytes      int `yaml:"max_bytes"`       // 单次输出最大字节数 (默认 50000)
+	MaxLines      int `yaml:"max_lines"`       // 单次输出最大行数 (默认 2000)
+	MaxLineLength int `yaml:"max_line_length"` // 单行最大长度 (默认 2000)
+}
+
+// ───────────────────────────── Shell Hook 配置 ─────────────────────────────
+
+// ShellHooksConfig 定义 Shell Hook 系统的配置
+type ShellHooksConfig struct {
+	Enabled     bool `yaml:"enabled"`      // 是否启用 Shell Hook
+	AcceptHooks bool `yaml:"accept_hooks"` // 自动接受 hook 首次使用同意
+}
+
 // ───────────────────────────── 配置加载 ─────────────────────────────
 
 // Load 从指定路径 (空 = 默认路径) 加载配置文件。
@@ -261,8 +336,8 @@ func defaultConfig() *Config {
 			UserMaxChars:   1375,
 		},
 		Cron: CronConfig{
-			Enabled:         false,
-			MaxParallelJobs: 3,
+			Enabled:          false,
+			MaxParallelJobs:  3,
 			TickIntervalSecs: 60,
 		},
 		Logging: LoggingConfig{
@@ -276,6 +351,22 @@ func defaultConfig() *Config {
 		Sandbox: SandboxConfig{
 			Backend:     "local",
 			TimeoutSecs: 120,
+		},
+		// ── 扩展配置默认值 ──
+		Trajectory: TrajectoryConfig{
+			Format: "sharegpt",
+		},
+		Redact: RedactConfig{
+			Enabled: true,
+		},
+		Batch: BatchConfig{
+			MaxWorkers:         4,
+			CheckpointInterval: 300,
+		},
+		ToolOutput: ToolOutputConfig{
+			MaxBytes:      50000,
+			MaxLines:      2000,
+			MaxLineLength: 2000,
 		},
 	}
 }

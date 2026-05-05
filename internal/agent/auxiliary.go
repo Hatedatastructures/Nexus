@@ -272,154 +272,42 @@ const (
 )
 
 // classifyErrorAction 根据错误类型决定应采取的动作。
+// 使用统一的 llm.ClassifyFromError 进行分类。
 func (c *AuxiliaryClient) classifyErrorAction(err error) errorAction {
 	if err == nil {
 		return actionRetry
 	}
 
-	errMsg := err.Error()
-	errMsgLower := errMsg
+	classified := llm.ClassifyFromError(err)
 
-	statusCode := extractStatusCode(err)
+	switch classified.Reason {
+	case llm.ReasonBilling:
+		return actionImmediateFallback
 
-	// 如果有状态码，使用内置分类器
-	if statusCode > 0 {
-		classified := llm.ClassifyError(statusCode, errMsgLower)
+	case llm.ReasonAuth:
+		return actionAbort
 
-		switch classified.Reason {
-		case llm.ReasonBilling:
-			// 计费耗尽，立即切换提供者
-			return actionImmediateFallback
+	case llm.ReasonRateLimit:
+		return actionRetryThenFallback
 
-		case llm.ReasonAuth:
-			// 认证失败，不可恢复
-			return actionAbort
+	case llm.ReasonModelNotFound:
+		return actionImmediateFallback
 
-		case llm.ReasonRateLimit:
-			// 速率限制，重试后降级
-			return actionRetryThenFallback
+	case llm.ReasonContextOverflow:
+		return actionAbort
 
-		case llm.ReasonModelNotFound:
-			// 模型不存在，尝试其他提供者
-			return actionImmediateFallback
+	case llm.ReasonServerError, llm.ReasonOverloaded:
+		return actionRetryThenFallback
 
-		case llm.ReasonContextOverflow:
-			// 上下文溢出，不应降级（需要压缩）
-			return actionAbort
+	case llm.ReasonFormatError:
+		return actionAbort
 
-		case llm.ReasonServerError, llm.ReasonOverloaded:
-			// 服务端错误/过载，重试后降级
-			return actionRetryThenFallback
+	case llm.ReasonTimeout:
+		return actionRetry
 
-		case llm.ReasonFormatError:
-			// 格式错误，不应降级（是请求本身的问题）
-			return actionAbort
-
-		default:
-			return actionImmediateFallback
-		}
+	default:
+		return actionImmediateFallback
 	}
-
-	// 无状态码，通过消息内容判断
-	return classifyMessageAction(errMsgLower)
-}
-
-// classifyMessageAction 通过消息内容决定错误动作。
-func classifyMessageAction(msgLower string) errorAction {
-	// 计费耗尽 → 立即降级
-	billingKeywords := []string{
-		"insufficient credits", "insufficient_quota", "credit balance",
-		"credits have been exhausted", "top up your credits",
-		"payment required", "billing hard limit", "exceeded your current quota",
-	}
-	for _, kw := range billingKeywords {
-		if containsStr(msgLower, kw) {
-			return actionImmediateFallback
-		}
-	}
-
-	// 认证错误 → 终止
-	authKeywords := []string{
-		"invalid api key", "invalid_api_key", "unauthorized",
-		"forbidden", "invalid token", "token expired",
-	}
-	for _, kw := range authKeywords {
-		if containsStr(msgLower, kw) {
-			return actionAbort
-		}
-	}
-
-	// 模型不存在 → 立即降级
-	modelKeywords := []string{
-		"is not a valid model", "invalid model", "model not found",
-		"model_not_found", "unknown model",
-	}
-	for _, kw := range modelKeywords {
-		if containsStr(msgLower, kw) {
-			return actionImmediateFallback
-		}
-	}
-
-	// 上下文溢出 → 终止（需要压缩）
-	contextKeywords := []string{
-		"context length", "maximum context", "token limit",
-		"too many tokens", "prompt is too long",
-	}
-	for _, kw := range contextKeywords {
-		if containsStr(msgLower, kw) {
-			return actionAbort
-		}
-	}
-
-	// 速率限制 → 重试后降级
-	rateLimitKeywords := []string{
-		"rate limit", "rate_limit", "too many requests", "throttled",
-		"resource_exhausted",
-	}
-	for _, kw := range rateLimitKeywords {
-		if containsStr(msgLower, kw) {
-			return actionRetryThenFallback
-		}
-	}
-
-	// 过载 → 重试后降级
-	overloadKeywords := []string{
-		"overloaded", "service unavailable", "model is overloaded",
-	}
-	for _, kw := range overloadKeywords {
-		if containsStr(msgLower, kw) {
-			return actionRetryThenFallback
-		}
-	}
-
-	// 网络错误 → 重试
-	networkKeywords := []string{
-		"connection refused", "connection reset", "timeout",
-		"no such host", "network is unreachable", "i/o timeout",
-		"context deadline exceeded",
-	}
-	for _, kw := range networkKeywords {
-		if containsStr(msgLower, kw) {
-			return actionRetry
-		}
-	}
-
-	// 默认：立即降级
-	return actionImmediateFallback
-}
-
-// containsStr 是 strings.Contains 的简洁别名。
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && indexOf(s, substr) >= 0
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
 }
 
 // ───────────────────────────── OpenRouter 兼容模式 ─────────────────────────────

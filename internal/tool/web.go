@@ -417,6 +417,12 @@ func (t *WebCrawlTool) Execute(ctx context.Context, args map[string]any) (string
 		}
 	}
 
+	// URL 安全检查: 拦截 SSRF 风险地址
+	if safe, reason := CheckURLSafety(targetURL); !safe {
+		slog.Warn("web_crawl: URL 安全检查未通过", "url", targetURL, "reason", reason)
+		return ToolError(fmt.Sprintf("URL 安全检查未通过: %s", reason)), nil
+	}
+
 	apiKey := os.Getenv("FIRECRAWL_API_KEY")
 	if apiKey == "" {
 		return ToolError("爬取功能需要 FIRECRAWL_API_KEY 环境变量"), nil
@@ -583,6 +589,16 @@ func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (stri
 			results = append(results, map[string]any{
 				"url":   targetURL,
 				"error": fmt.Sprintf("无效的 URL: %v", err),
+			})
+			continue
+		}
+
+		// URL 安全检查: 拦截 SSRF 风险地址
+		if safe, reason := CheckURLSafety(targetURL); !safe {
+			slog.Warn("web_extract: URL 安全检查未通过", "url", targetURL, "reason", reason)
+			results = append(results, map[string]any{
+				"url":   targetURL,
+				"error": fmt.Sprintf("URL 安全检查未通过: %s", reason),
 			})
 			continue
 		}

@@ -273,6 +273,11 @@ type Compressor struct {
 
 	// Anti-thrash 保护: 追踪连续无效压缩次数
 	consecutiveSummaries int // 连续未显著减少 token 的压缩次数
+
+	// SummaryTemplate 自定义摘要模板 (可选)。
+	// 非空时替代默认的结构化模板，用于生成上下文压缩摘要。
+	// 模板中可使用 {{.ToolCalls}}、{{.Decisions}}、{{.PendingTasks}}、{{.CurrentContext}} 占位符。
+	SummaryTemplate string
 }
 
 // NewCompressor 创建上下文压缩器

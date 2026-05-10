@@ -13,14 +13,17 @@
 2. [总体架构](#2-总体架构)
 3. [模块详解](#3-模块详解)
 4. [数据流设计](#4-数据流设计)
-5. [接口设计](#5-接口设计)
-6. [数据结构定义](#6-数据结构定义)
-7. [并发模型](#7-并发模型)
-8. [配置系统](#8-配置系统)
-9. [状态持久化](#9-状态持久化)
-10. [关键决策与权衡](#10-关键决策与权衡)
-11. [实现计划](#11-实现计划)
-12. [Go 依赖选型](#12-go-依赖选型)
+5. [并发模型](#5-并发模型)
+6. [配置系统](#6-配置系统)
+7. [关键决策与权衡](#7-关键决策与权衡)
+8. [实现计划](#8-实现计划)
+9. [Go 依赖选型](#9-go-依赖选型)
+10. [可观测性](#10-可观测性)
+11. [与 Python 版的核心差异](#11-与-python-版的核心差异)
+12. [新增包描述](#12-新增包描述)
+13. [安全架构](#13-安全架构)
+14. [Provider 回退链](#14-provider-回退链)
+15. [配置参考](#15-配置参考)
 
 ---
 
@@ -1559,6 +1562,767 @@ type HealthStatus struct {
 | 内存占用 | ~500MB (128 会话) | 目标 ~50-100MB (128 会话) |
 | 启动时间 | 2~5 秒 | 目标 <100ms |
 | 类型安全 | 运行时 (mypy 可选) | 编译时 |
+
+---
+
+## 12. 新增包描述
+
+### 12.1 `internal/hooks/` — Hook 拦截链
+
+**职责**: 提供可复用的 Shell Hook 系统，允许用户通过 shell 脚本拦截和控制工具调用行为。
+
+#### 核心接口
+
+```go
+// Hook 是单个 hook 的抽象接口。
+// 实现者必须提供名称、事件类型、匹配逻辑和执行逻辑。
+type Hook interface {
+    Name() string                                                  // hook 唯一名称
+    Event() string                                                 // 监听事件类型
+    Match(toolName string) bool                                    // 是否匹配工具名
+    Execute(ctx context.Context, event *HookEvent) (*HookResponse, error) // 执行 hook
+}
+
+// Manager 是 hook 管理器的抽象接口。
+// 负责 hook 注册、匹配和链式执行。
+type Manager interface {
+    Register(hook Hook) error                                                          // 注册 hook
+    ExecutePreHooks(ctx context.Context, toolName string, input map[string]any) (*HookResponse, bool, error)  // pre hook 链
+    ExecutePostHooks(ctx context.Context, toolName string, input map[string]any, output string) error          // post hook 链
+}
+```
+
+#### 事件与响应
+
+```go
+const (
+    EventPreToolCall  = "pre_tool_call"  // 工具调用前触发
+    EventPostToolCall = "post_tool_call" // 工具调用后触发
+)
+
+// HookEvent 发送给 hook 脚本的事件 (JSON stdin)
+type HookEvent struct {
+    EventName  string         `json:"event_name"`
+    ToolName   string         `json:"tool_name"`
+    ToolInput  map[string]any `json:"tool_input"`
+    ToolOutput string         `json:"tool_output,omitempty"` // 仅 post 时填充
+    SessionID  string         `json:"session_id"`
+    CWD        string         `json:"cwd"`
+}
+
+// HookResponse hook 脚本的响应 (JSON stdout)
+type HookResponse struct {
+    Decision string `json:"decision"` // allow / block / modify
+    Reason   string `json:"reason"`   // 阻止原因
+    Message  string `json:"message"`  // 替换消息 (modify 时)
+}
+```
+
+#### Hook 链语义
+
+- **pre_tool_call**: 按注册顺序执行，首个返回 `block` 的 hook 终止链并阻止工具调用
+- **post_tool_call**: 所有匹配的 hook 都会执行，不会被中断
+- hook 执行失败时记录警告并跳过，不终止链
+- Shell 命令通过 JSON stdin/stdout wire protocol 通信
+
+#### Shell 执行与持久化 Allowlist
+
+```go
+// ShellHook 实现 Hook 接口的 shell 脚本实现
+type ShellHook struct {
+    name       string         // hook 名称 (用于日志和 allowlist)
+    event      string         // 监听的事件类型
+    command    string         // shell 脚本路径
+    matcher    *regexp.Regexp // 工具名匹配正则 (nil = 匹配所有)
+    timeoutSec int            // 超时秒数 (默认 60, 最大 300)
+}
+
+// Allowlist 管理 hook 命令的允许列表
+type Allowlist struct {
+    entries   map[string]bool // 允许的命令集合
+    dir       string          // 持久化目录 (~/.nexus/hooks/)
+    acceptAll bool            // 自动接受所有 hook
+}
+```
+
+#### 配置规格
+
+```go
+// HookSpec 定义一个 Shell Hook 的配置规格
+type HookSpec struct {
+    Event      string `yaml:"event"`   // 事件类型: pre_tool_call / post_tool_call
+    Command    string `yaml:"command"` // hook 脚本路径
+    Matcher    string `yaml:"matcher"` // 工具名匹配正则 (空 = 匹配所有)
+    TimeoutSec int    `yaml:"timeout"` // 超时秒数 (默认 60, 最大 300)
+}
+```
+
+---
+
+### 12.2 `internal/permissions/` — 五级权限管理
+
+**职责**: 统一管理所有工具调用的权限控制，替代分散在各工具中的审批逻辑。
+
+#### 权限级别
+
+```go
+type Level int
+
+const (
+    LevelAutoAllow Level = 0 // 自动放行: 只读操作、安全查询
+    LevelAutoDeny  Level = 1 // 自动拒绝: 硬封锁，始终拒绝
+    LevelAskOnce   Level = 2 // 询问一次: 首次确认，会话内记住
+    LevelAskAlways Level = 3 // 每次询问: 高风险写操作
+    LevelEscalate  Level = 4 // 升级到人工: 网关模式下转发审核
+)
+```
+
+#### 策略引擎
+
+```go
+// Rule 表示一条权限规则
+type Rule struct {
+    ToolPattern string   `yaml:"tool"`                  // 工具名 glob 模式 (* 和 ?)
+    ArgPatterns []string `yaml:"args,omitempty"`         // 参数匹配 (AND 逻辑)
+    Level       Level    `yaml:"level"`                  // 权限级别
+    Reason      string   `yaml:"reason,omitempty"`       // 规则说明
+}
+
+// 参数匹配格式:
+//   "key=value"    — 精确匹配
+//   "key~=regex"   — 正则匹配
+//   "key!=value"   — 不等于
+//   "key"          — 参数存在性检查
+
+// Policy 权限策略引擎，规则顺序匹配，首个命中生效
+type Policy struct {
+    Name    string `yaml:"name"`
+    Rules   []Rule `yaml:"rules"`    // 按优先级排序
+    Default Level  `yaml:"default"`  // 无规则命中时的默认级别
+}
+```
+
+#### Checker — 核心检查器
+
+```go
+// Checker 整合策略引擎、会话记忆和 approval.Checker
+type Checker struct {
+    policy           *Policy            // 当前策略
+    approval         *approval.Checker  // 原有审批检查器 (终端命令)
+    sessionDecisions map[string]Level   // 会话级决策缓存
+}
+
+// Check 权限系统的主要入口点
+func (c *Checker) Check(toolName string, args map[string]any) Decision {
+    // 1. 策略引擎评估
+    // 2. 会话记忆检查 (ask_once 级别)
+    // 3. 终端命令: 与原有审批引擎联动 (取更严格的决策)
+}
+```
+
+#### 配置加载
+
+```yaml
+# ~/.nexus/permissions.yaml (用户级)
+# .nexus/permissions.yaml (项目级, 优先级更高)
+
+version: 1
+default: ask_always
+rules:
+  - tool: "web_search"
+    level: auto_allow
+    reason: "网页搜索为只读操作"
+  - tool: "file_*"
+    args: ["path~=*.env*"]
+    level: auto_deny
+    reason: "禁止修改环境变量文件"
+  - tool: "terminal"
+    args: ["command~=rm -rf"]
+    level: auto_deny
+    reason: "禁止执行破坏性命令"
+
+# 支持预设 (profiles)
+profiles:
+  safe:
+    default: ask_always
+    rules: []
+  dev:
+    default: ask_once
+    rules:
+      - tool: "terminal"
+        level: ask_once
+```
+
+合并策略: 项目级规则插入到用户级规则之前 (更高优先级)。
+
+---
+
+### 12.3 `internal/worker/` — Worker 状态机
+
+**职责**: 管理长时间运行操作的生命周期，用于 delegate 任务和异步操作。
+
+#### 状态定义
+
+```go
+type State string
+
+const (
+    StatePending   State = "pending"   // 等待执行
+    StateRunning   State = "running"   // 正在执行
+    StatePaused    State = "paused"    // 已暂停，可恢复
+    StateCompleted State = "completed" // 成功完成 (终态)
+    StateFailed    State = "failed"    // 执行失败 (终态)
+    StateCancelled State = "cancelled" // 已取消 (终态)
+)
+
+// 状态转换规则 (合法目标状态)
+var validTransitions = map[State][]State{
+    StatePending:   {StateRunning, StateCancelled},
+    StateRunning:   {StatePaused, StateCompleted, StateFailed, StateCancelled},
+    StatePaused:    {StateRunning, StateCancelled},
+    StateCompleted: {}, // 终态，不可转换
+    StateFailed:    {}, // 终态，不可转换
+    StateCancelled: {}, // 终态，不可转换
+}
+```
+
+#### Manager
+
+```go
+// Manager 管理多个 Worker 实例的生命周期
+type Manager struct {
+    workers map[string]*Worker // 并发安全 (sync.RWMutex)
+}
+
+func (m *Manager) Submit(ctx context.Context, taskName string, fn func(ctx context.Context) (any, error)) *Worker
+// 提交任务，fn 在独立 goroutine 中执行:
+//   - 正常返回 → Completed
+//   - 返回错误 → Failed
+//   - ctx 取消 → Cancelled
+
+func (m *Manager) Cancel(id string) error       // 取消指定任务
+func (m *Manager) GetStatus(id string) *Worker   // 查询任务状态
+func (m *Manager) ListActive() []*Worker         // 列出所有活跃任务
+func (m *Manager) ListAll() []*Worker            // 列出所有任务
+func (m *Manager) Remove(id string) error        // 移除终态任务
+```
+
+#### Worker 核心
+
+```go
+type Worker struct {
+    ID        string
+    TaskName  string
+    state     State
+    startedAt time.Time
+    updatedAt time.Time
+    err       error         // Failed 状态下的错误
+    result    any           // Completed 状态下的结果
+    cancel    context.CancelFunc
+    done      chan struct{} // 终态时关闭
+}
+
+func (w *Worker) Transition(to State) error    // 状态转换 (含合法性校验)
+func (w *Worker) SetResult(result any) error   // 设置结果并转为 Completed
+func (w *Worker) SetError(err error) error     // 设置错误并转为 Failed
+func (w *Worker) Cancel()                      // 请求取消
+func (w *Worker) Wait()                        // 阻塞直到终态
+func (w *Worker) Done() <-chan struct{}         // 终态通知 channel
+```
+
+---
+
+### 12.4 `internal/i18n/` — 国际化
+
+**职责**: 提供 Nexus Agent 的国际化支持，YAML 格式 locale 文件加载，点分键查找。
+
+#### 核心接口
+
+```go
+// Translator 翻译器接口
+type Translator interface {
+    T(key string, args ...any) string // 翻译并格式化
+    Locale() string                   // 当前 locale
+    SetLocale(locale string) error    // 切换 locale
+}
+
+// 全局便捷函数 (需先调用 Init)
+func Init(locale string)          // 初始化全局翻译器
+func T(key string, args ...any) string // 全局翻译
+```
+
+#### 回退链
+
+翻译查找顺序: **精确 locale → 语言前缀 → en → raw key**
+
+```
+zh-CN → zh → en → 返回原始 key
+en-US → en → en → 返回原始 key
+ja    → ja → en → 返回原始 key (如果 ja locale 未加载)
+```
+
+#### Locale 文件
+
+```go
+//go:embed locales/*.yaml
+var localeFS embed.FS // 嵌入所有 locale YAML 文件
+```
+
+当前内置 locale: `en`、`zh`。通过 `embed.FS` 打包到二进制中。
+
+#### YAML 格式
+
+```yaml
+# locales/zh.yaml
+app.name: "Nexus Agent"
+app.version: "版本: %s"
+error.not_found: "未找到: %s"
+permission.auto_allow: "自动放行"
+permission.ask_once: "询问一次"
+```
+
+---
+
+### 12.5 `internal/auth/` — 认证
+
+**职责**: 提供第三方 OAuth 认证流程，当前支持 Google OAuth 2.0 PKCE。
+
+#### GoogleOAuth PKCE 流程
+
+```go
+type GoogleOAuth struct {
+    clientID    string   // Google OAuth 客户端 ID
+    redirectURI string   // 重定向 URI (动态分配端口)
+    scopes      []string // OAuth 作用域
+    tokenFile   string   // token 持久化路径 (~/.nexus/credentials/google.json)
+}
+
+// 流程:
+//  1. 生成 PKCE code_verifier (64 字符) + code_challenge (S256)
+//  2. 启动本地 HTTP server 监听回调 (随机端口)
+//  3. 用系统浏览器打开 Google 授权页面
+//  4. 等待用户授权后回调携带 authorization code
+//  5. 用 code + code_verifier 换取 access_token
+//  6. 持久化 token 到文件 (0600 权限)
+func (g *GoogleOAuth) StartFlow(ctx context.Context) (*Token, error)
+```
+
+#### Token 管理
+
+```go
+type Token struct {
+    AccessToken  string    `json:"access_token"`
+    RefreshToken string    `json:"refresh_token"`
+    Expiry       time.Time `json:"expiry"`
+    TokenType    string    `json:"token_type"`
+}
+
+func (t *Token) Valid() bool                                    // 是否有效 (提前 60s 刷新)
+func (g *GoogleOAuth) RefreshToken(ctx context.Context, token *Token) (*Token, error) // 自动刷新
+func (g *GoogleOAuth) LoadToken() (*Token, error)               // 从文件加载
+func (g *GoogleOAuth) SaveToken(token *Token) error             // 持久化到文件
+```
+
+---
+
+### 12.6 `internal/llm/` — 新增提供者
+
+#### Copilot ACP (`copilot_acp.go`)
+
+GitHub Copilot 集成，复用 OpenAI Chat Completions 传输层。
+
+```go
+// CopilotProvider 实现 GitHub Copilot ACP 提供者
+type CopilotProvider struct {
+    transport  *OpenAITransport // 复用 OpenAI 传输层
+    httpClient *http.Client
+    endpoint   string // 默认 https://api.githubcopilot.com
+    token      string // Copilot 访问令牌
+    model      string // 默认 gpt-4o
+}
+
+// 认证头: Authorization: Bearer <token>
+// 额外头: Editor-Version, Copilot-Integration-Id
+// 默认模型: gpt-4o, gpt-4o-mini, o1-mini, claude-3.5-sonnet, claude-3.5-haiku
+```
+
+#### LM Studio (`lmstudio.go`)
+
+本地推理传输层，支持 `reasoning_content` 字段用于推理模型的思维链输出。
+
+```go
+// LMStudioTransport 实现 LM Studio OpenAI 兼容传输层
+type LMStudioTransport struct {
+    httpClient *http.Client
+    baseURL    string // 默认 http://localhost:1234/v1
+}
+
+// 特殊处理:
+//   - 检测 reasoning_content 字段 (LM Studio 推理模型特有)
+//   - 本地服务通常不需要 API Key
+//   - 支持 GET /v1/models 获取已加载模型列表
+```
+
+#### Models.dev (`models_dev.go`)
+
+模型元数据库客户端，提供模型元数据查询能力。
+
+```go
+// ModelsDevClient 模型元数据客户端
+type ModelsDevClient struct {
+    cache     map[string]*ModelDevInfo // 模型 ID → 元数据
+    cacheTTL  time.Duration            // 缓存 TTL (默认 1 小时)
+}
+
+// ModelDevInfo 模型元数据
+type ModelDevInfo struct {
+    ID            string  // 模型唯一标识
+    Provider      string  // 提供者名称
+    ContextWindow int     // 上下文窗口大小
+    MaxOutput     int     // 最大输出 token 数
+    Vision        bool    // 是否支持视觉
+    Reasoning     bool    // 是否支持推理
+    InputPrice    float64 // 输入价格 (每百万 token)
+    OutputPrice   float64 // 输出价格 (每百万 token)
+}
+
+// API 不可用时自动回退到内置硬编码列表 (27+ 模型)
+// 覆盖: Anthropic (6), OpenAI (8), Google (5), DeepSeek (2), Mistral (3)
+```
+
+---
+
+### 12.7 `internal/agent/` — 新增模块
+
+#### ThinkScrubber (`think_scrubber.go`)
+
+流式思考标签清理，从输出中分离思考内容。
+
+```go
+// ThinkScrubber 从流式输出中分离思考内容
+type ThinkScrubber struct {
+    provider     string       // 提供者名称
+    openTag      string       // 开始标签
+    closeTag     string       // 结束标签
+    state        scrubState   // 状态机状态
+    thinkContent strings.Builder // 捕获的思考内容
+    onThink      func(string)    // 思考内容增量回调
+}
+
+// 支持的标签格式:
+//   anthropic: <think> ... </think>
+//   deepseek:  <|thinking|> ... <|/thinking|>
+//   generic:   <scratchpad> ... </scratchpad>
+
+// 状态机: stateIdle → stateInTag → stateInContent → stateOutTag → stateIdle
+func (s *ThinkScrubber) Scrub(delta string) string  // 处理增量，返回用户可见文本
+func (s *ThinkScrubber) ThinkContent() string        // 获取完整思考内容
+```
+
+#### ImageRouter (`image_routing.go`)
+
+智能视觉模型路由，根据消息内容自动选择支持视觉的模型。
+
+```go
+// ImageRouter 根据消息内容选择合适的模型
+type ImageRouter struct {
+    visionModels  map[string]bool // 支持 vision 的模型集合
+    fallbackModel string          // 回退模型 (默认 claude-sonnet-4-20250514)
+}
+
+// 规则:
+//   - 无图像 → 返回 currentModel
+//   - 有图像 + 当前模型支持 vision → 返回 currentModel
+//   - 有图像 + 当前模型不支持 vision → 返回 fallbackModel
+func (r *ImageRouter) RouteModel(messages []llm.Message, currentModel string) string
+
+// 图像检测支持:
+//   - base64 数据 URI (data:image/...;base64,...)
+//   - 图像 URL (http(s)://... 以图片扩展名结尾)
+//   - OpenAI 多模态内容块 (type:"image_url")
+//   - Anthropic 图像块 (type:"image")
+```
+
+#### RecoveryEngine (`recovery.go`)
+
+自动恢复配方引擎，将错误分类结果映射到具体恢复动作。
+
+```go
+// RecoveryEngine 错误恢复引擎
+type RecoveryEngine struct {
+    recipes []RecoveryRecipe // 按优先级排序的配方
+}
+
+// 内置 10 条默认配方:
+//  1. 上下文溢出 → compress_and_retry
+//  2. 请求体过大 → truncate_and_retry
+//  3. 速率限制 → wait_and_retry (解析 Retry-After)
+//  4. 认证失败 → rotate_credential
+//  5. 计费耗尽 → rotate_credential
+//  6. 模型不存在 → fallback_model
+//  7. 服务过载 → wait_and_retry (10s)
+//  8. 服务器错误 → wait_and_retry (5s)
+//  9. 超时 → wait_and_retry (3s)
+// 10. 格式错误 → abort
+
+func (e *RecoveryEngine) ClassifyAndRecover(err error) RecoveryAction
+func (e *RecoveryEngine) AddRecipe(recipe RecoveryRecipe) // 添加自定义配方
+```
+
+#### FileSafetyChecker (`file_safety.go`)
+
+敏感文件写保护，在工具执行层面提供第二道防线。
+
+```go
+// FileSafetyChecker 文件写入安全检查器
+type FileSafetyChecker struct {
+    protectedPaths      []string // 受保护路径 glob 模式
+    protectedExtensions []string // 受保护文件扩展名
+    maxWriteSize        int64    // 单次写入最大字节数 (默认 10MB)
+}
+
+// 默认保护规则 (15 条):
+//   路径: .env, .env.*, .ssh/*, .gnupg/*, .aws/credentials, .kube/config,
+//         node_modules/**, .git/objects/**
+//   扩展名: .pem, .key, .p12, .pfx, .cert, .crt, .keystore
+
+func (fs *FileSafetyChecker) CheckWrite(path string, contentSize int64) (allowed bool, reason string)
+```
+
+#### ToolCallGuardrails (`guardrails.go`)
+
+工具调用循环守卫，防止 LLM 陷入无限循环。
+
+```go
+// ToolCallGuardrails 工具调用安全护栏
+type ToolCallGuardrails struct {
+    history                  []ToolCallRecord // 滑动窗口历史
+    consecutiveDuplicates    int              // 连续重复计数
+    maxConsecutiveDuplicates int              // 精确重复阈值 (默认 3)
+    maxToolCallsInWindow     int              // 窗口内同工具最大次数 (默认 10)
+    windowSize               int              // 滑动窗口大小 (默认 20)
+}
+
+// 检测两种异常模式:
+//   1. 精确重复: 相同 toolName + 相同 args 连续出现 N 次
+//   2. 工具固着: 同一 toolName 在滑动窗口内出现 M 次
+
+func (g *ToolCallGuardrails) Check(toolName string, args map[string]any) (allowed bool, reason string)
+func (g *ToolCallGuardrails) Record(toolName string, args map[string]any) // 记录调用
+func (g *ToolCallGuardrails) Reset()                                      // 每轮新消息时重置
+```
+
+---
+
+## 13. 安全架构
+
+### 13.1 多层安全防护
+
+```
+用户输入 → LLM → 工具调用
+                    ↓
+            ┌─ Guardrails (循环守卫)
+            │   滑动窗口 + 连续重复检测
+            ├─ Permissions (五级权限)
+            │   规则顺序匹配 + 会话记忆
+            ├─ Approval (命令审批)
+            │   危险模式匹配 + 人工确认
+            ├─ File Safety (文件保护)
+            │   15 条 glob 规则 + 大小限制
+            ├─ Path Security (路径遍历防护)
+            │   防止 ../.. 路径逃逸
+            ├─ URL Safety (SSRF 防护)
+            │   内网地址检测
+            ├─ Injection Detection (注入检测)
+            │   命令注入模式识别
+            └─ Hooks (Pre/Post 拦截)
+                Shell 脚本自定义拦截
+                    ↓
+              工具执行 → 结果返回 LLM
+```
+
+### 13.2 权限决策流
+
+```
+工具调用请求
+    │
+    ▼
+┌─────────────────────────────────┐
+│  Guardrails.Check()             │
+│  ├── 精确重复检测 (3次阈值)      │
+│  └── 工具固着检测 (10次/20窗口)  │
+│  → 拒绝则终止                   │
+└────────────┬────────────────────┘
+             │ 允许
+             ▼
+┌─────────────────────────────────┐
+│  Hooks.ExecutePreHooks()        │
+│  ├── 按注册顺序执行              │
+│  └── 首个 block 终止链           │
+│  → block 则终止                 │
+└────────────┬────────────────────┘
+             │ allow/modify
+             ▼
+┌─────────────────────────────────┐
+│  Permissions.Check()            │
+│  ├── 策略引擎评估 (glob+参数)    │
+│  ├── 会话记忆 (ask_once)        │
+│  └── 审批引擎联动 (terminal)     │
+│  → auto_deny 则终止             │
+│  → ask_once/ask_always 需确认   │
+│  → auto_allow 则放行            │
+└────────────┬────────────────────┘
+             │ 需要确认
+             ▼
+┌─────────────────────────────────┐
+│  用户确认 / 人工审批             │
+│  → 记住决策 (ask_once)          │
+│  → 拒绝则终止                   │
+└────────────┬────────────────────┘
+             │ 确认放行
+             ▼
+┌─────────────────────────────────┐
+│  FileSafetyChecker.CheckWrite() │  (仅文件写入工具)
+│  ├── 扩展名检查                  │
+│  ├── 路径 glob 匹配             │
+│  └── 大小限制 (10MB)            │
+└────────────┬────────────────────┘
+             │ 允许
+             ▼
+        工具执行
+```
+
+---
+
+## 14. Provider 回退链
+
+### 14.1 多层故障转移
+
+```
+主提供者重试 (3次)
+    │ 成功 → 返回结果
+    ↓ 失败
+ProviderRouter (优先级/健康检查)
+    │ 按优先级遍历所有提供者
+    │ 跳过不健康的提供者
+    │ 成功 → 返回结果
+    ↓ 全部失败
+FallbackChain (按优先级遍历)
+    │ 配置文件中定义的回退链
+    │ 成功 → 返回结果
+    ↓ 失败
+旧版 fallbackProvider (单一备选)
+    │ 成功 → 返回结果
+    ↓ 失败
+返回最终错误
+```
+
+### 14.2 ProviderRouter 详细设计
+
+```go
+// ProviderRouter 基于优先级的多提供者路由
+type ProviderRouter struct {
+    entries        []*ProviderEntry // 按优先级排序
+    healthInterval time.Duration    // 健康检查间隔 (默认 5 分钟)
+    healthTimeout  time.Duration    // 健康检查超时 (默认 30 秒)
+}
+
+// ProviderEntry 带优先级的 LLM 提供者
+type ProviderEntry struct {
+    Provider llm.Provider // 提供者实例
+    Model    string       // 模型名称
+    Priority int          // 优先级 (数字越小越优先)
+    Healthy  bool         // 健康状态
+    LastErr  time.Time    // 最后错误时间
+}
+
+// 健康检查: 周期性对不健康提供者执行 ListModels 探测
+// 错误分类: 上下文溢出/格式错误不触发降级 (需压缩/修正而非切换)
+```
+
+### 14.3 恢复配方引擎
+
+```go
+// RecoveryEngine 将错误分类映射到恢复动作
+type RecoveryAction struct {
+    Strategy string        // 恢复策略
+    WaitTime time.Duration // 等待时间
+    Message  string        // 恢复说明
+}
+
+// 六种恢复策略:
+//   compress_and_retry   — 压缩上下文后重试
+//   wait_and_retry       — 等待指定时间后重试
+//   rotate_credential    — 轮换凭证后重试
+//   fallback_model       — 切换到备选模型
+//   truncate_and_retry   — 截断输入后重试
+//   abort                — 终止操作
+```
+
+---
+
+## 15. 配置参考
+
+### 15.1 新增配置项
+
+```yaml
+agent:
+  proxy: "${HTTPS_PROXY}"           # HTTP 代理
+  fallback_chain:                    # Provider 回退链
+    - provider: "openai"
+      model: "gpt-4o"
+      priority: 1
+    - provider: "deepseek"
+      model: "deepseek-chat"
+      priority: 2
+    - provider: "lmstudio"
+      model: "local-model"
+      priority: 3
+
+# 权限配置 (permissions.yaml)
+permissions:
+  version: 1
+  default: ask_always
+  rules:
+    - tool: "web_search"
+      level: auto_allow
+    - tool: "terminal"
+      args: ["command~=rm -rf"]
+      level: auto_deny
+  profiles:
+    safe:
+      default: ask_always
+    dev:
+      default: ask_once
+
+# Hook 配置 (~/.nexus/hooks/*.yaml)
+hooks:
+  - event: pre_tool_call
+    command: "/path/to/hook-script.sh"
+    matcher: "terminal"
+    timeout: 60
+
+# 国际化
+i18n:
+  locale: "zh"                       # 当前语言 (en, zh)
+```
+
+### 15.2 新增 LLM 提供者配置
+
+```yaml
+providers:
+  copilot:
+    type: "copilot"
+    token: "${COPILOT_TOKEN}"
+    endpoint: "https://api.githubcopilot.com"
+    model: "gpt-4o"
+
+  lmstudio:
+    type: "lmstudio"
+    base_url: "http://localhost:1234/v1"
+    model: "local-model"
+    # LM Studio 本地服务通常不需要 API Key
+```
 
 ---
 

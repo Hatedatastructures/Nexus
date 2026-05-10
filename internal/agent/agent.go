@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"log/slog"
 	"sync"
 
 	"nexus-agent/internal/approval"
@@ -39,6 +40,7 @@ type AIAgent struct {
 	credentialPool  *credential.Pool    // 凭证池
 	approvalChecker *approval.Checker   // 命令审批
 	sandboxEnv      sandbox.Environment // 沙箱环境
+	fileSafety      *FileSafetyChecker  // 文件写入安全检查
 
 	// ── 会话管理 ──
 	sessionID string // 会话唯一标识
@@ -53,24 +55,30 @@ type AIAgent struct {
 	reasoningCallback func(reasoning string)      // 推理过程回调
 
 	// ── 内部状态 ──
-	mu                sync.Mutex       // 并发保护
-	iterationBudget   *IterationBudget // 迭代预算
-	cachedSystemPrompt string          // 缓存的系统提示词
-	messages          []llm.Message    // 当前对话消息列表
-	maxRetries        int              // 最大重试次数
-	fallbackModel     string           // 备选模型
-	fallbackProvider  llm.Provider     // 备选提供者
+	mu                sync.Mutex           // 并发保护
+	iterationBudget   *IterationBudget     // 迭代预算
+	guardrails        *ToolCallGuardrails  // 工具调用安全护栏
+	cachedSystemPrompt string              // 缓存的系统提示词
+	messages          []llm.Message        // 当前对话消息列表
+	maxRetries        int                  // 最大重试次数
+	fallbackModel     string               // 备选模型
+	fallbackProvider  llm.Provider         // 备选提供者
+	router            *ProviderRouter      // 多提供者路由器 (优先级/健康检查)
+	fallbackChain     *FallbackChain       // 回退链 (主提供者失败后的降级路径)
+	pendingFallbackChain []config.FallbackEntryConfig // 待构建的回退链配置 (延迟解析)
 }
 
 // ───────────────────────────── 构造函数 ─────────────────────────────
 
 // NewAgent 创建 AIAgent 实例。
 // 使用函数式选项模式配置。
+// 默认启用工具调用安全护栏 (可通过 WithGuardrails(nil) 禁用)。
 func NewAgent(opts ...AgentOption) *AIAgent {
 	a := &AIAgent{
 		model:           "claude-sonnet-4-20250514",
 		maxTokens:       4096,
 		iterationBudget: NewIterationBudget(90),
+		guardrails:      NewToolCallGuardrails(),
 		maxRetries:      3,
 	}
 
@@ -93,4 +101,44 @@ func DefaultAgentFromConfig(cfg *config.AgentConfig) *AIAgent {
 // Provider 返回当前 LLM 提供者 (用于外部检查)。
 func (a *AIAgent) Provider() llm.Provider {
 	return a.provider
+}
+
+// InitRouter 初始化多提供者路由器。
+// 在所有 With* 选项应用后调用，使用已注册的提供者构建路由表。
+func (a *AIAgent) InitRouter(entries []*ProviderEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	a.router = NewProviderRouter(entries)
+	slog.Info("AIAgent: ProviderRouter 已初始化", "entry_count", len(entries))
+}
+
+// InitFallbackChain 从延迟解析的配置构建回退链。
+// providerMap 应包含所有可用的 LLM 提供者实例 (key = 提供者名称)。
+// 通常在 WithConfigProvider 完成后调用。
+func (a *AIAgent) InitFallbackChain(providerMap map[string]llm.Provider) {
+	if len(a.pendingFallbackChain) == 0 {
+		return
+	}
+
+	entries := make([]*FallbackEntry, 0, len(a.pendingFallbackChain))
+	for _, ec := range a.pendingFallbackChain {
+		entries = append(entries, &FallbackEntry{
+			Provider: ec.Provider,
+			Model:    ec.Model,
+			Priority: ec.Priority,
+		})
+	}
+	a.fallbackChain = NewFallbackChain(entries, providerMap)
+	a.pendingFallbackChain = nil // 清理，避免重复初始化
+}
+
+// Router 返回多提供者路由器 (用于外部检查或高级配置)。
+func (a *AIAgent) Router() *ProviderRouter {
+	return a.router
+}
+
+// FallbackChain 返回回退链 (用于外部检查)。
+func (a *AIAgent) FallbackChain() *FallbackChain {
+	return a.fallbackChain
 }

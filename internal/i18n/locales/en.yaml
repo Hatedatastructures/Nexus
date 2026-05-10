@@ -1,0 +1,56 @@
+# 英文 locale 文件
+# 使用点分键作为翻译 key，值为英文文本
+
+# 代理基础消息
+agent.welcome: "Welcome to Nexus Agent"
+agent.goodbye: "Goodbye!"
+
+# 工具审批
+tool.approval.required: "This action requires your approval: %s"
+tool.approval.approved: "Approved"
+tool.approval.denied: "Denied"
+
+# 错误消息
+error.auth.failed: "Authentication failed, please check your API key"
+error.rate_limit: "Rate limit reached, retrying in %d seconds"
+error.context_overflow: "Context window exceeded, compressing..."
+error.network: "Network error: %s"
+error.unknown: "Unknown error occurred"
+
+# 配置
+config.loaded: "Configuration loaded from %s"
+config.saved: "Configuration saved"
+
+# 会话
+session.created: "Session created: %s"
+session.resumed: "Session resumed: %s"
+session.ended: "Session ended"
+
+# 记忆
+memory.saved: "Memory saved"
+memory.loaded: "Memory loaded from %s"
+
+# 技能
+skill.installed: "Skill installed: %s"
+skill.enabled: "Skill enabled: %s"
+
+# 定时任务
+cron.created: "Cron job created: %s"
+cron.paused: "Cron job paused: %s"
+
+# 网关
+gateway.started: "Gateway started on %s"
+gateway.stopped: "Gateway stopped"
+
+# 提供者
+provider.connected: "Connected to %s"
+provider.fallback: "Falling back to %s"
+provider.retrying: "Retrying (%d/%d)..."
+
+# 上下文压缩
+compress.triggered: "Context compression triggered"
+compress.completed: "Compression completed, reduced %d tokens"
+
+# 安全
+guardrails.blocked: "Tool call blocked: %s"
+file_safety.blocked: "File write blocked: %s"

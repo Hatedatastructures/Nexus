@@ -189,6 +189,12 @@ func WithSandboxEnv(e sandbox.Environment) AgentOption {
 	return func(a *AIAgent) { a.sandboxEnv = e }
 }
 
+// WithFileSafety 设置文件写入安全检查器。
+// 用于在工具 dispatch 层面对 file_write/file_edit/patch 操作进行二次防护。
+func WithFileSafety(fs *FileSafetyChecker) AgentOption {
+	return func(a *AIAgent) { a.fileSafety = fs }
+}
+
 // WithSessionID 设置会话 ID
 func WithSessionID(id string) AgentOption {
 	return func(a *AIAgent) { a.sessionID = id }
@@ -217,6 +223,23 @@ func WithFallbackModel(model string) AgentOption {
 // WithFallbackProvider 设置备选故障转移提供者
 func WithFallbackProvider(p llm.Provider) AgentOption {
 	return func(a *AIAgent) { a.fallbackProvider = p }
+}
+
+// WithGuardrails 设置工具调用安全护栏
+func WithGuardrails(g *ToolCallGuardrails) AgentOption {
+	return func(a *AIAgent) { a.guardrails = g }
+}
+
+// WithRouter 设置多提供者路由器。
+// 当主提供者重试失败后，会委托 Router 进行按优先级的提供者切换。
+func WithRouter(r *ProviderRouter) AgentOption {
+	return func(a *AIAgent) { a.router = r }
+}
+
+// WithFallbackChain 设置回退链。
+// 当 Router 也失败（或未配置 Router）时，按回退链优先级尝试备选提供者。
+func WithFallbackChain(fc *FallbackChain) AgentOption {
+	return func(a *AIAgent) { a.fallbackChain = fc }
 }
 
 // ───────────────────────────── 回调设置器 ─────────────────────────────
@@ -270,6 +293,10 @@ func WithConfig(cfg *config.AgentConfig) AgentOption {
 		}
 		if cfg.FallbackModel != "" {
 			a.fallbackModel = cfg.FallbackModel
+		}
+		// 回退链配置仅保存到 pendingFallbackChain，实际构建需要 providerMap
+		if len(cfg.FallbackChain) > 0 {
+			a.pendingFallbackChain = cfg.FallbackChain
 		}
 	}
 }

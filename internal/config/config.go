@@ -53,6 +53,15 @@ type AgentConfig struct {
 	FallbackModel  string `yaml:"fallback_model"`  // 备选故障转移模型
 	ToolDelay      float64 `yaml:"tool_delay"`     // 工具执行间隔 (秒)
 	SaveTrajectory bool   `yaml:"save_trajectory"` // 是否保存轨迹到文件
+	Proxy          string `yaml:"proxy"`           // HTTP/SOCKS5 代理地址 (空 = 回退到环境变量)
+	FallbackChain  []FallbackEntryConfig `yaml:"fallback_chain"` // 回退链配置
+}
+
+// FallbackEntryConfig 定义回退链中的单个条目。
+type FallbackEntryConfig struct {
+	Provider string `yaml:"provider"` // 提供者名称 (对应 providers 中的 key)
+	Model    string `yaml:"model"`    // 使用的模型名称
+	Priority int    `yaml:"priority"` // 优先级 (数字越小越优先)
 }
 
 // ───────────────────────────── 提供者配置 ─────────────────────────────
@@ -304,6 +313,9 @@ func Load(path string) (*Config, error) {
 
 // expandEnv 递归展开配置值中的 ${ENV_VAR} 引用。
 func expandEnv(cfg *Config) {
+	// 展开代理配置中的环境变量引用
+	cfg.Agent.Proxy = expandEnvString(cfg.Agent.Proxy)
+
 	for k, p := range cfg.Providers {
 		p.APIKey = expandEnvString(p.APIKey)
 		p.BaseURL = expandEnvString(p.BaseURL)

@@ -21,11 +21,12 @@ import (
 // ───────────────────────────── 浏览器管理 ─────────────────────────────
 
 var (
-	browserInstance  *rod.Browser
-	pageInstance     *rod.Page
-	browserMu        sync.Mutex
-	browserReady     bool
-	browserControlURL string // CDP WebSocket 地址，供 CDP 工具使用
+	browserInstance     *rod.Browser
+	pageInstance        *rod.Page
+	browserMu           sync.Mutex
+	browserReady        bool
+	browserControlURL   string            // CDP WebSocket 地址，供 CDP 工具使用
+	browserbaseSession  *BrowserbaseSession // Browserbase 云浏览器会话（nil 表示使用本地浏览器）
 )
 
 // ensureBrowser 确保浏览器实例已启动并可用。
@@ -39,6 +40,22 @@ func ensureBrowser() error {
 	}
 
 	slog.Info("启动浏览器实例")
+
+	// 优先使用 Browserbase 云浏览器（如果配置了环境变量）
+	if cfg, ok := loadBrowserbaseConfig(); ok {
+		slog.Info("检测到 Browserbase 配置，使用云浏览器")
+		sess, err := NewBrowserbaseSession(context.Background(), cfg)
+		if err != nil {
+			return fmt.Errorf("创建 Browserbase 会话失败: %w", err)
+		}
+		browserbaseSession = sess
+		cdpURL := sess.CDPWebSocketURL()
+		browserControlURL = cdpURL
+		browserInstance = rod.New().ControlURL(cdpURL).MustConnect()
+		browserReady = true
+		slog.Info("Browserbase 云浏览器连接成功", "session_id", sess.SessionID())
+		return nil
+	}
 
 	// 自动查找 Chrome/Chromium 浏览器路径
 	path, _ := launcher.LookPath()
@@ -133,11 +150,9 @@ func (t *BrowserNavigateTool) Toolset() string { return "browser" }
 // Emoji 返回工具图标。
 func (t *BrowserNavigateTool) Emoji() string { return "🌍" }
 
-// IsAvailable 快速检查 Chrome/Chromium 是否存在于常见路径。
-// 不实际启动浏览器，仅检查路径。
+// IsAvailable 检查浏览器是否可用（本地 Chrome 或 Browserbase 云浏览器）。
 func (t *BrowserNavigateTool) IsAvailable() bool {
-	_, ok := launcher.LookPath()
-	return ok
+	return browserCheck()
 }
 
 // MaxResultChars 返回结果最大字符数。
@@ -171,6 +186,12 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]any) 
 	url, ok := args["url"].(string)
 	if !ok || url == "" {
 		return ToolError("参数 url 是必填项且必须为字符串"), nil
+	}
+
+	// URL 安全检查: 拦截 SSRF 风险地址
+	if safe, reason := CheckURLSafety(url); !safe {
+		slog.Warn("browser_navigate: URL 安全检查未通过", "url", url, "reason", reason)
+		return ToolError(fmt.Sprintf("URL 安全检查未通过: %s", reason)), nil
 	}
 
 	slog.Info("浏览器导航", "url", url)
@@ -223,10 +244,9 @@ func (t *BrowserScreenshotTool) Toolset() string { return "browser" }
 // Emoji 返回工具图标。
 func (t *BrowserScreenshotTool) Emoji() string { return "📸" }
 
-// IsAvailable 检查浏览器是否可用。
+// IsAvailable 检查浏览器是否可用（本地 Chrome 或 Browserbase 云浏览器）。
 func (t *BrowserScreenshotTool) IsAvailable() bool {
-	_, ok := launcher.LookPath()
-	return ok
+	return browserCheck()
 }
 
 // MaxResultChars 返回结果最大字符数 (截图结果较大)。
@@ -301,10 +321,9 @@ func (t *BrowserClickTool) Toolset() string { return "browser" }
 // Emoji 返回工具图标。
 func (t *BrowserClickTool) Emoji() string { return "👆" }
 
-// IsAvailable 检查浏览器是否可用。
+// IsAvailable 检查浏览器是否可用（本地 Chrome 或 Browserbase 云浏览器）。
 func (t *BrowserClickTool) IsAvailable() bool {
-	_, ok := launcher.LookPath()
-	return ok
+	return browserCheck()
 }
 
 // MaxResultChars 返回结果最大字符数。
@@ -380,10 +399,9 @@ func (t *BrowserTypeTool) Toolset() string { return "browser" }
 // Emoji 返回工具图标。
 func (t *BrowserTypeTool) Emoji() string { return "⌨️" }
 
-// IsAvailable 检查浏览器是否可用。
+// IsAvailable 检查浏览器是否可用（本地 Chrome 或 Browserbase 云浏览器）。
 func (t *BrowserTypeTool) IsAvailable() bool {
-	_, ok := launcher.LookPath()
-	return ok
+	return browserCheck()
 }
 
 // MaxResultChars 返回结果最大字符数。

@@ -31,6 +31,28 @@ type URLSafetyConfig struct {
 	BlockedIPs       []string `json:"blocked_ips"`        // 额外屏蔽的 IP 列表
 }
 
+// ───────────────────────────── 全局 URL 安全检查器 ─────────────────────────────
+
+// 包级 URL 安全检查器单例，用于中间件模式的主动拦截。
+// 在代理初始化时通过 SetURLSafetyConfig() 设置。
+var globalURLSafety *URLSafetyChecker
+
+// SetURLSafetyConfig 设置全局 URL 安全检查器。
+// 应在代理启动时调用，在所有需要 URL 安全检查的工具 Execute 调用之前。
+func SetURLSafetyConfig(checker *URLSafetyChecker) {
+	globalURLSafety = checker
+}
+
+// CheckURLSafety 使用全局检查器检查给定 URL 是否安全。
+// 返回 (是否安全, 原因说明)。若全局检查器未初始化，则默认安全。
+// 供 web/browser 等工具在执行 HTTP 请求前调用。
+func CheckURLSafety(rawURL string) (bool, string) {
+	if globalURLSafety == nil {
+		return true, "URL 安全检查器未初始化，跳过检查"
+	}
+	return globalURLSafety.IsSafeURL(rawURL)
+}
+
 // ───────────────────────────── URL 安全检查器 ─────────────────────────────
 
 // URLSafetyChecker 实现 URL 安全检查功能。

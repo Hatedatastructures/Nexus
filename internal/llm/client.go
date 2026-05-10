@@ -65,6 +65,7 @@ func DefaultClientConfig() *ClientConfig {
 
 // NewHTTPClient 根据给定的配置创建一个 *http.Client。
 // 包含连接池管理、TLS 配置、代理支持以及超时控制。
+// 代理优先级: 配置中的 Proxy 字段 > 环境变量 (HTTP_PROXY/HTTPS_PROXY/NO_PROXY) > 直连。
 func NewHTTPClient(cfg *ClientConfig) *http.Client {
 	if cfg == nil {
 		cfg = DefaultClientConfig()
@@ -75,49 +76,56 @@ func NewHTTPClient(cfg *ClientConfig) *http.Client {
 		KeepAlive: 30 * time.Second,
 	}
 
-	var transport http.RoundTripper
+	// 确定代理函数: 优先使用配置中的代理，其次回退到环境变量
+	proxyFunc := resolveProxyFunc(cfg.Proxy)
 
-	// 如果配置了代理，则通过 HTTP/HTTPS 代理拨号
-	// 注意：SOCKS5 代理需要 golang.org/x/net/proxy 包，不在当前依赖中。
-	// 如需 SOCKS5 支持，请引入该包并扩展此处的代理逻辑。
-	if cfg.Proxy != "" {
-		proxyURL, err := url.Parse(cfg.Proxy)
-		if err == nil {
-			transport = &http.Transport{
-				Proxy: http.ProxyURL(proxyURL),
-				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.DialContext(ctx, network, addr)
-				},
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: cfg.InsecureSkipVerify,
-				},
-				MaxIdleConns:        cfg.MaxIdleConns,
-				MaxIdleConnsPerHost: cfg.MaxIdleConnsPerHost,
-				IdleConnTimeout:     cfg.IdleConnTimeout,
-			}
-		} else {
-			slog.Warn("解析代理 URL 失败，回退到直连", "proxy", cfg.Proxy, "error", err)
-		}
-	}
-
-	if transport == nil {
-		transport = &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialer.DialContext(ctx, network, addr)
-			},
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: cfg.InsecureSkipVerify,
-			},
-			MaxIdleConns:        cfg.MaxIdleConns,
-			MaxIdleConnsPerHost: cfg.MaxIdleConnsPerHost,
-			IdleConnTimeout:     cfg.IdleConnTimeout,
-		}
+	transport := &http.Transport{
+		Proxy: proxyFunc,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, addr)
+		},
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: cfg.InsecureSkipVerify,
+		},
+		MaxIdleConns:        cfg.MaxIdleConns,
+		MaxIdleConnsPerHost: cfg.MaxIdleConnsPerHost,
+		IdleConnTimeout:     cfg.IdleConnTimeout,
 	}
 
 	return &http.Client{
 		Timeout:   cfg.Timeout,
 		Transport: transport,
 	}
+}
+
+// getProxyURL 解析代理地址字符串为 *url.URL。
+// 如果 proxy 为空则返回 nil，表示使用直连。
+// 支持 HTTP、HTTPS 和 SOCKS5 协议。
+func getProxyURL(proxy string) *url.URL {
+	if proxy == "" {
+		return nil
+	}
+	proxyURL, err := url.Parse(proxy)
+	if err != nil {
+		slog.Warn("解析代理 URL 失败", "proxy", proxy, "error", err)
+		return nil
+	}
+	return proxyURL
+}
+
+// resolveProxyFunc 根据配置的代理地址返回对应的 Proxy 函数。
+// 优先级: 配置中的 proxy > 环境变量 (HTTP_PROXY/HTTPS_PROXY/NO_PROXY) > 直连 (nil)。
+func resolveProxyFunc(proxy string) func(*http.Request) (*url.URL, error) {
+	// 优先使用配置中的代理
+	if proxyURL := getProxyURL(proxy); proxyURL != nil {
+		slog.Debug("使用配置代理", "proxy", proxyURL.String())
+		return http.ProxyURL(proxyURL)
+	}
+
+	// 回退到环境变量代理 (HTTP_PROXY, HTTPS_PROXY, NO_PROXY)
+	// http.ProxyFromEnvironment 会自动读取这些环境变量
+	slog.Debug("未配置代理，回退到环境变量 (HTTP_PROXY/HTTPS_PROXY)")
+	return http.ProxyFromEnvironment
 }
 
 // retryableStatusCode 判断 HTTP 状态码是否代表可重试的错误。

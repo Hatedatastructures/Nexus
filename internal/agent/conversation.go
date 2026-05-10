@@ -56,6 +56,11 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 	a.maxRetries = 3
 	a.mu.Unlock()
 
+	// 重置工具调用护栏状态 (每轮新消息开始时)
+	if a.guardrails != nil {
+		a.guardrails.Reset()
+	}
+
 	result := &TurnResult{
 		Completed: false,
 	}
@@ -169,8 +174,40 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 
 		// ── 4d. 工具执行 ──
 		if len(resp.ToolCalls) > 0 {
+			// 护栏检查: 在执行前检测重复/固着等异常模式
+			if a.guardrails != nil {
+				filtered := a.applyGuardrails(resp.ToolCalls)
+				if len(filtered) == 0 {
+					// 所有工具调用均被护栏拦截，注入错误消息让 LLM 知晓
+					for _, tc := range resp.ToolCalls {
+						messages = append(messages, llm.Message{
+							Role:       llm.RoleTool,
+							Content:    `{"error": "工具调用被安全护栏拦截: 检测到重复或固着模式，请尝试不同的方法"}`,
+							ToolCallID: tc.ID,
+						})
+					}
+					continue
+				}
+				resp.ToolCalls = filtered
+			}
+
 			toolResults := a.executeToolCalls(ctx, resp.ToolCalls)
 			toolCallCount += len(resp.ToolCalls)
+
+			// 记录成功执行的工具调用到护栏历史
+			if a.guardrails != nil {
+				for _, pc := range toolResults {
+					if pc.Error == nil {
+						// 从原始工具调用中解析参数用于记录
+						for _, tc := range resp.ToolCalls {
+							if tc.ID == pc.CallID {
+								a.guardrails.Record(pc.Name, parseToolArguments(tc.Arguments))
+								break
+							}
+						}
+					}
+				}
+			}
 
 			for _, tr := range toolResults {
 				messages = append(messages, llm.Message{
@@ -441,6 +478,20 @@ func (a *AIAgent) callLLMWithRetry(ctx context.Context, req *llm.ChatRequest) (*
 		}
 	}
 
+	// 所有重试均失败: 尝试回退链 (Router → FallbackChain → 旧版 fallback)
+	if lastErr != nil {
+		if resp, fbErr := a.tryFallbackChain(ctx, lastErr, req); fbErr == nil {
+			return resp, nil
+		}
+
+		// 旧版 fallback 兜底 (当既无 Router 也无 FallbackChain 时)
+		if a.fallbackProvider != nil {
+			if resp, fbErr := a.tryFallback(ctx, req); fbErr == nil && resp != nil {
+				return resp, nil
+			}
+		}
+	}
+
 	return nil, fmt.Errorf("重试 %d 次后仍失败: %w", maxRetries, lastErr)
 }
 
@@ -528,6 +579,24 @@ func (a *AIAgent) executeParallel(ctx context.Context, calls []toolCall) []toolR
 		wg.Add(1)
 		go func(idx int, c toolCall) {
 			defer wg.Done()
+
+			// 命令安全审批（与 executeSequential 保持一致，防止绕过审批检查）
+			if a.approvalChecker != nil {
+				approved, reason := a.approvalChecker.CheckTool(ctx, c.call.Name, c.args)
+				if approved != 0 { // 0 = Approved
+					results[idx] = toolResult{
+						CallID: c.call.ID,
+						Name:   c.call.Name,
+						Result: fmt.Sprintf(`{"error": "工具调用被拒绝: %s", "tool": "%s"}`, reason, c.call.Name),
+						Error:  fmt.Errorf("审批未通过: %s", reason),
+					}
+					if a.toolCallback != nil {
+						a.toolCallback(c.call.Name, c.args)
+					}
+					return
+				}
+			}
+
 			result, err := a.dispatchTool(ctx, c.call.Name, c.args)
 			results[idx] = toolResult{
 				CallID: c.call.ID,
@@ -583,9 +652,54 @@ func (a *AIAgent) executeSequential(ctx context.Context, calls []toolCall) []too
 	return results
 }
 
+// applyGuardrails 对工具调用列表应用安全护栏检查。
+// 过滤掉被护栏拦截的工具调用，返回允许执行的子集。
+func (a *AIAgent) applyGuardrails(toolCalls []llm.ToolCall) []llm.ToolCall {
+	var filtered []llm.ToolCall
+	for _, tc := range toolCalls {
+		args := parseToolArguments(tc.Arguments)
+		allowed, reason := a.guardrails.Check(tc.Name, args)
+		if allowed {
+			filtered = append(filtered, tc)
+		} else {
+			slog.Warn("工具调用被护栏拦截",
+				"session_id", a.sessionID,
+				"tool", tc.Name,
+				"reason", reason,
+			)
+		}
+	}
+	return filtered
+}
+
 func (a *AIAgent) dispatchTool(ctx context.Context, name string, args map[string]any) (string, error) {
 	if a.registry == nil {
 		return `{"error": "工具注册中心未初始化"}`, fmt.Errorf("工具注册中心未初始化")
+	}
+
+	// 文件写入安全检查: 对 file_write/file_edit/patch 工具进行二次防护
+	if a.fileSafety != nil && isFileWriteTool(name) {
+		if path, ok := args["path"].(string); ok && path != "" {
+			// 计算写入内容大小
+			var contentSize int64
+			if content, ok := args["content"].(string); ok {
+				contentSize = int64(len(content))
+			}
+			if newText, ok := args["new_text"].(string); ok {
+				contentSize = int64(len(newText))
+			}
+
+			allowed, reason := a.fileSafety.CheckWrite(path, contentSize)
+			if !allowed {
+				slog.Warn("文件写入被安全检查器拦截",
+					"session_id", a.sessionID,
+					"tool", name,
+					"path", path,
+					"reason", reason,
+				)
+				return fmt.Sprintf(`{"error": "文件写入被安全策略拦截: %s"}`, reason), nil
+			}
+		}
 	}
 
 	result, err := a.registry.Dispatch(ctx, name, args)
@@ -593,6 +707,16 @@ func (a *AIAgent) dispatchTool(ctx context.Context, name string, args map[string
 		return fmt.Sprintf(`{"error": "工具执行失败: %s"}`, err.Error()), err
 	}
 	return result, nil
+}
+
+// isFileWriteTool 判断工具名称是否为文件写入类工具。
+func isFileWriteTool(name string) bool {
+	switch name {
+	case "file_write", "file_edit", "patch":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *AIAgent) shouldParallelize(toolCalls []llm.ToolCall) bool {

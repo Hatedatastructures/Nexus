@@ -1,0 +1,56 @@
+# 中文 locale 文件
+# 使用点分键作为翻译 key，值为中文文本
+
+# 代理基础消息
+agent.welcome: "欢迎使用 Nexus Agent"
+agent.goodbye: "再见！"
+
+# 工具审批
+tool.approval.required: "此操作需要您的批准：%s"
+tool.approval.approved: "已批准"
+tool.approval.denied: "已拒绝"
+
+# 错误消息
+error.auth.failed: "认证失败，请检查您的 API 密钥"
+error.rate_limit: "已达到速率限制，%d 秒后重试"
+error.context_overflow: "上下文窗口已超，正在压缩..."
+error.network: "网络错误：%s"
+error.unknown: "发生未知错误"
+
+# 配置
+config.loaded: "配置已从 %s 加载"
+config.saved: "配置已保存"
+
+# 会话
+session.created: "会话已创建：%s"
+session.resumed: "会话已恢复：%s"
+session.ended: "会话已结束"
+
+# 记忆
+memory.saved: "记忆已保存"
+memory.loaded: "记忆已从 %s 加载"
+
+# 技能
+skill.installed: "技能已安装：%s"
+skill.enabled: "技能已启用：%s"
+
+# 定时任务
+cron.created: "定时任务已创建：%s"
+cron.paused: "定时任务已暂停：%s"
+
+# 网关
+gateway.started: "网关已在 %s 启动"
+gateway.stopped: "网关已停止"
+
+# 提供者
+provider.connected: "已连接到 %s"
+provider.fallback: "正在回退到 %s"
+provider.retrying: "正在重试 (%d/%d)..."
+
+# 上下文压缩
+compress.triggered: "上下文压缩已触发"
+compress.completed: "压缩已完成，减少了 %d 个 token"
+
+# 安全
+guardrails.blocked: "工具调用已阻止：%s"
+file_safety.blocked: "文件写入已阻止：%s"

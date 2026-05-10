@@ -253,8 +253,13 @@ func (t *BrowserCDPTool) Execute(ctx context.Context, args map[string]any) (stri
 	return string(data), nil
 }
 
-// browserCheck 检查 Chrome/Chromium 是否可用。
+// browserCheck 检查浏览器是否可用。
+// 优先检查 Browserbase 云浏览器配置，其次检查本地 Chrome/Chromium。
 func browserCheck() bool {
+	// 如果配置了 Browserbase API Key，视为可用
+	if isBrowserbaseConfigured() {
+		return true
+	}
 	_, ok := launcher.LookPath()
 	return ok
 }

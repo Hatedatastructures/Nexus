@@ -13,6 +13,41 @@ import (
 	"strings"
 )
 
+// ───────────────────────────── 允许目录 (路径安全) ─────────────────────────────
+
+// allowedDir 是文件操作工具允许访问的根目录。
+// 默认为当前工作目录，测试中可覆盖此变量以限制文件操作范围。
+var allowedDir = func() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return dir
+}()
+
+// checkPathSecurity 对路径执行安全检查，返回安全错误或空字符串。
+// 依次执行: 遍历组件快速拒绝 → 目录边界完整验证。
+// 用于所有文件操作工具的入口处统一拦截。
+func checkPathSecurity(path string, sanitize bool) (string, error) {
+	// 第一步: 快速拒绝包含遍历组件的路径
+	if HasTraversalComponent(path) {
+		return "", fmt.Errorf("路径包含遍历组件 (..): %s", path)
+	}
+
+	// 第二步: 对需要净化的场景先移除危险组件
+	checkPath := path
+	if sanitize {
+		checkPath = SanitizePath(path)
+	}
+
+	// 第三步: 完整目录边界验证
+	if err := ValidateWithinDir(checkPath, allowedDir); err != nil {
+		return "", fmt.Errorf("路径安全检查失败: %w", err)
+	}
+
+	return checkPath, nil
+}
+
 // ───────────────────────────── 敏感路径列表 ─────────────────────────────
 
 // sensitivePaths 包含不允许读写的敏感系统路径。
@@ -133,6 +168,14 @@ func (t *FileReadTool) Execute(ctx context.Context, args map[string]any) (string
 	if !ok || path == "" {
 		return ToolError("参数 path 是必填项且必须为字符串"), nil
 	}
+
+	// 路径安全检查: 遍历组件拒绝 + 净化 + 目录边界验证
+	safePath, secErr := checkPathSecurity(path, true)
+	if secErr != nil {
+		slog.Warn("文件读取被阻止 (路径安全)", "path", path, "err", secErr)
+		return ToolError(fmt.Sprintf("安全限制: %v", secErr)), nil
+	}
+	path = safePath
 
 	// 安全敏感路径检查
 	if isPathSensitive(path) {
@@ -269,6 +312,12 @@ func (t *FileWriteTool) Execute(ctx context.Context, args map[string]any) (strin
 		return ToolError("参数 content 是必填项且必须为字符串"), nil
 	}
 
+	// 路径安全检查: 遍历组件拒绝 + 目录边界验证 (写入不净化路径)
+	if _, secErr := checkPathSecurity(path, false); secErr != nil {
+		slog.Warn("文件写入被阻止 (路径安全)", "path", path, "err", secErr)
+		return ToolError(fmt.Sprintf("安全限制: %v", secErr)), nil
+	}
+
 	// 安全敏感路径检查
 	if isPathSensitive(path) {
 		slog.Warn("文件写入被阻止 (敏感路径)", "path", path)
@@ -361,6 +410,12 @@ func (t *FileEditTool) Execute(ctx context.Context, args map[string]any) (string
 		return ToolError("参数 old_text 是必填项且必须为字符串"), nil
 	}
 	newText, _ := args["new_text"].(string)
+
+	// 路径安全检查: 遍历组件拒绝 + 目录边界验证 (编辑不净化路径)
+	if _, secErr := checkPathSecurity(path, false); secErr != nil {
+		slog.Warn("文件编辑被阻止 (路径安全)", "path", path, "err", secErr)
+		return ToolError(fmt.Sprintf("安全限制: %v", secErr)), nil
+	}
 
 	// 安全敏感路径检查
 	if isPathSensitive(path) {
@@ -478,6 +533,12 @@ func (t *PatchTool) Execute(ctx context.Context, args map[string]any) (string, e
 		expectedReplacements = int(v)
 	}
 
+	// 路径安全检查: 遍历组件拒绝 + 目录边界验证 (patch 不净化路径)
+	if _, secErr := checkPathSecurity(path, false); secErr != nil {
+		slog.Warn("文件 patch 被阻止 (路径安全)", "path", path, "err", secErr)
+		return ToolError(fmt.Sprintf("安全限制: %v", secErr)), nil
+	}
+
 	// 安全敏感路径检查
 	if isPathSensitive(path) {
 		slog.Warn("文件 patch 被阻止 (敏感路径)", "path", path)
@@ -588,6 +649,14 @@ func (t *FileSearchTool) Execute(ctx context.Context, args map[string]any) (stri
 	if g, ok := args["glob"].(string); ok && g != "" {
 		globPattern = g
 	}
+
+	// 路径安全检查: 遍历组件拒绝 + 净化 + 目录边界验证
+	safeSearchPath, secErr := checkPathSecurity(searchPath, true)
+	if secErr != nil {
+		slog.Warn("文件搜索被阻止 (路径安全)", "path", searchPath, "err", secErr)
+		return ToolError(fmt.Sprintf("安全限制: %v", secErr)), nil
+	}
+	searchPath = safeSearchPath
 
 	// 安全敏感路径检查
 	if isPathSensitive(searchPath) {

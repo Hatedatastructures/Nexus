@@ -3,6 +3,7 @@
 package context
 
 import (
+	"encoding/base64"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -29,6 +30,7 @@ type contextThreatPattern struct {
 }
 
 var contextThreatPatterns = []contextThreatPattern{
+	// ── 英文模式 ──
 	{regexp.MustCompile(`(?i)ignore\s+(previous|all|above|prior)\s+instructions`), "prompt_injection"},
 	{regexp.MustCompile(`(?i)disregard\s+(the\s+)?(above|previous|all)\s+(instructions|prompts|directives)`), "prompt_injection"},
 	{regexp.MustCompile(`(?i)you\s+are\s+now\s+in\s+developer\s+mode`), "developer_mode_injection"},
@@ -37,17 +39,97 @@ var contextThreatPatterns = []contextThreatPattern{
 	{regexp.MustCompile(`(?i)\[SYSTEM\]\s+RESET`), "system_reset_injection"},
 	{regexp.MustCompile(`(?i)forget\s+all\s+(previous|your)\s+(instructions|rules|constraints)`), "memory_injection"},
 	{regexp.MustCompile(`(?i)from\s+now\s+on\s*,?\s*(you\s+are|your\s+name|your\s+role)`), "role_override"},
+	// ── 中文模式 ──
+	{regexp.MustCompile(`忽略(之前|上面|以上|先前)(的)?(指令|提示|规则|指示)`), "prompt_injection_zh"},
+	{regexp.MustCompile(`你(现在|从现在开始)(是|扮演|叫做)`), "role_override_zh"},
+	{regexp.MustCompile(`(?i)无视(之前|上面|以上|先前)(的)?(指令|提示|规则|指示)`), "prompt_injection_zh"},
+	{regexp.MustCompile(`(?i)抛弃(之前|上面|以上|先前)(的)?(指令|提示|规则|指示)`), "prompt_injection_zh"},
+	// ── 俄语模式 ──
+	{regexp.MustCompile(`(?i)игнориру(й|ть)\s+(предыдущие|все)\s+(инструкции|указания)`), "prompt_injection_ru"},
+	{regexp.MustCompile(`(?i)забудь\s+(все|предыдущие)\s+(инструкции|правила)`), "memory_injection_ru"},
+	// ── 阿拉伯语模式 ──
+	{regexp.MustCompile(`تجاهل\s+(التعليمات|التوجيهات)\s+(السابقة|أعلاه)`), "prompt_injection_ar"},
+	{regexp.MustCompile(`انت\s+الان\s+في\s+وضع\s+المطور`), "developer_mode_injection_ar"},
+}
+
+// base64InjectionRe 匹配长度超过 100 字符的 base64 编码序列。
+// 攻击者可能使用 base64 编码绕过明文注入检测。
+var base64InjectionRe = regexp.MustCompile(`[A-Za-z0-9+/]{100,}={0,2}`)
+
+// zeroWidthChars 定义需要检测的零宽字符列表。
+// 这些字符不可见，可被用于在正常文本中隐藏恶意指令。
+// 使用 Unicode 转义序列避免编译器对不可见字符的解析问题。
+var zeroWidthChars = []rune{
+	0x200B, // ZERO WIDTH SPACE
+	0x200C, // ZERO WIDTH NON-JOINER
+	0x200D, // ZERO WIDTH JOINER
+	0xFEFF, // ZERO WIDTH NO-BREAK SPACE (BOM)
+	0x2060, // WORD JOINER
+}
+
+// detectBase64Injection 检测内容中是否存在 base64 编码的注入攻击。
+// 策略: 提取长 base64 序列，解码后用现有威胁模式重新扫描。
+func detectBase64Injection(content string) []string {
+	var threats []string
+	matches := base64InjectionRe.FindAllString(content, -1)
+
+	for _, match := range matches {
+		decoded, err := base64.StdEncoding.DecodeString(match)
+		if err != nil {
+			// 尝试 RawStdEncoding (无填充)
+			decoded, err = base64.RawStdEncoding.DecodeString(match)
+			if err != nil {
+				continue
+			}
+		}
+
+		decodedStr := string(decoded)
+		// 对解码后的内容执行完整的威胁模式扫描
+		for _, tp := range contextThreatPatterns {
+			if tp.re.MatchString(decodedStr) {
+				threats = append(threats, "base64_encoded_"+tp.label)
+			}
+		}
+	}
+
+	return threats
+}
+
+// detectZeroWidthChars 检测内容中是否存在零宽字符。
+// 零宽字符可用于在正常文本中隐藏不可见的恶意指令，
+// 绕过基于正则的文本匹配检测。
+func detectZeroWidthChars(content string) []string {
+	for _, r := range content {
+		for _, zw := range zeroWidthChars {
+			if r == zw {
+				return []string{"zero_width_char_detected"}
+			}
+		}
+	}
+	return nil
 }
 
 // scanContextContent 扫描上下文内容中是否存在 prompt injection 模式。
+// 综合检测: 正则模式匹配 + base64 解码扫描 + 零宽字符检测。
 // 返回发现的威胁标签列表。
 func scanContextContent(content string) []string {
 	var threats []string
+
+	// ── 1. 正则模式匹配 (多语言) ──
 	for _, tp := range contextThreatPatterns {
 		if tp.re.MatchString(content) {
 			threats = append(threats, tp.label)
 		}
 	}
+
+	// ── 2. Base64 编码注入检测 ──
+	base64Threats := detectBase64Injection(content)
+	threats = append(threats, base64Threats...)
+
+	// ── 3. 零宽字符检测 ──
+	zwThreats := detectZeroWidthChars(content)
+	threats = append(threats, zwThreats...)
+
 	return threats
 }
 

@@ -86,7 +86,7 @@ func MaybeAutoTitle(ctx context.Context, provider llm.Provider, store *state.Sto
 		return
 	}
 
-	// 异步生成
+	// 异步生成（不传递 session 指针，避免跨 goroutine 数据竞争）
 	go func() {
 		bgCtx := context.Background()
 		title, err := GenerateTitle(bgCtx, provider, messages)
@@ -95,9 +95,13 @@ func MaybeAutoTitle(ctx context.Context, provider llm.Provider, store *state.Sto
 			return
 		}
 		if title != "" {
-			sess.Title = title
-			if err := store.UpdateSession(bgCtx, sess); err != nil {
-				slog.Warn("保存标题失败", "session_id", sessionID, "err", err)
+			// 重新获取 session 避免跨 goroutine 指针竞争
+			sess, err := store.GetSession(bgCtx, sessionID)
+			if err == nil && sess != nil {
+				sess.Title = title
+				if err := store.UpdateSession(bgCtx, sess); err != nil {
+					slog.Warn("保存标题失败", "session_id", sessionID, "err", err)
+				}
 			}
 		}
 	}()

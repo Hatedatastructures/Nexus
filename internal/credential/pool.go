@@ -160,18 +160,32 @@ func (p *Pool) MarkExhausted(ctx context.Context, statusCode int, errorMsg strin
 		"strategy", p.strategy,
 	)
 
-	// 移除第一个凭证 (当前耗尽的)
-	p.credentials = p.credentials[1:]
-	p.useCounts = p.useCounts[1:]
-
-	// round_robin 策略下重置 cursor
-	if p.strategy == "round_robin" {
-		p.cursor = 0
+	// 查找实际耗尽的凭证索引
+	targetIdx := 0
+	switch p.strategy {
+	case "round_robin":
+		// cursor 已经前进到下一个，所以耗尽的是 cursor-1
+		targetIdx = (p.cursor - 1 + len(p.credentials)) % len(p.credentials)
+	case "fill_first":
+		targetIdx = 0
+	default: // random, least_used: 无法确定，移除第一个
+		targetIdx = 0
 	}
 
-	if len(p.credentials) == 0 {
-		slog.WarnContext(ctx, "all credentials exhausted after rotation")
+	// 至少保留一个凭证
+	if len(p.credentials) <= 1 {
+		slog.WarnContext(ctx, "only one credential remaining, cannot remove")
 		return nil
+	}
+
+	p.credentials = append(p.credentials[:targetIdx], p.credentials[targetIdx+1:]...)
+	p.useCounts = append(p.useCounts[:targetIdx], p.useCounts[targetIdx+1:]...)
+
+	// round_robin 策略下调整 cursor
+	if p.strategy == "round_robin" {
+		if p.cursor >= len(p.credentials) {
+			p.cursor = 0
+		}
 	}
 
 	// 根据策略返回下一个凭证

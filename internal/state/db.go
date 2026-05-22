@@ -71,8 +71,9 @@ type SessionFilter struct {
 // Store 是状态持久化的主入口。
 // 基于 SQLite (WAL 模式)，包含 FTS5 全文搜索。
 type Store struct {
-	db *sql.DB
-	mu sync.RWMutex
+	db         *sql.DB
+	mu         sync.RWMutex
+	writeCount int // 写操作计数器，用于定期触发 WAL checkpoint（受 mu 保护）
 }
 
 // NewStore 创建或打开 SQLite 数据库。

@@ -517,13 +517,22 @@ func createFTSTrigram(ctx context.Context, db *sql.DB) error {
 
 // execSchemaStatements 按分号拆分 SQL 字符串并依次执行每条语句。
 // 忽略空语句和注释。单个语句失败不阻止后续语句执行。
+// CREATE TABLE 类语句失败会返回错误（可能是严重的 schema 损坏）。
+// 其他语句失败仅记录日志。
 func execSchemaStatements(ctx context.Context, db *sql.DB, sqlText string) error {
+	var firstErr error
 	for _, stmt := range splitSQLStatements(sqlText) {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			slog.Debug("Schema语句执行失败", "stmt", stmt[:min(80, len(stmt))], "error", err)
+			// CREATE TABLE 语句失败通常意味着严重的 schema 问题，应向上报告
+			if strings.Contains(strings.ToUpper(stmt), "CREATE TABLE") {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("CREATE TABLE 语句执行失败: %w", err)
+				}
+			}
 		}
 	}
-	return nil
+	return firstErr
 }
 
 // splitSQLStatements 按分号拆分 SQL 文本为独立语句。

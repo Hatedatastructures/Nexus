@@ -23,6 +23,7 @@ type MCPClient struct {
 	stdin      io.WriteCloser // 子进程 stdin
 	stdout     io.Reader      // 子进程 stdout
 	cmd        *exec.Cmd      // 子进程句柄
+	cancel     context.CancelFunc // 用于终止 reader goroutine
 
 	mu          sync.Mutex                // 并发保护
 	requestID   int64                     // 请求 ID 计数器
@@ -68,6 +69,9 @@ func (c *MCPClient) Connect(ctx context.Context, command string, args []string, 
 		return fmt.Errorf("启动 MCP 服务器 %s 失败: %w", command, err)
 	}
 
+	readerCtx, cancel := context.WithCancel(context.Background())
+	c.cancel = cancel
+
 	c.mu.Lock()
 	c.connected = true
 	c.stdin = stdin
@@ -76,7 +80,7 @@ func (c *MCPClient) Connect(ctx context.Context, command string, args []string, 
 	c.mu.Unlock()
 
 	// 启动后台读取协程
-	c.startReader(stdout)
+	c.startReader(readerCtx, stdout)
 
 	// 发送 initialize 请求
 	initParams := map[string]any{
@@ -115,7 +119,7 @@ func (c *MCPClient) Connect(ctx context.Context, command string, args []string, 
 }
 
 // startReader 启动后台读取协程，读取服务端响应。
-func (c *MCPClient) startReader(stdout io.Reader) {
+func (c *MCPClient) startReader(ctx context.Context, stdout io.Reader) {
 	go func() {
 		reader := bufio.NewReader(stdout)
 		for {
@@ -212,6 +216,10 @@ func (c *MCPClient) Disconnect() error {
 	}
 
 	c.connected = false
+
+	if c.cancel != nil {
+		c.cancel()
+	}
 
 	if c.stdin != nil {
 		c.stdin.Close()

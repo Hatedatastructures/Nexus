@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"nexus-agent/internal/llm"
@@ -20,8 +21,8 @@ type ProviderEntry struct {
 	Provider llm.Provider // LLM 提供者实例
 	Model    string       // 使用的模型名称
 	Priority int          // 优先级（数字越小优先级越高）
-	Healthy  bool         // 是否健康（初始为 true）
-	LastErr  time.Time    // 最后一次错误时间
+	Healthy  atomic.Bool  // 是否健康（原子操作保证并发安全）
+	LastErr  atomic.Value // 最后一次错误时间（存储 time.Time）
 }
 
 // ProviderRouter 是基于优先级的多提供者路由。
@@ -71,7 +72,7 @@ func NewProviderRouterWithConfig(entries []*ProviderRouterConfigEntry, cfg *Prov
 			Provider: e.Provider,
 			Model:    e.Model,
 			Priority: e.Priority,
-			Healthy:  true,
+			
 		})
 	}
 	return newProviderRouter(providerEntries, cfg)
@@ -98,7 +99,7 @@ func newProviderRouter(entries []*ProviderEntry, cfg *ProviderRouterConfig) *Pro
 
 	// 初始标记所有条目为健康
 	for _, e := range r.entries {
-		e.Healthy = true
+		e.Healthy.Store(true)
 	}
 
 	// 按优先级排序（简单选择排序）
@@ -134,19 +135,18 @@ func (r *ProviderRouter) ChatCompletion(ctx context.Context, req *llm.ChatReques
 	var lastErr error
 	for _, entry := range ordered {
 		// 跳过不健康的提供者
-		if !entry.Healthy {
+		if !entry.Healthy.Load() {
 			slog.Debug("跳过不健康的提供者", "provider", entry.Provider.Name(), "model", entry.Model)
 			continue
 		}
 
-		// 使用该提供者的模型
-		originalModel := req.Model
-		req.Model = entry.Model
+		// 使用浅拷贝避免修改原始请求的 Model 字段。
+		// 原实现直接修改 req.Model，当 Provider 调用失败时
+		// 错误路径会跳过恢复逻辑，导致请求状态污染。
+		reqCopy := *req
+		reqCopy.Model = entry.Model
 
-		resp, err := entry.Provider.CreateChatCompletion(ctx, req)
-
-		// 恢复原始模型
-		req.Model = originalModel
+		resp, err := entry.Provider.CreateChatCompletion(ctx, &reqCopy)
 
 		if err == nil {
 			// 成功：标记健康
@@ -196,17 +196,18 @@ func (r *ProviderRouter) ChatCompletionStream(ctx context.Context, req *llm.Chat
 
 	var lastErr error
 	for _, entry := range ordered {
-		if !entry.Healthy {
+		if !entry.Healthy.Load() {
 			slog.Debug("跳过不健康的提供者（流式）", "provider", entry.Provider.Name(), "model", entry.Model)
 			continue
 		}
 
-		originalModel := req.Model
-		req.Model = entry.Model
+		// 使用浅拷贝避免修改原始请求的 Model 字段。
+		// 原实现直接修改 req.Model，当 Provider 调用失败时
+		// 错误路径会跳过恢复逻辑，导致请求状态污染。
+		reqCopy := *req
+		reqCopy.Model = entry.Model
 
-		ch, err := entry.Provider.CreateChatCompletionStream(ctx, req)
-
-		req.Model = originalModel
+		ch, err := entry.Provider.CreateChatCompletionStream(ctx, &reqCopy)
 
 		if err == nil {
 			r.MarkHealthy(entry.Provider.Name(), true)
@@ -241,9 +242,9 @@ func (r *ProviderRouter) MarkHealthy(name string, healthy bool) {
 
 	for _, entry := range r.entries {
 		if entry.Provider.Name() == name {
-			entry.Healthy = healthy
+			entry.Healthy.Store(healthy)
 			if !healthy {
-				entry.LastErr = time.Now()
+				entry.LastErr.Store(time.Now())
 			}
 			slog.Debug("标记提供者健康状态",
 				"provider", name,
@@ -260,7 +261,7 @@ func (r *ProviderRouter) GetHealthyProvider() (llm.Provider, error) {
 	defer r.mu.RUnlock()
 
 	for _, entry := range r.entries {
-		if entry.Healthy {
+		if entry.Healthy.Load() {
 			return entry.Provider, nil
 		}
 	}
@@ -311,7 +312,7 @@ func (r *ProviderRouter) runHealthChecks() {
 	r.mu.RLock()
 	unhealthy := make([]*ProviderEntry, 0)
 	for _, entry := range r.entries {
-		if !entry.Healthy {
+		if !entry.Healthy.Load() {
 			unhealthy = append(unhealthy, entry)
 		}
 	}

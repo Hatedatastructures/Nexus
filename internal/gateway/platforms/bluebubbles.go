@@ -51,6 +51,9 @@ type BlueBubblesAdapter struct {
 
 	// 上次轮询的 GUID（用于增量获取）
 	lastGUID string
+
+	closeOnce sync.Once
+	msgCh     chan *MessageEvent
 }
 
 // bbDeduplicator 消息去重器。
@@ -139,11 +142,11 @@ func (a *BlueBubblesAdapter) Connect(ctx context.Context) (<-chan *MessageEvent,
 		return nil, fmt.Errorf("BlueBubbles 连接失败: %w", err)
 	}
 
-	msgCh := make(chan *MessageEvent, 100)
-	go a.pollLoop(ctx, msgCh)
+	a.msgCh = make(chan *MessageEvent, 100)
+	go a.pollLoop(ctx, a.msgCh)
 
 	slog.Info("[BlueBubbles] 已连接", "url", a.baseURL)
-	return msgCh, nil
+	return a.msgCh, nil
 }
 
 // Disconnect 停止轮询并断开连接。
@@ -153,6 +156,7 @@ func (a *BlueBubblesAdapter) Disconnect(ctx context.Context) error {
 	a.connected = false
 	a.mu.Unlock()
 
+	a.closeOnce.Do(func() { close(a.msgCh) })
 	slog.Info("[BlueBubbles] 已断开")
 	return nil
 }
@@ -172,7 +176,6 @@ func (a *BlueBubblesAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEv
 			a.mu.Unlock()
 
 			if !running {
-				close(msgCh)
 				return
 			}
 
@@ -185,15 +188,32 @@ func (a *BlueBubblesAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEv
 			for _, msg := range messages {
 				select {
 				case <-ctx.Done():
-					close(msgCh)
 					return
-				case msgCh <- msg:
+				default:
+					if err := a.safeSend(msgCh, msg); err != nil {
+						return
+					}
 				}
 			}
 		case <-ctx.Done():
-			close(msgCh)
+			// msgCh 由 Disconnect 通过 closeOnce 关闭
 			return
 		}
+	}
+}
+
+// safeSend 安全发送消息到 channel，防止向已关闭 channel 发送导致 panic。
+func (a *BlueBubblesAdapter) safeSend(ch chan *MessageEvent, msg *MessageEvent) error {
+	defer func() {
+		if r := recover(); r != nil {
+			// channel 已关闭
+		}
+	}()
+	select {
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("send timeout")
+	case ch <- msg:
+		return nil
 	}
 }
 

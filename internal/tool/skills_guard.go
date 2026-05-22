@@ -68,8 +68,8 @@ func initThreatPatterns() []ThreatPattern {
 		Severity string
 	}{
 		// ── 数据外泄 ──
-		{"curl_to_external", "exfiltration", `curl\s+.*https?://(?!localhost|127\.0\.0\.1)`, "high"},
-		{"wget_to_external", "exfiltration", `wget\s+.*https?://(?!localhost|127\.0\.0\.1)`, "high"},
+		{"curl_to_external", "exfiltration", `curl\s+https?://(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])\.)+[a-zA-Z]{2,}`, "high"},
+		{"wget_to_external", "exfiltration", `wget\s+https?://(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])\.)+[a-zA-Z]{2,}`, "high"},
 		{"base64_encode_pipe", "exfiltration", `base64\s*\|\s*(curl|wget|nc)\b`, "critical"},
 		{"env_dump", "exfiltration", `(printenv|env\s*>)\s*.*\|\s*(curl|wget|nc)\b`, "critical"},
 		{"ssh_key_exfil", "exfiltration", `(cat|read)\s+.*\.ssh/.*\|\s*(curl|wget|nc)\b`, "critical"},

@@ -83,7 +83,7 @@ func (c *AuxiliaryClient) chatCompletionWithStrategy(ctx context.Context, req *l
 
 	for _, entry := range entries {
 		// 跳过不健康的提供者（除非是首次调用且所有都不健康）
-		if !entry.Healthy && !isRetry {
+		if !entry.Healthy.Load() && !isRetry {
 			continue
 		}
 
@@ -168,7 +168,7 @@ func (c *AuxiliaryClient) chatCompletionStreamWithStrategy(ctx context.Context, 
 	var attempted int
 
 	for _, entry := range entries {
-		if !entry.Healthy && !isRetry {
+		if !entry.Healthy.Load() && !isRetry {
 			continue
 		}
 

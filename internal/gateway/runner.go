@@ -37,6 +37,7 @@ type GatewayRunner struct {
 	cronSched   *cron.Scheduler             // 定时调度器
 	wg          sync.WaitGroup              // goroutine 计数器
 	shutdownCh  chan struct{}               // 关闭信号通道
+	stopOnce    sync.Once                   // 确保 Stop() 只执行一次，防止二次 close panic
 }
 
 // NewGatewayRunner 创建网关运行器。
@@ -164,11 +165,14 @@ func (g *GatewayRunner) Start(ctx context.Context) error {
 
 // Stop 优雅关闭网关。
 // 断开所有平台连接，停止后台任务。
+// 使用 sync.Once 确保 close(g.shutdownCh) 只执行一次，
+// 防止信号处理器和 context 取消同时调用 Stop 时二次 close 导致 panic。
 func (g *GatewayRunner) Stop(ctx context.Context) error {
-	slog.Info("stopping gateway runner")
-
-	// 发送关闭信号
-	close(g.shutdownCh)
+	g.stopOnce.Do(func() {
+		slog.Info("stopping gateway runner")
+		// 发送关闭信号
+		close(g.shutdownCh)
+	})
 
 	// 停止 cron 调度器
 	if g.cronSched != nil {
@@ -339,8 +343,11 @@ func (g *GatewayRunner) processMessage(ctx context.Context, adapter platforms.Pl
 		// 如果流式回调已投递了内容，Finish 仅作为同步点
 		consumer.Finish(ctx)
 	} else {
-		// 兜底: 非流式发送最终回复
-		_, _ = adapter.Send(ctx, source.ChatID, result.FinalResponse, nil)
+		// 非流式路径: 最终回复为空时不发送空消息（原实现在 FinalResponse
+		// 为空时也会调用 Send 发送空字符串，某些平台上会显示空消息）
+		slog.Warn("对话完成但无最终回复",
+			"session_key", sessionKey,
+		)
 	}
 
 	// 11. 执行投递后钩子

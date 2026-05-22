@@ -168,8 +168,9 @@ func (w *Worker) SetCancel(cancel context.CancelFunc) {
 func (w *Worker) Cancel() {
 	w.mu.Lock()
 
-	// 只有 Running 和 Paused 可以被取消
-	if w.state != StateRunning && w.state != StatePaused {
+	// 使用 CanTransition 检查状态转换合法性，确保 Worker 已处于终态时
+	// 不会再次 close(done) 导致 panic（原实现直接检查状态，绕过了状态机校验）
+	if !CanTransition(w.state, StateCancelled) {
 		w.mu.Unlock()
 		return
 	}

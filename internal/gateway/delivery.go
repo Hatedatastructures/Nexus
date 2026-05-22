@@ -11,6 +11,14 @@ import (
 	"nexus-agent/internal/gateway/platforms"
 )
 
+// 预编译正则表达式，避免每次函数调用时重复编译带来的性能开销
+var (
+	mediaTagRe     = regexp.MustCompile(`(?m)^\s*MEDIA:\s*(\S+)\s*$|\[\[MEDIA:([^\]]+)\]\]`)
+	markdownImgRe  = regexp.MustCompile(`!\[.*?\]\((\S+)\)`)
+	imageURLRe     = regexp.MustCompile(`https?://\S+\.(?:jpg|jpeg|png|gif|webp)(?:\?\S*)?`)
+	multiNewlineRe = regexp.MustCompile(`\n{3,}`)
+)
+
 // ───────────────────────────── 媒体标签 ─────────────────────────────
 
 // MediaTag 表示从消息内容中提取的媒体引用。
@@ -229,8 +237,7 @@ func (d *DeliveryManager) ExtractMedia(content string) (text string, images []st
 	var tags []MediaTag
 
 	// 匹配 MEDIA 标签: MEDIA:<path> 或 [[MEDIA:<path>]]
-	mediaRe := regexp.MustCompile(`(?m)^\s*MEDIA:\s*(\S+)\s*$|\[\[MEDIA:([^\]]+)\]\]`)
-	matches := mediaRe.FindAllStringSubmatch(text, -1)
+	matches := mediaTagRe.FindAllStringSubmatch(text, -1)
 	for _, m := range matches {
 		path := m[1]
 		if path == "" {
@@ -245,11 +252,10 @@ func (d *DeliveryManager) ExtractMedia(content string) (text string, images []st
 			})
 		}
 	}
-	text = mediaRe.ReplaceAllString(text, "")
+	text = mediaTagRe.ReplaceAllString(text, "")
 
 	// 匹配 Markdown 图片: ![alt](url)
-	imgRe := regexp.MustCompile(`!\[.*?\]\((\S+)\)`)
-	imgMatches := imgRe.FindAllStringSubmatch(text, -1)
+	imgMatches := markdownImgRe.FindAllStringSubmatch(text, -1)
 	for _, m := range imgMatches {
 		url := strings.TrimSpace(m[1])
 		if url != "" && isImageURL(url) {
@@ -258,8 +264,7 @@ func (d *DeliveryManager) ExtractMedia(content string) (text string, images []st
 	}
 
 	// 匹配行内图片 URL
-	urlRe := regexp.MustCompile(`https?://\S+\.(?:jpg|jpeg|png|gif|webp)(?:\?\S*)?`)
-	urlMatches := urlRe.FindAllString(text, -1)
+	urlMatches := imageURLRe.FindAllString(text, -1)
 	for _, url := range urlMatches {
 		if !contains(images, url) {
 			images = append(images, url)
@@ -267,7 +272,7 @@ func (d *DeliveryManager) ExtractMedia(content string) (text string, images []st
 	}
 
 	// 清理多余空行
-	text = regexp.MustCompile(`\n{3,}`).ReplaceAllString(text, "\n\n")
+	text = multiNewlineRe.ReplaceAllString(text, "\n\n")
 	text = strings.TrimSpace(text)
 
 	return text, images, tags

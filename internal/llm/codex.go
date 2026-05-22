@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -107,7 +108,8 @@ func (t *CodexTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 	}, nil
 }
 
-func (t *CodexTransport) ParseStream(ctx context.Context, body []byte) <-chan *StreamDelta {
+func (t *CodexTransport) ParseStream(ctx context.Context, body io.ReadCloser) <-chan *StreamDelta {
+	body.Close()
 	ch := make(chan *StreamDelta, 1)
 	ch <- &StreamDelta{Done: true}
 	close(ch)

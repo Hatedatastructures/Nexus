@@ -132,7 +132,7 @@ func (c *AgentCache) SweepIdle(ctx context.Context) int {
 	// 异步清理被驱逐的代理
 	for _, entry := range expired {
 		go func(e *cacheEntry) {
-			// 代理清理 (释放资源等)
+			// 代理缓存条目驱逐时的清理。AIAgent 当前未实现 Close() 接口，后续可添加资源释放逻辑。
 			slog.Debug("evicted idle agent from cache", "idle_duration", now.Sub(e.lastAccess))
 		}(entry)
 	}
@@ -198,7 +198,7 @@ func (c *AgentCache) evictLRU() bool {
 
 		// 异步清理
 		go func(e *cacheEntry) {
-			// 代理清理
+			// 代理缓存条目驱逐时的清理。AIAgent 当前未实现 Close() 接口，后续可添加资源释放逻辑。
 		}(entry)
 
 		return true

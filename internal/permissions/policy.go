@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -81,7 +82,7 @@ func matchArgPattern(pattern string, args map[string]any) bool {
 			return false
 		}
 		s := fmt.Sprintf("%v", val)
-		matched, err := filepath.Match(pat, s)
+		matched, err := regexp.MatchString(pat, s)
 		if err != nil {
 			return false
 		}
@@ -194,7 +195,7 @@ func DefaultPolicy() *Policy {
 			// ── 硬封锁: 绝对禁止的操作 ──
 			{
 				ToolPattern: "terminal",
-				ArgPatterns: []string{"command~=rm -rf /", "command~=mkfs"},
+				ArgPatterns: []string{"command~=rm\\s+(-[a-zA-Z]*f[a-zA-Z]*\\s+)?/", "command~=mkfs"},
 				Level:       LevelAutoDeny,
 				Reason:      "禁止执行破坏性系统命令",
 			},

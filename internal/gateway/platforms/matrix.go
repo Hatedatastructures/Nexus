@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,7 @@ type MatrixAdapter struct {
 	msgCh       chan *MessageEvent
 	syncToken   string
 	shutdown    chan struct{}
+	closeOnce   sync.Once
 }
 
 // NewMatrixAdapter 创建 Matrix 适配器实例。
@@ -87,7 +89,7 @@ func (m *MatrixAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, erro
 // Disconnect 停止同步循环。
 func (m *MatrixAdapter) Disconnect(ctx context.Context) error {
 	close(m.shutdown)
-	close(m.msgCh)
+	m.closeOnce.Do(func() { close(m.msgCh) })
 	slog.Info("matrix adapter disconnected")
 	return nil
 }

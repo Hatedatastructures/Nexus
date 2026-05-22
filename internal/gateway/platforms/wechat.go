@@ -3,6 +3,7 @@
 package platforms
 
 import (
+	"sync"
 	"bytes"
 	"context"
 	"crypto/sha1"
@@ -22,6 +23,8 @@ import (
 // WeChatAdapter 实现微信公众号适配器。
 // 使用 XML 格式接收用户消息, 通过客服消息 API (JSON) 主动发送/回复消息。
 type WeChatAdapter struct {
+ttokenMu     sync.Mutex         // token 访问锁
+	tokenMu     sync.Mutex         // token 访问锁
 	appID  string             // 公众号 AppID
 	secret string             // 公众号 AppSecret
 	token  string             // 服务器验证 Token (用于签名验证)
@@ -281,6 +284,9 @@ func (w *WeChatAdapter) doAPI(ctx context.Context, method string, path string, b
 
 // getAccessToken 获取 access_token (带缓存)。
 func (w *WeChatAdapter) getAccessToken(ctx context.Context) (string, error) {
+	w.tokenMu.Lock()
+	defer w.tokenMu.Unlock()
+
 	if w.accessToken != "" && time.Now().Before(w.tokenExpiry) {
 		return w.accessToken, nil
 	}

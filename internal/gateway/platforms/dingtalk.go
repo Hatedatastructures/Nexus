@@ -3,6 +3,7 @@
 package platforms
 
 import (
+	"sync"
 	"bytes"
 	"context"
 	"crypto/hmac"
@@ -22,6 +23,7 @@ import (
 // DingTalkAdapter 实现钉钉开放平台适配器。
 // 使用 access_token 认证, 通过消息回调接收消息, 通过机器人 API 发送消息。
 type DingTalkAdapter struct {
+	tokenMu     sync.Mutex         // token 访问锁
 	appKey    string             // 应用 AppKey
 	appSecret string             // 应用 AppSecret
 	client    *http.Client       // HTTP 客户端
@@ -306,6 +308,9 @@ func (d *DingTalkAdapter) doAPI(ctx context.Context, method string, path string,
 
 // getAccessToken 获取 access_token (带缓存)。
 func (d *DingTalkAdapter) getAccessToken(ctx context.Context) (string, error) {
+	d.tokenMu.Lock()
+	defer d.tokenMu.Unlock()
+
 	if d.accessToken != "" && time.Now().Before(d.tokenExpiry) {
 		return d.accessToken, nil
 	}

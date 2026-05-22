@@ -144,14 +144,10 @@ func (p *CopilotProvider) CreateChatCompletionStream(ctx context.Context, req *C
 		return nil, fmt.Errorf("Copilot 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
 	}
 
-	// 读取响应体并通过 OpenAI 传输层解析 SSE 流
-	bodyBytes, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return nil, fmt.Errorf("读取 Copilot 流式响应体失败: %w", err)
-	}
-
-	return p.transport.ParseStream(ctx, bodyBytes), nil
+	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。
+	// 不再使用 io.ReadAll 将整个响应读入内存，避免大响应导致 OOM。
+	// resp.Body 的生命周期由 ParseStream 内部的 goroutine 通过 defer body.Close() 管理。
+	return p.transport.ParseStream(ctx, resp.Body), nil
 }
 
 // ListModels 返回 Copilot 可用模型列表。

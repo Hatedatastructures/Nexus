@@ -144,21 +144,20 @@ func (t *LMStudioTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 
 // ParseStream 解析 LM Studio 流式 Chat Completions 响应体。
 // 复用 OpenAI SSE 流解析逻辑，额外处理 reasoning_content 增量。
-func (t *LMStudioTransport) ParseStream(ctx context.Context, body []byte) <-chan *StreamDelta {
+func (t *LMStudioTransport) ParseStream(ctx context.Context, body io.ReadCloser) <-chan *StreamDelta {
 	ch := make(chan *StreamDelta, 256)
 
 	go func() {
 		defer close(ch)
-
-		reader := bytes.NewReader(body)
-		scanner := io.NopCloser(reader)
+		defer body.Close()
 
 		var contentBuilder strings.Builder
 		var reasoningBuilder strings.Builder
 		var toolCalls []ToolCall
 		toolCallBuilders := make(map[int]*toolCallBuilder)
+		var finalUsage *TokenUsage // 流式响应的累积 token 用量
 
-		for event := range ParseSSEStream(ctx, scanner) {
+		for event := range ParseSSEStream(ctx, body) {
 			// 检查 context 取消
 			select {
 			case <-ctx.Done():
@@ -172,6 +171,7 @@ func (t *LMStudioTransport) ParseStream(ctx context.Context, body []byte) <-chan
 					Content:   contentBuilder.String(),
 					Reasoning: reasoningBuilder.String(),
 					ToolCalls: toolCalls,
+					Usage:     finalUsage,
 					Done:      true,
 				}
 				return
@@ -184,6 +184,11 @@ func (t *LMStudioTransport) ParseStream(ctx context.Context, body []byte) <-chan
 					"error", err,
 				)
 				continue
+			}
+
+			// 收集流式 usage（最后一个 chunk 可能包含 usage 字段）
+			if chunk.Usage != nil {
+				finalUsage = convertOpenAIUsage(chunk.Usage)
 			}
 
 			if len(chunk.Choices) == 0 {
@@ -355,14 +360,10 @@ func (p *LMStudioProvider) CreateChatCompletionStream(ctx context.Context, req *
 		return nil, fmt.Errorf("LM Studio 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
 	}
 
-	// 读取响应体并通过 ParseStream 处理
-	bodyBytes, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return nil, fmt.Errorf("读取 LM Studio 流式响应体失败: %w", err)
-	}
-
-	return p.transport.ParseStream(ctx, bodyBytes), nil
+	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。
+	// 不再使用 io.ReadAll 将整个响应读入内存，避免大响应导致 OOM。
+	// resp.Body 的生命周期由 ParseStream 内部的 goroutine 通过 defer body.Close() 管理。
+	return p.transport.ParseStream(ctx, resp.Body), nil
 }
 
 // ListModels 返回 LM Studio 已加载的模型列表。

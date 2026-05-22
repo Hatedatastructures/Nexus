@@ -175,6 +175,13 @@ func (s *PairingStore) VerifyCode(platform, userID, code string) (bool, error) {
 	records := s.getRecords(platform, userID)
 	for _, r := range records {
 		if r.Code != code {
+			// 码不匹配: 递增尝试次数，检查是否需要锁定
+			r.Attempts++
+			r.LastAttemptAt = now
+			if r.Attempts > lockoutThreshold {
+				r.LockedUntil = now.Add(10 * time.Minute)
+				_ = s.savePlatform(platform)
+			}
 			continue
 		}
 
@@ -194,20 +201,9 @@ func (s *PairingStore) VerifyCode(platform, userID, code string) (bool, error) {
 			return false, fmt.Errorf("验证已锁定，请等待 %s 后重试", remaining)
 		}
 
-		// 记录尝试次数
-		r.Attempts++
-		r.LastAttemptAt = now
-
-		// 检查尝试次数超限
-		if r.Attempts > lockoutThreshold {
-			r.LockedUntil = now.Add(10 * time.Minute)
-			s.savePlatform(platform)
-			return false, fmt.Errorf("验证失败次数过多，已锁定 10 分钟")
-		}
-
-		// 标记为已验证
+		// 所有检查通过，标记为已验证（不再递增 attempts）
 		r.Verified = true
-		s.savePlatform(platform)
+		_ = s.savePlatform(platform)
 
 		slog.Info("配对: 配对码验证成功",
 			"platform", platform,

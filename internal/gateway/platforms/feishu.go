@@ -4,6 +4,7 @@
 package platforms
 
 import (
+	"sync"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 // FeishuAdapter 实现飞书开放平台适配器。
 // 使用 tenant_access_token 认证, 通过事件订阅接收消息, 通过消息 API 发送消息。
 type FeishuAdapter struct {
+	tokenMu     sync.Mutex         // token 访问锁
 	appID       string             // 应用 App ID
 	appSecret   string             // 应用 App Secret
 	client      *http.Client       // HTTP 客户端
@@ -309,6 +311,9 @@ func (f *FeishuAdapter) doAPI(ctx context.Context, method string, path string, b
 
 // getTenantToken 获取 tenant_access_token (带缓存)。
 func (f *FeishuAdapter) getTenantToken(ctx context.Context) (string, error) {
+	f.tokenMu.Lock()
+	defer f.tokenMu.Unlock()
+
 	if f.tenantToken != "" && time.Now().Before(f.tokenExpiry) {
 		return f.tenantToken, nil
 	}

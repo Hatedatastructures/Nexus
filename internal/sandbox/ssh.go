@@ -172,10 +172,7 @@ func (e *SSHEnvironment) Cleanup() error {
 // shellQuote 对 shell 参数进行简单引号包裹。
 // 用于防止路径中的空格和特殊字符问题。
 func shellQuote(s string) string {
-	if !strings.ContainsAny(s, " \t\n'\"$\\") {
-		return s
-	}
-	// 单引号包裹，内部单引号需要特殊处理
-	quoted := strings.ReplaceAll(s, "'", `'\''`)
-	return "'" + quoted + "'"
+	// 使用单引号包裹，内部单引号用 '\'' 转义
+	// 这是最安全的 shell 转义方式，处理所有特殊字符
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }

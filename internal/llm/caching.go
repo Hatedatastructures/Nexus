@@ -87,7 +87,9 @@ func addAnthropicCacheControl(content string) string {
 	if strings.Contains(content, "cache_control") {
 		return content
 	}
-	return content
+	// 添加 Anthropic cache_control 标记，供 Transport 层识别并转换为
+	// content block 的 cache_control 字段
+	return content + "\n<!-- cache_control: ephemeral -->"
 }
 
 // NeedsCacheControl 判断给定的消息和模型是否需要应用提示词缓存。

@@ -112,7 +112,7 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 		req := a.buildAPIRequest(messages, systemPrompt)
 
 		// ── 4b. 调用 LLM (带重试和错误恢复) ──
-		resp, err := a.callLLMWithRetry(ctx, req)
+		resp, err := a.callLLMWithRetry(ctx, req, &messages)
 		if err != nil {
 			if llm.ClassifyFromError(err).ShouldCompress && compressionAttempts < maxCompressionAttempts {
 				compressionAttempts++
@@ -194,20 +194,9 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 			toolResults := a.executeToolCalls(ctx, resp.ToolCalls)
 			toolCallCount += len(resp.ToolCalls)
 
-			// 记录成功执行的工具调用到护栏历史
-			if a.guardrails != nil {
-				for _, pc := range toolResults {
-					if pc.Error == nil {
-						// 从原始工具调用中解析参数用于记录
-						for _, tc := range resp.ToolCalls {
-							if tc.ID == pc.CallID {
-								a.guardrails.Record(pc.Name, parseToolArguments(tc.Arguments))
-								break
-							}
-						}
-					}
-				}
-			}
+			// Check 已同时更新护栏状态（历史记录、连续重复计数），
+			// 不再需要单独调用 Record，否则会导致双重计数使拦截过早触发。
+			// Record 方法保留用于向后兼容，但不应用于与 Check 配对的场景。
 
 			for _, tr := range toolResults {
 				messages = append(messages, llm.Message{
@@ -246,7 +235,16 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 
 	// ── 5. 同步记忆 (异步) ──
 	if a.memoryManager != nil {
+		// 异步同步记忆上下文，添加 panic recover 防止 goroutine 崩溃导致进程退出
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("记忆同步 goroutine panic",
+						"session_id", a.sessionID,
+						"panic", r,
+					)
+				}
+			}()
 			a.memoryManager.SystemPromptBlock()
 		}()
 	}
@@ -397,7 +395,7 @@ func (a *AIAgent) buildAPIRequest(messages []llm.Message, _ string) *llm.ChatReq
 
 // ───────────────────────────── LLM 调用 (带重试) ─────────────────────────────
 
-func (a *AIAgent) callLLMWithRetry(ctx context.Context, req *llm.ChatRequest) (*llm.ChatResponse, error) {
+func (a *AIAgent) callLLMWithRetry(ctx context.Context, req *llm.ChatRequest, messages *[]llm.Message) (*llm.ChatResponse, error) {
 	maxRetries := a.maxRetries
 	if maxRetries <= 0 {
 		maxRetries = 3
@@ -452,16 +450,19 @@ func (a *AIAgent) callLLMWithRetry(ctx context.Context, req *llm.ChatRequest) (*
 		// 上下文溢出: 触发压缩
 		if classified.ShouldCompress {
 			if a.compressor != nil {
-				a.mu.Lock()
-				messages := a.messages
-				a.mu.Unlock()
-
-				compressed, compressErr := a.compressor.Compress(ctx, messages, a.provider, "")
+				// 使用调用方传入的消息列表（而非 a.messages），
+				// 因为主循环的增量消息只追加到局部 messages 变量。
+				compressed, compressErr := a.compressor.Compress(ctx, *messages, a.provider, "")
 				if compressErr == nil {
 					a.mu.Lock()
 					a.messages = compressed
-					a.invalidateSystemPrompt()
+					// 内联清空缓存，避免调用 invalidateSystemPrompt 导致死锁
+					// （当前已持有 a.mu 锁，invalidateSystemPrompt 内部会再次 Lock）
+					a.cachedSystemPrompt = ""
 					a.mu.Unlock()
+					// 同步更新调用方的消息列表和请求，使下一次重试使用压缩后的数据
+					*messages = compressed
+					req.Messages = compressed
 				}
 			}
 		}
@@ -760,15 +761,8 @@ func parseToolArguments(argsJSON string) map[string]any {
 
 // ───────────────────────────── 辅助函数 ─────────────────────────────
 
+// 使用 llm 包的公共 token 估算函数，避免与 compressor.go 中的实现重复
 func estimateTokensRough(messages []llm.Message) int {
-	const charsPerToken = 4
-	total := 0
-	for _, msg := range messages {
-		total += len(msg.Content)/charsPerToken + 10
-		for _, tc := range msg.ToolCalls {
-			total += len(tc.Arguments) / charsPerToken
-		}
-	}
-	return total
+	return llm.EstimateTokensRough(messages)
 }
 

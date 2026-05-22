@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -62,6 +63,7 @@ type ReviewResult struct {
 
 // Curator 技能策展器。
 type Curator struct {
+	mu        sync.Mutex
 	stateFile string
 	skillsDir string
 	state     CuratorState
@@ -80,6 +82,8 @@ func NewCurator(skillsDir string) *Curator {
 
 // LoadState 加载策展状态。
 func (c *Curator) LoadState() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	data, err := os.ReadFile(c.stateFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -92,6 +96,8 @@ func (c *Curator) LoadState() error {
 
 // SaveState 保存策展状态。
 func (c *Curator) SaveState() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	dir := filepath.Dir(c.stateFile)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -107,6 +113,8 @@ func (c *Curator) SaveState() error {
 
 // ShouldRunNow 检查是否应该执行策展。
 func (c *Curator) ShouldRunNow() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.state.LastRun.IsZero() {
 		return true
 	}
@@ -116,6 +124,8 @@ func (c *Curator) ShouldRunNow() bool {
 // ApplyAutomaticTransitions 应用自动状态转换。
 // 纯函数，不依赖外部服务。
 func (c *Curator) ApplyAutomaticTransitions(skills []CuratorSkill) []CuratorSkill {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	now := time.Now()
 	var result []CuratorSkill
 
@@ -171,8 +181,10 @@ func (c *Curator) Run(ctx context.Context) (*ReviewResult, error) {
 	}
 
 	// 更新状态
+	c.mu.Lock()
 	c.state.LastRun = time.Now()
 	c.state.RunCount++
+	c.mu.Unlock()
 
 	if err := c.SaveState(); err != nil {
 		slog.Warn("保存策展状态失败", "err", err)
@@ -223,6 +235,8 @@ func (c *Curator) scanSkills() error {
 
 // WriteRunReport 生成策展报告。
 func (c *Curator) WriteRunReport(outputDir string, result *ReviewResult) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	reportPath := filepath.Join(outputDir, "curator_report.md")
 
 	var b strings.Builder
@@ -253,6 +267,8 @@ func (c *Curator) WriteRunReport(outputDir string, result *ReviewResult) error {
 
 // GetSkillsByState 按状态获取技能列表。
 func (c *Curator) GetSkillsByState(state SkillState) []CuratorSkill {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var result []CuratorSkill
 	for _, s := range c.state.Skills {
 		if s.State == state {
@@ -264,6 +280,8 @@ func (c *Curator) GetSkillsByState(state SkillState) []CuratorSkill {
 
 // UpdateSkillUsage 更新技能使用记录。
 func (c *Curator) UpdateSkillUsage(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for i := range c.state.Skills {
 		if c.state.Skills[i].Name == name {
 			c.state.Skills[i].LastUsed = time.Now()

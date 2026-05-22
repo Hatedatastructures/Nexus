@@ -55,9 +55,12 @@ func NewToolCallGuardrails() *ToolCallGuardrails {
 
 // ───────────────────────────── 核心方法 ─────────────────────────────
 
-// Check 检查新的工具调用是否被允许。
+// Check 检查新的工具调用是否被允许，同时更新内部状态。
 // 返回 allowed=true 表示允许执行, allowed=false 表示应被拦截。
 // reason 在拦截时说明原因。
+//
+// 注意: 此方法会修改护栏状态（连续重复计数、历史记录等），
+// 以防止同一批次中多个相同调用绕过检查。
 //
 // 检测策略:
 //  1. 精确重复: 相同 toolName + 相同 args 连续出现 N 次
@@ -86,6 +89,27 @@ func (g *ToolCallGuardrails) Check(toolName string, args map[string]any) (allowe
 	if count >= g.maxToolCallsInWindow {
 		return false, "检测到工具固着: 工具 " + toolName +
 			" 在最近 " + itoa(g.windowSize) + " 次调用中出现了 " + itoa(count) + " 次"
+	}
+
+	// 关键修复: Check 通过后立即更新状态，防止同一批次中
+	// 多个相同调用都绕过护栏（原实现 Check 不修改状态，
+	// 导致批量重复调用全部通过检查后才被 Record 记录）。
+	if toolName == g.lastToolName && argsJSON == g.lastArgsJSON {
+		g.consecutiveDuplicates++
+	} else {
+		g.consecutiveDuplicates = 1
+	}
+	g.lastToolName = toolName
+	g.lastArgsJSON = argsJSON
+
+	// 追加到历史记录，维护滑动窗口
+	g.history = append(g.history, ToolCallRecord{
+		ToolName:  toolName,
+		ArgsJSON:  argsJSON,
+		Timestamp: time.Now(),
+	})
+	if len(g.history) > g.windowSize {
+		g.history = g.history[len(g.history)-g.windowSize:]
 	}
 
 	return true, ""

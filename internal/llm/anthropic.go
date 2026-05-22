@@ -150,20 +150,19 @@ func (t *AnthropicTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 }
 
 // ParseStream 解析 Anthropic 流式 SSE 响应，返回 StreamDelta 通道。
-func (t *AnthropicTransport) ParseStream(ctx context.Context, body []byte) <-chan *StreamDelta {
+func (t *AnthropicTransport) ParseStream(ctx context.Context, body io.ReadCloser) <-chan *StreamDelta {
 	ch := make(chan *StreamDelta, 256)
 
 	go func() {
 		defer close(ch)
-
-		reader := bytes.NewReader(body)
-		scanner := io.NopCloser(reader)
+		defer body.Close() // 确保响应体被关闭，防止资源泄漏
 
 		var contentBuilder strings.Builder
 		var reasoningBuilder strings.Builder
 		toolCallBuilders := make(map[int]*toolCallBuilder)
+		var inputTokens, outputTokens int // 累积的 input/output token 计数
 
-		for event := range ParseSSEStream(ctx, scanner) {
+		for event := range ParseSSEStream(ctx, body) {
 			select {
 			case <-ctx.Done():
 				return
@@ -174,8 +173,8 @@ func (t *AnthropicTransport) ParseStream(ctx context.Context, body []byte) <-cha
 				continue
 			}
 
-			// 检查是否是 message_stop 事件
-			if event.Event == "message_stop" || event.Event == "message_delta" {
+			// 检查是否是 message_stop 事件（message_delta 不再提前拦截，需要解析 usage）
+			if event.Event == "message_stop" {
 				// 流结束事件，发送最终增量
 				var toolCalls []ToolCall
 				for _, builder := range toolCallBuilders {
@@ -189,7 +188,12 @@ func (t *AnthropicTransport) ParseStream(ctx context.Context, body []byte) <-cha
 					Content:   contentBuilder.String(),
 					ToolCalls: toolCalls,
 					Reasoning: reasoningBuilder.String(),
-					Done:      true,
+					Usage: &TokenUsage{
+						PromptTokens:     inputTokens,
+						CompletionTokens: outputTokens,
+						TotalTokens:      inputTokens + outputTokens,
+					},
+					Done: true,
 				}
 				return
 			}
@@ -201,6 +205,12 @@ func (t *AnthropicTransport) ParseStream(ctx context.Context, body []byte) <-cha
 			}
 
 			switch sseEvent.Type {
+			case "message_start":
+				// message_start 事件包含 input token 用量
+				if sseEvent.Message != nil && sseEvent.Message.Usage != nil {
+					inputTokens = sseEvent.Message.Usage.InputTokens
+				}
+
 			case "content_block_start":
 				handleContentBlockStart(&sseEvent, toolCallBuilders)
 
@@ -211,8 +221,11 @@ func (t *AnthropicTransport) ParseStream(ctx context.Context, body []byte) <-cha
 				// 内容块结束，不发送事件
 
 			case "message_delta":
+				// message_delta 事件包含 output token 用量
+				if sseEvent.Usage != nil {
+					outputTokens = sseEvent.Usage.OutputTokens
+				}
 				if sseEvent.Delta != nil {
-					// message_delta 通常包含 stop_reason
 					if sseEvent.Delta.StopReason != "" {
 						var toolCalls []ToolCall
 						for _, b := range toolCallBuilders {
@@ -226,7 +239,13 @@ func (t *AnthropicTransport) ParseStream(ctx context.Context, body []byte) <-cha
 							Content:   contentBuilder.String(),
 							ToolCalls: toolCalls,
 							Reasoning: reasoningBuilder.String(),
-							Done:      true,
+							Usage: &TokenUsage{
+								PromptTokens:     inputTokens,
+								CompletionTokens: outputTokens,
+								TotalTokens:      inputTokens + outputTokens,
+								CacheReadTokens:  sseEvent.Usage.CacheReadInputTokens,
+							},
+							Done: true,
 						}
 						return
 					}
@@ -339,13 +358,10 @@ func (p *AnthropicProvider) CreateChatCompletionStream(ctx context.Context, req 
 		return nil, fmt.Errorf("Anthropic 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
 	}
 
-	bodyBytes, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return nil, fmt.Errorf("读取流式响应体失败: %w", err)
-	}
-
-	return p.transport.ParseStream(ctx, bodyBytes), nil
+	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。
+	// 不再使用 io.ReadAll 将整个响应读入内存，避免大响应导致 OOM。
+	// resp.Body 的生命周期由 ParseStream 内部的 goroutine 通过 defer body.Close() 管理。
+	return p.transport.ParseStream(ctx, resp.Body), nil
 }
 
 // ListModels 返回可用的模型列表。
@@ -404,10 +420,19 @@ type anthropicUsage struct {
 
 // anthropicSSEEvent Anthropic SSE 流事件。
 type anthropicSSEEvent struct {
-	Type  string                   `json:"type"`
-	Index int                      `json:"index,omitempty"`
-	Delta *anthropicStreamDelta    `json:"delta,omitempty"`
-	ContentBlock *anthropicContentBlock `json:"content_block,omitempty"`
+	Type         string                    `json:"type"`
+	Index        int                       `json:"index,omitempty"`
+	Delta        *anthropicStreamDelta     `json:"delta,omitempty"`
+	ContentBlock *anthropicContentBlock    `json:"content_block,omitempty"`
+	Message      *anthropicStreamMessage   `json:"message,omitempty"`  // message_start 中的 message
+	Usage        *anthropicUsage           `json:"usage,omitempty"`    // message_delta 中的 usage
+}
+
+// anthropicStreamMessage message_start 事件中的 message 对象（含 input token 用量）。
+type anthropicStreamMessage struct {
+	ID    string          `json:"id"`
+	Model string          `json:"model"`
+	Usage *anthropicUsage `json:"usage,omitempty"`
 }
 
 // anthropicStreamDelta Anthropic 流式增量。

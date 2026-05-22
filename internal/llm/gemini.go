@@ -55,9 +55,10 @@ func (t *GeminiTransport) BuildRequest(ctx context.Context, req *ChatRequest, ap
 		return nil, fmt.Errorf("序列化 Gemini 请求体失败: %w", err)
 	}
 
-	// Gemini URL: {baseURL}/models/{model}:generateContent?key={apiKey}
-	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s",
-		t.baseURL, req.Model, apiKey)
+	// Gemini URL: {baseURL}/models/{model}:generateContent
+	// API key 通过 x-goog-api-key header 传递，避免密钥暴露在 URL 中
+	url := fmt.Sprintf("%s/models/%s:generateContent",
+		t.baseURL, req.Model)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -67,6 +68,10 @@ func (t *GeminiTransport) BuildRequest(ctx context.Context, req *ChatRequest, ap
 	// 设置请求头
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
+		// 使用 header 传递 API key，避免密钥暴露在 URL 中
+		if apiKey != "" {
+			httpReq.Header.Set("x-goog-api-key", apiKey)
+		}
 
 	// 支持 GetBody 以便重试
 	httpReq.GetBody = func() (io.ReadCloser, error) {
@@ -142,20 +147,19 @@ func (t *GeminiTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 }
 
 // ParseStream 解析 Gemini 流式 SSE 响应，返回 StreamDelta 通道。
-func (t *GeminiTransport) ParseStream(ctx context.Context, body []byte) <-chan *StreamDelta {
+func (t *GeminiTransport) ParseStream(ctx context.Context, body io.ReadCloser) <-chan *StreamDelta {
 	ch := make(chan *StreamDelta, 256)
 
 	go func() {
 		defer close(ch)
-
-		reader := bytes.NewReader(body)
-		scanner := io.NopCloser(reader)
+		defer body.Close()
 
 		var contentBuilder strings.Builder
 		var reasoningBuilder strings.Builder
 		toolCallBuilders := make(map[string]*toolCallBuilder) // key = part_index + name
+		var finalUsage *TokenUsage // 流式响应的累积 token 用量
 
-		for event := range ParseSSEStream(ctx, scanner) {
+		for event := range ParseSSEStream(ctx, body) {
 			select {
 			case <-ctx.Done():
 				return
@@ -190,6 +194,11 @@ func (t *GeminiTransport) ParseStream(ctx context.Context, body []byte) <-chan *
 				continue
 			}
 
+			// 收集流式 usage（最后一个 chunk 包含完整的 usageMetadata）
+			if streamResp.UsageMetadata.TotalTokenCount > 0 {
+				finalUsage = convertGeminiUsage(&streamResp.UsageMetadata)
+			}
+
 			if len(streamResp.Candidates) == 0 {
 				continue
 			}
@@ -210,6 +219,7 @@ func (t *GeminiTransport) ParseStream(ctx context.Context, body []byte) <-chan *
 					Content:   contentBuilder.String(),
 					ToolCalls: toolCalls,
 					Reasoning: reasoningBuilder.String(),
+					Usage:     finalUsage,
 					Done:      true,
 				}
 				return
@@ -393,24 +403,25 @@ func (p *GeminiProvider) CreateChatCompletionStream(ctx context.Context, req *Ch
 		return nil, fmt.Errorf("Gemini 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
 	}
 
-	bodyBytes, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return nil, fmt.Errorf("读取流式响应体失败: %w", err)
-	}
-
-	return p.transport.ParseStream(ctx, bodyBytes), nil
+	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。
+	// 不再使用 io.ReadAll 将整个响应读入内存，避免大响应导致 OOM。
+	// resp.Body 的生命周期由 ParseStream 内部的 goroutine 通过 defer body.Close() 管理。
+	return p.transport.ParseStream(ctx, resp.Body), nil
 }
 
 // ListModels 通过 Gemini API 获取可用模型列表。
-// 调用 GET {baseURL}/models?key={apiKey} 获取真实模型信息。
+// 调用 GET {baseURL}/models 获取真实模型信息。
+// API key 通过 x-goog-api-key header 传递。
 func (p *GeminiProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
-	url := p.transport.baseURL + "/models?key=" + p.apiKey
+	url := p.transport.baseURL + "/models"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("创建模型列表请求失败: %w", err)
 	}
 	httpReq.Header.Set("Accept", "application/json")
+	if p.apiKey != "" {
+		httpReq.Header.Set("x-goog-api-key", p.apiKey)
+	}
 
 	resp, err := p.transport.httpClient.Do(httpReq)
 	if err != nil {

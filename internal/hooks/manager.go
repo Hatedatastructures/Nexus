@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
@@ -215,11 +216,29 @@ func (m *HookManager) executeChain(ctx context.Context, eventType string, toolNa
 }
 
 // promptAllow 提示用户是否允许 hook。
-// 当前实现: acceptAll 模式返回 true，否则返回 false。
-// 未来可接入 TUI 交互式确认。
+// 如果 stdin 是终端 (非管道)，交互式询问用户。
+// 否则默认拒绝。
 func (m *HookManager) promptAllow(command string) bool {
-	// TODO: 接入 TUI 交互式确认
-	return false
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+
+	// 检查 stdin 是否为终端 (非管道/重定向)
+	if fi.Mode()&os.ModeCharDevice == 0 {
+		slog.Warn("Hook 需要确认但 stdin 非终端，默认拒绝", "command", command)
+		return false
+	}
+
+	fmt.Fprintf(os.Stderr, "\n⚠ Hook 确认: 是否允许执行 %q？[y/N] ", command)
+
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return false
+	}
+
+	answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+	return answer == "y" || answer == "yes"
 }
 
 // ───────────────────────────── 便捷方法 ─────────────────────────────

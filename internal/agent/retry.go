@@ -23,7 +23,13 @@ func retryWithBackoff(ctx context.Context, maxRetries int, fn func() error) erro
 
 		if i < maxRetries-1 {
 			backoff := time.Duration(1<<uint(i)) * time.Second
-			time.Sleep(backoff)
+			// 使用 select 等待退避时间，同时监听 context 取消信号。
+			// 原实现使用 time.Sleep，无法在 context 取消时及时退出。
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
 		}
 	}
 	return lastErr

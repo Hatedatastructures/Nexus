@@ -1,5 +1,9 @@
 // Package agent 工具调用护栏的单元测试。
 // 覆盖精确重复检测、工具固着检测、重置行为和不同参数区分。
+//
+// 注意: Check 方法现在同时更新状态（连续重复计数、历史记录等），
+// 因此测试中只需调用 Check 即可完成状态更新，不再需要单独调用 Record。
+// Record 方法保留用于向后兼容，但在新代码中不应与 Check 配对使用。
 package agent
 
 import (
@@ -9,20 +13,19 @@ import (
 // ───────────────────────────── 精确重复检测测试 ─────────────────────────────
 
 // TestGuardrailsExactDuplicate 验证连续 3 次相同调用应被阻止。
+// Check 方法同时检查和更新状态，因此直接调用 Check 即可。
 func TestGuardrailsExactDuplicate(t *testing.T) {
 	g := NewToolCallGuardrails()
-	// 降低阈值便于测试
 	g.WithMaxConsecutiveDuplicates(3)
 
 	args := map[string]any{"path": "/tmp/file.txt"}
 
-	// 前 2 次调用应被允许（Record 后连续计数为 1 和 2）
+	// 前 2 次调用应被允许（Check 内部递增 consecutiveDuplicates 到 1 和 2）
 	for i := 0; i < 2; i++ {
 		allowed, reason := g.Check("write_file", args)
 		if !allowed {
 			t.Fatalf("第 %d 次调用应被允许, 但被拒绝: %s", i+1, reason)
 		}
-		g.Record("write_file", args)
 	}
 
 	// 第 3 次调用 — 连续计数达到阈值，应被阻止
@@ -50,7 +53,6 @@ func TestGuardrailsToolFixation(t *testing.T) {
 		if !allowed {
 			t.Fatalf("第 %d 次调用应被允许, 但被拒绝: %s", i+1, reason)
 		}
-		g.Record("web_search", args)
 	}
 
 	// 第 11 次调用 — 窗口内同工具调用次数达到阈值，应被阻止
@@ -73,10 +75,11 @@ func TestGuardrailsReset(t *testing.T) {
 
 	args := map[string]any{"path": "/tmp/file.txt"}
 
-	// 先触发精确重复阻止
+	// 先触发精确重复阻止（Check 同时更新状态）
 	for i := 0; i < 3; i++ {
-		g.Record("write_file", args)
+		g.Check("write_file", args)
 	}
+	// 第 4 次应被阻止
 	allowed, _ := g.Check("write_file", args)
 	if allowed {
 		t.Fatal("重置前第 4 次调用应被阻止")
@@ -102,7 +105,7 @@ func TestGuardrailsDifferentArgs(t *testing.T) {
 	// 用相同工具但不同参数调用
 	for i := 0; i < 5; i++ {
 		args := map[string]any{"path": "/tmp/file_" + itoa(i) + ".txt"}
-		g.Record("write_file", args)
+		g.Check("write_file", args)
 	}
 
 	// 不同参数的调用不应触发精确重复检测
@@ -127,7 +130,7 @@ func TestGuardrailsConfiguration(t *testing.T) {
 	// 验证默认值未被修改: 连续 3 次应被阻止
 	args := map[string]any{"key": "value"}
 	for i := 0; i < 3; i++ {
-		g.Record("tool", args)
+		g.Check("tool", args)
 	}
 	allowed, _ := g.Check("tool", args)
 	if allowed {
@@ -141,9 +144,7 @@ func TestGuardrailsConfiguration(t *testing.T) {
 func TestGuardrailsNilArgs(t *testing.T) {
 	g := NewToolCallGuardrails()
 
-	// nil 参数应被序列化为 "{}"
-	g.Record("tool", nil)
-
+	// nil 参数应被序列化为 "{}"，首次调用应被允许
 	allowed, _ := g.Check("tool", nil)
 	if !allowed {
 		t.Error("nil 参数的首次调用应被允许")
@@ -161,7 +162,7 @@ func TestGuardrailsWindowSize(t *testing.T) {
 	// 调用不同工具填满窗口
 	for i := 0; i < 5; i++ {
 		args := map[string]any{"idx": itoa(i)}
-		g.Record("other_tool", args)
+		g.Check("other_tool", args)
 	}
 
 	// 在窗口中调用目标工具 3 次
@@ -171,7 +172,6 @@ func TestGuardrailsWindowSize(t *testing.T) {
 		if !allowed {
 			t.Fatalf("第 %d 次调用应被允许", i+1)
 		}
-		g.Record("target_tool", args)
 	}
 
 	// 窗口已滑出旧记录，目标工具在窗口内出现 3 次

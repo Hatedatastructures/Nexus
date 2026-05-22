@@ -121,7 +121,11 @@ func (m *FileSyncManager) SyncBack(downloadFn func(remotePath string) (io.ReadCl
 		localPath := filepath.Join(m.localRoot, header.Name)
 
 		// 确保路径在 localRoot 内
-		absLocal, _ := filepath.Abs(localPath)
+		absLocal, err := filepath.Abs(localPath)
+			if err != nil {
+				slog.Warn("无法解析绝对路径", "name", header.Name, "err", err)
+				continue
+			}
 		absRoot, _ := filepath.Abs(m.localRoot)
 		if !strings.HasPrefix(absLocal, absRoot) {
 			slog.Warn("跳过超出根目录的文件", "name", header.Name)

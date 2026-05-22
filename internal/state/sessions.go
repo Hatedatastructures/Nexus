@@ -24,7 +24,7 @@ const (
 	checkpointEvery = 50                     // 每 N 次写入尝试一次 WAL checkpoint
 )
 
-var writeCount int // 写操作计数器，用于定期触发 WAL checkpoint
+	// writeCount 已移入 Store 结构体，参见 db.go
 
 // executeWrite 带重试的写事务执行器。
 //
@@ -73,8 +73,9 @@ func (s *Store) executeWrite(ctx context.Context, fn func(*sql.DB) error) error 
 		}
 
 		// 成功 —— 定期执行尽力而为的 WAL checkpoint
-		writeCount++
-		if writeCount%checkpointEvery == 0 {
+		// writeCount 已移入 Store 结构体，在 s.mu 保护下递增，无需额外同步
+		s.writeCount++
+		if s.writeCount%checkpointEvery == 0 {
 			s.tryCheckpoint(context.Background())
 		}
 

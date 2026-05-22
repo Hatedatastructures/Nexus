@@ -62,6 +62,9 @@ type EmailAdapter struct {
 	// Thread 上下文（用于回复）
 	threadContext map[string]*emailThreadContext
 	threadMu      sync.Mutex
+
+	closeOnce sync.Once
+	msgCh     chan *MessageEvent
 }
 
 // emailThreadContext 线程上下文。
@@ -114,13 +117,13 @@ func (a *EmailAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error
 	a.smtpAuth = smtp.PlainAuth("", a.emailAddress, a.emailPassword, strings.Split(a.smtpHost, ":")[0])
 
 	// 创建消息通道
-	msgCh := make(chan *MessageEvent, 100)
+	a.msgCh = make(chan *MessageEvent, 100)
 
 	// 启动轮询循环
-	go a.pollLoop(ctx, msgCh)
+	go a.pollLoop(ctx, a.msgCh)
 
 	slog.Info("[Email] 已连接", "address", a.emailAddress)
-	return msgCh, nil
+	return a.msgCh, nil
 }
 
 // Disconnect 断开连接。
@@ -135,6 +138,7 @@ func (a *EmailAdapter) Disconnect(ctx context.Context) error {
 		a.imapConn = nil
 	}
 
+	a.closeOnce.Do(func() { close(a.msgCh) })
 	slog.Info("[Email] 已断开")
 	return nil
 }
@@ -154,7 +158,7 @@ func (a *EmailAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) {
 			a.mu.Unlock()
 
 			if !running {
-				close(msgCh)
+				// msgCh 由 Disconnect 通过 closeOnce 关闭
 				return
 			}
 
@@ -173,7 +177,6 @@ func (a *EmailAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) {
 				}
 			}
 		case <-ctx.Done():
-			close(msgCh)
 			return
 		}
 	}

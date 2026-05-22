@@ -204,12 +204,12 @@ func (a *AIAgent) recoverUnhealthyProviders(ctx context.Context) {
 
 	entries := a.router.GetEntries()
 	for _, entry := range entries {
-		if entry.Healthy {
+		if entry.Healthy.Load() {
 			continue
 		}
 
 		// 距离上次错误超过 5 分钟才尝试恢复
-		if time.Since(entry.LastErr) < 5*time.Minute {
+		if time.Since(entry.LastErr.Load().(time.Time)) < 5*time.Minute {
 			continue
 		}
 

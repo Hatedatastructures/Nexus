@@ -52,10 +52,21 @@ func ChunkMessage(text string, maxLen int) []string {
 			contentLen = maxLen
 		}
 
-		// 计算可用 rune 数 (粗略: 每 rune 平均 ~1.2 个 UTF-16 unit)
-		availRunes := contentLen
-		if availRunes > len(runes)-pos {
-			availRunes = len(runes) - pos
+		// 逐 rune 累加 UTF-16 长度，找到不超出 contentLen 的最大 rune 数。
+		// 原实现直接用 contentLen 作为 rune 数量，混淆了 UTF-16 code units
+		// 与 rune 的概念，包含 emoji 等多码元字符时会超出限制。
+		usedUTF16 := 0
+		availRunes := 0
+		for i := pos; i < len(runes); i++ {
+			runeUTF16Len := len(utf16.Encode([]rune{runes[i]}))
+			if usedUTF16+runeUTF16Len > contentLen {
+				break
+			}
+			usedUTF16 += runeUTF16Len
+			availRunes++
+		}
+		if availRunes == 0 {
+			availRunes = 1 // 至少取一个 rune，避免无限循环
 		}
 
 		// 按 UTF-16 边界截取

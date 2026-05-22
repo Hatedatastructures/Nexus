@@ -7,32 +7,26 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
-	"sync"
+	"sync/atomic"
 )
 
 // ───────────────────────────── 配置 ─────────────────────────────
 
-var (
-	redactOnce    sync.Once
-	redactEnabled bool
-)
+// redactEnabled 使用原子操作保证并发安全。
+var redactEnabled atomic.Bool
 
 func init() {
-	// 默认启用脱敏
-	redactEnabled = true
+	redactEnabled.Store(true)
 }
 
-// SetRedactEnabled 设置脱敏开关（应在启动时调用一次）。
+// SetRedactEnabled 设置脱敏开关。
 func SetRedactEnabled(enabled bool) {
-	redactOnce.Do(func() {
-		// 首次设置时的初始化已完成
-	})
-	redactEnabled = enabled
+	redactEnabled.Store(enabled)
 }
 
 // IsRedactEnabled 返回脱敏是否启用。
 func IsRedactEnabled() bool {
-	return redactEnabled
+	return redactEnabled.Load()
 }
 
 // ───────────────────────────── 模式定义 ─────────────────────────────
@@ -96,7 +90,7 @@ const (
 // RedactSensitiveText 对文本执行敏感信息遮蔽。
 // 按顺序应用所有模式，保留部分前缀和后缀字符以便调试。
 func RedactSensitiveText(text string) string {
-	if !redactEnabled || text == "" {
+	if !redactEnabled.Load() || text == "" {
 		return text
 	}
 

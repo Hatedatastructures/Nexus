@@ -126,21 +126,21 @@ func (t *OpenAITransport) ParseResponse(body []byte) (*ChatResponse, error) {
 	return response, nil
 }
 
-// ParseStream 解析流式 Chat Completions 响应体，返回 StreamDelta 通道。
-func (t *OpenAITransport) ParseStream(ctx context.Context, body []byte) <-chan *StreamDelta {
+// ParseStream 解析 OpenAI 流式 Chat Completions 响应体，返回 StreamDelta 通道。
+// body 由调用方传入的 HTTP 响应体 ReadCloser，本方法负责在 goroutine 结束时关闭。
+func (t *OpenAITransport) ParseStream(ctx context.Context, body io.ReadCloser) <-chan *StreamDelta {
 	ch := make(chan *StreamDelta, 256)
 
 	go func() {
 		defer close(ch)
-
-		reader := bytes.NewReader(body)
-		scanner := io.NopCloser(reader)
+		defer body.Close() // 确保响应体被关闭，防止资源泄漏
 
 		var contentBuilder strings.Builder
 		var toolCalls []ToolCall
 		toolCallBuilders := make(map[int]*toolCallBuilder)
+		var finalUsage *TokenUsage // 流式响应的累积 token 用量
 
-		for event := range ParseSSEStream(ctx, scanner) {
+		for event := range ParseSSEStream(ctx, body) {
 			// 检查 context 取消
 			select {
 			case <-ctx.Done():
@@ -153,6 +153,7 @@ func (t *OpenAITransport) ParseStream(ctx context.Context, body []byte) <-chan *
 				ch <- &StreamDelta{
 					Content:   contentBuilder.String(),
 					ToolCalls: toolCalls,
+					Usage:     finalUsage,
 					Done:      true,
 				}
 				return
@@ -162,6 +163,11 @@ func (t *OpenAITransport) ParseStream(ctx context.Context, body []byte) <-chan *
 			if err := json.Unmarshal([]byte(event.Data), &chunk); err != nil {
 				slog.Debug("解析 SSE 数据失败", "data", event.Data[:min(len(event.Data), 200)], "error", err)
 				continue
+			}
+
+			// 收集流式 usage（最后一个 chunk 可能包含 usage 字段）
+			if chunk.Usage != nil {
+				finalUsage = convertOpenAIUsage(chunk.Usage)
 			}
 
 			if len(chunk.Choices) == 0 {
@@ -333,14 +339,10 @@ func (p *OpenAIProvider) CreateChatCompletionStream(ctx context.Context, req *Ch
 		return nil, fmt.Errorf("OpenAI 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
 	}
 
-	// 读取响应体并通过 ParseStream 处理
-	bodyBytes, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return nil, fmt.Errorf("读取流式响应体失败: %w", err)
-	}
-
-	return p.transport.ParseStream(ctx, bodyBytes), nil
+	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。
+	// 不再使用 io.ReadAll 将整个响应读入内存，避免大响应导致 OOM。
+	// resp.Body 的生命周期由 ParseStream 内部的 goroutine 通过 defer body.Close() 管理。
+	return p.transport.ParseStream(ctx, resp.Body), nil
 }
 
 // ListModels 返回可用的模型列表。
@@ -445,6 +447,7 @@ type openAIStreamChunk struct {
 	Created int64                `json:"created"`
 	Model   string               `json:"model"`
 	Choices []openAIStreamChoice `json:"choices"`
+	Usage   *openAIUsage         `json:"usage,omitempty"` // 流式最后一个 chunk 可能包含 usage
 }
 
 // openAIStreamChoice 流式响应选项。
@@ -501,12 +504,18 @@ type toolCallBuilder struct {
 
 // openAIRequestBody OpenAI Chat Completions 请求体。
 type openAIRequestBody struct {
-	Model       string          `json:"model"`
-	Messages    []openAIRequestMessage `json:"messages"`
-	Tools       []openAIToolDef `json:"tools,omitempty"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	Temperature *float64        `json:"temperature,omitempty"`
-	Stream      bool            `json:"stream,omitempty"`
+	Model        string          `json:"model"`
+	Messages     []openAIRequestMessage `json:"messages"`
+	Tools        []openAIToolDef `json:"tools,omitempty"`
+	MaxTokens    int             `json:"max_tokens,omitempty"`
+	Temperature  *float64        `json:"temperature,omitempty"`
+	Stream       bool            `json:"stream,omitempty"`
+	StreamOptions *openAIStreamOptions `json:"stream_options,omitempty"`
+}
+
+// openAIStreamOptions 流式响应选项，用于请求 API 在流中返回 usage 信息。
+type openAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 // openAIRequestMessage OpenAI 请求消息。
@@ -594,6 +603,10 @@ func buildOpenAIRequestBody(req *ChatRequest) *openAIRequestBody {
 	// 流式标记（从 Metadata 读取）
 	if stream, ok := req.Metadata["stream"].(bool); ok {
 		body.Stream = stream
+		// 启用流式 usage 返回，使 API 在最后一个 chunk 中包含 token 用量
+		if stream {
+			body.StreamOptions = &openAIStreamOptions{IncludeUsage: true}
+		}
 	}
 
 	return body

@@ -212,6 +212,9 @@ func (a *QQBotAdapter) Disconnect(ctx context.Context) error {
 
 // getAccessToken 获取 access token。
 func (a *QQBotAdapter) getAccessToken(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	body := map[string]any{
 		"app_id":     a.appID,
 		"app_secret": a.appSecret,

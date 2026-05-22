@@ -8,9 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"nexus-agent/internal/llm"
@@ -267,12 +267,79 @@ func (p *SupermemoryProvider) Initialize(ctx context.Context, sessionID string) 
 func (p *SupermemoryProvider) SystemPromptBlock() string { return "" }
 
 func (p *SupermemoryProvider) SyncTurn(ctx context.Context, userContent, assistantContent string) error {
-	slog.Debug("supermemory: 同步对话轮次")
+	// Supermemory 通过添加记忆 API 同步对话轮次
+	content := fmt.Sprintf("User: %s\nAssistant: %s", userContent, assistantContent)
+	body, _ := json.Marshal(map[string]any{
+		"content":  content,
+		"metadata": map[string]string{"user_id": p.userID},
+	})
+
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		fmt.Sprintf("%s/memories", p.baseURL),
+		bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("Supermemory API 返回 HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+	io.Copy(io.Discard, resp.Body)
 	return nil
 }
 
 func (p *SupermemoryProvider) Prefetch(ctx context.Context, query string) (string, error) {
-	return "", nil
+	// Supermemory 通过搜索记忆 API 检索相关记忆
+	body, _ := json.Marshal(map[string]any{
+		"q":       query,
+		"user_id": p.userID,
+	})
+
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		fmt.Sprintf("%s/search", p.baseURL),
+		bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return "", fmt.Errorf("Supermemory API 返回 HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		Data []struct {
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", nil
+	}
+
+	var memories []string
+	for _, m := range result.Data {
+		if m.Content != "" {
+			memories = append(memories, m.Content)
+		}
+	}
+	return joinMemories(memories), nil
 }
 
 func (p *SupermemoryProvider) GetToolSchemas() []llm.ToolSchema { return nil }
@@ -327,7 +394,49 @@ func (p *HolographicProvider) SyncTurn(ctx context.Context, userContent, assista
 }
 
 func (p *HolographicProvider) Prefetch(ctx context.Context, query string) (string, error) {
-	return "", nil
+	// 读取 JSONL 文件，按关键词匹配检索相关记忆
+	path := fmt.Sprintf("%s/%s.jsonl", p.baseDir, p.userID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+
+	queryLower := strings.ToLower(query)
+	var matches []string
+	lines := strings.Split(string(data), "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		var entry map[string]string
+		if json.Unmarshal([]byte(line), &entry) != nil {
+			continue
+		}
+
+		// 简单关键词匹配: 检查查询词是否出现在用户或助手内容中
+		for _, v := range entry {
+			if strings.Contains(strings.ToLower(v), queryLower) {
+				matches = append(matches, fmt.Sprintf("- User: %s\n  Assistant: %s", entry["user"], entry["assistant"]))
+				break
+			}
+		}
+	}
+
+	if len(matches) == 0 {
+		return "", nil
+	}
+
+	// 限制返回数量
+	if len(matches) > 10 {
+		matches = matches[:10]
+	}
+	return strings.Join(matches, "\n"), nil
 }
 
 func (p *HolographicProvider) GetToolSchemas() []llm.ToolSchema { return nil }

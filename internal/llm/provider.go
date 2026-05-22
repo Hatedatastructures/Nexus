@@ -1,7 +1,10 @@
 // Package llm 提供 LLM 提供者接口定义。
 package llm
 
-import "context"
+import (
+	"context"
+	"io"
+)
 
 // ───────────────────────────── 提供者接口 ─────────────────────────────
 
@@ -40,7 +43,8 @@ type Transport interface {
 	ParseResponse(body []byte) (*ChatResponse, error)
 
 	// ParseStream 解析流式 HTTP 响应体。
-	// 从 body 读取 SSE 事件，通过 channel 发送 StreamDelta。
-	// 当流结束时，关闭 channel。
-	ParseStream(ctx context.Context, body []byte) <-chan *StreamDelta
+	// body 为 HTTP 响应的 ReadCloser，由实现方在 goroutine 中通过 defer 关闭。
+	// 从 body 逐行读取 SSE 事件，通过 channel 实时发送 StreamDelta，
+	// 当流结束时关闭 channel。
+	ParseStream(ctx context.Context, body io.ReadCloser) <-chan *StreamDelta
 }

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode"
 
 	"nexus-agent/internal/llm"
 )
@@ -181,32 +182,46 @@ func (p *BuiltinProvider) Prefetch(ctx context.Context, query string) (string, e
 // tokenizeQuery 将查询文本按空格和标点符号分词。
 // 返回小写化的词列表，过滤掉空词和过短的词 (长度 < 2)。
 func tokenizeQuery(query string) []string {
-	// 替换标点为空格
 	var buf strings.Builder
 	for _, r := range query {
-		if r < 'a' || r > 'z' {
-			// 先转小写
-			lower := r
-			if lower >= 'A' && lower <= 'Z' {
-				lower = lower + ('a' - 'A')
-			}
-			// 非标点、非空格字符保留
-			if (lower >= 'a' && lower <= 'z') || (lower >= '0' && lower <= '9') {
-				buf.WriteRune(lower)
-			} else {
-				buf.WriteRune(' ')
-			}
-		} else {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			buf.WriteRune(unicode.ToLower(r))
+		} else if r >= 0x4e00 && r <= 0x9fff { // CJK 统一汉字
+			buf.WriteRune(' ')
 			buf.WriteRune(r)
+			buf.WriteRune(' ')
+		} else if r >= 0x3040 && r <= 0x30ff { // 日文平假名/片假名
+			buf.WriteRune(' ')
+			buf.WriteRune(r)
+			buf.WriteRune(' ')
+		} else {
+			buf.WriteRune(' ')
 		}
 	}
 
 	words := strings.Fields(buf.String())
-	// 过滤掉过短的词
 	var tokens []string
 	for _, w := range words {
-		if len(w) >= 2 {
-			tokens = append(tokens, w)
+		if len(w) >= 2 || len(w) == 1 {
+			// CJK 单字符也保留（一个汉字即有意义）
+			for _, r := range w {
+				if r >= 0x4e00 && r <= 0x9fff || r >= 0x3040 && r <= 0x30ff {
+					tokens = append(tokens, w)
+					break
+				}
+			}
+			if len(w) >= 2 {
+				already := false
+				for _, t := range tokens {
+					if t == w {
+						already = true
+						break
+					}
+				}
+				if !already {
+					tokens = append(tokens, w)
+				}
+			}
 		}
 	}
 	return tokens

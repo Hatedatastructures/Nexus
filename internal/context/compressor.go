@@ -410,16 +410,9 @@ func (c *Compressor) pickSummaryRole(messages []llm.Message, compressStart, comp
 	return llm.RoleAssistant
 }
 
-// estimateTokensRough 粗略估算消息列表的 token 数。
+// 使用 llm 包的公共 token 估算函数，避免与 conversation.go 中的实现重复
 func estimateTokensRough(messages []llm.Message) int {
-	total := 0
-	for _, msg := range messages {
-		total += len(msg.Content)/charsPerTokenEstimate + 10
-		for _, tc := range msg.ToolCalls {
-			total += len(tc.Arguments) / charsPerTokenEstimate
-		}
-	}
-	return total
+	return llm.EstimateTokensRough(messages)
 }
 
 // containsText 检查字符串 s 中是否包含子串 substr。

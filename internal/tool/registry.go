@@ -47,7 +47,7 @@ func (r *Registry) Register(tool Tool) {
 	name := tool.Name()
 	toolset := tool.Toolset()
 
-	// 重复注册警告
+	// 重复注册警告 (保留原有行为: 后注册覆盖先注册)
 	if _, exists := r.tools[name]; exists {
 		slog.Warn("工具名冲突，覆盖注册", "name", name)
 	}

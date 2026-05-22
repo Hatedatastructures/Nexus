@@ -40,22 +40,31 @@ func NewScheduler(manager *JobManager, executor *Executor) *Scheduler {
 	}
 }
 
+// tickFn 定义单次调度检查的函数签名
+type tickFn func(ctx context.Context) error
+
 // Run 启动调度循环。此方法会阻塞直到 ctx 被取消。
-//
-// 在每个 tick 中:
-//  1. 获取文件锁 (防跨进程并发)
-//  2. 获取到期作业列表
-//  3. 对所有重复作业预计算下次执行时间 (at-most-once 语义)
-//  4. 并发执行到期作业
-//  5. 释放锁，等待下一个 interval
 func (s *Scheduler) Run(ctx context.Context) error {
+	return s.run(ctx, s.tick, "基础")
+}
+
+// RunWithAdapters 以平台适配器启动调度器。
+// adapters 用于作业结果投递到消息平台。
+func (s *Scheduler) RunWithAdapters(ctx context.Context, adapters map[platforms.Platform]platforms.PlatformAdapter) error {
+	return s.run(ctx, func(ctx context.Context) error {
+		return s.tickWithAdapters(ctx, adapters)
+	}, "含适配器")
+}
+
+// run 是调度循环的核心实现，由 Run 和 RunWithAdapters 共享。
+// 含适配器的逻辑差异通过 fn 参数抽象。
+func (s *Scheduler) run(ctx context.Context, fn tickFn, logMsg string) error {
 	s.mu.Lock()
 	if s.running {
 		s.mu.Unlock()
 		return nil // 已经在运行
 	}
 	s.running = true
-
 	ctx, s.cancel = context.WithCancel(ctx)
 	s.mu.Unlock()
 
@@ -70,7 +79,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		return err
 	}
 
-	slog.Info("Cron: 调度器启动", "interval", s.interval)
+	slog.Info("Cron: 调度器启动", "mode", logMsg, "interval", s.interval)
 
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
@@ -78,47 +87,11 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info("Cron: 调度器停止")
+			slog.Info("Cron: 调度器停止", "mode", logMsg)
 			return ctx.Err()
 		case <-ticker.C:
-			if err := s.tick(ctx); err != nil {
-				slog.Error("Cron: tick 失败", "error", err)
-			}
-		}
-	}
-}
-
-// RunWithAdapters 以平台适配器启动调度器 (用于网关集成)。
-// adapters 用于作业结果投递到消息平台。
-func (s *Scheduler) RunWithAdapters(ctx context.Context, adapters map[platforms.Platform]platforms.PlatformAdapter) error {
-	s.mu.Lock()
-	if s.running {
-		s.mu.Unlock()
-		return nil
-	}
-	s.running = true
-
-	ctx, s.cancel = context.WithCancel(ctx)
-	s.mu.Unlock()
-
-	defer func() {
-		s.mu.Lock()
-		s.running = false
-		s.mu.Unlock()
-	}()
-
-	slog.Info("Cron: 调度器启动 (含适配器)", "interval", s.interval)
-
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if err := s.tickWithAdapters(ctx, adapters); err != nil {
-				slog.Error("Cron: tick 失败", "error", err)
+			if err := fn(ctx); err != nil {
+				slog.Error("Cron: tick 失败", "mode", logMsg, "error", err)
 			}
 		}
 	}

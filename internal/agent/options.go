@@ -5,7 +5,6 @@ package agent
 
 import (
 	"fmt"
-	"net/http"
 	"time"
 
 	"nexus-agent/internal/approval"
@@ -348,7 +347,10 @@ func buildProviderFromConfig(name string, pc config.ProviderConfig) (llm.Provide
 		return nil, fmt.Errorf("提供者 %s 的 API Key 未设置", name)
 	}
 
-	httpClient := &http.Client{Timeout: 60 * time.Second}
+	// 使用 llm.NewHTTPClient 创建 HTTP 客户端，支持代理配置和连接池。
+	// 原实现硬编码 http.Client，忽略了用户配置的 HTTP_PROXY 等代理环境变量。
+	httpClient := llm.NewHTTPClient(nil)
+	httpClient.Timeout = 60 * time.Second
 
 	var p llm.Provider
 	switch pc.APIMode {

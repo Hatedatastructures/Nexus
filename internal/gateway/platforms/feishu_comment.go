@@ -3,6 +3,7 @@
 package platforms
 
 import (
+	"sync"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -26,6 +27,8 @@ const (
 
 // FeishuCommentAdapter 飞书文档评论适配器。
 type FeishuCommentAdapter struct {
+ttokenMu       sync.Mutex           // token 访问锁
+	tokenMu     sync.Mutex         // token 访问锁
 	appID          string
 	appSecret      string
 	messageHandler func(*MessageEvent)
@@ -199,6 +202,8 @@ func (a *FeishuCommentAdapter) HandleEvent(w http.ResponseWriter, r *http.Reques
 // ───────────────────────────── 飞书 API ─────────────────────────────
 
 func (a *FeishuCommentAdapter) refreshAccessToken(ctx context.Context) error {
+	a.tokenMu.Lock()
+	defer a.tokenMu.Unlock()
 	apiURL := "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 
 	payload := map[string]string{
@@ -242,8 +247,9 @@ func (a *FeishuCommentAdapter) refreshAccessToken(ctx context.Context) error {
 }
 
 func (a *FeishuCommentAdapter) replyComment(ctx context.Context, fileToken, commentID, content string) error {
-	// 检查 token 是否过期
+	a.tokenMu.Lock()
 	if time.Now().After(a.tokenExpiresAt) {
+		a.tokenMu.Unlock()
 		if err := a.refreshAccessToken(ctx); err != nil {
 			return err
 		}

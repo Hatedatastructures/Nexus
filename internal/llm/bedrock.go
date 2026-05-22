@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"strings"
 	"time"
@@ -81,10 +82,10 @@ func (t *BedrockTransport) BuildRequest(ctx context.Context, req *ChatRequest, a
 	var url string
 	if stream {
 		url = fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com/model/%s/converse-stream",
-			t.region, modelID)
+			t.region, neturl.PathEscape(modelID))
 	} else {
 		url = fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com/model/%s/converse",
-			t.region, modelID)
+			t.region, neturl.PathEscape(modelID))
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
@@ -175,20 +176,19 @@ func (t *BedrockTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 }
 
 // ParseStream 解析 Bedrock Converse Stream 响应，返回 StreamDelta 通道。
-func (t *BedrockTransport) ParseStream(ctx context.Context, body []byte) <-chan *StreamDelta {
+func (t *BedrockTransport) ParseStream(ctx context.Context, body io.ReadCloser) <-chan *StreamDelta {
 	ch := make(chan *StreamDelta, 256)
 
 	go func() {
 		defer close(ch)
-
-		reader := bytes.NewReader(body)
-		scanner := io.NopCloser(reader)
+		defer body.Close()
 
 		var contentBuilder strings.Builder
 		var reasoningBuilder strings.Builder
 		toolCallBuilders := make(map[int]*toolCallBuilder)
+		var finalUsage *TokenUsage // 流式响应的累积 token 用量
 
-		for event := range ParseSSEStream(ctx, scanner) {
+		for event := range ParseSSEStream(ctx, body) {
 			select {
 			case <-ctx.Done():
 				return
@@ -210,6 +210,7 @@ func (t *BedrockTransport) ParseStream(ctx context.Context, body []byte) <-chan 
 						Content:   contentBuilder.String(),
 						ToolCalls: toolCalls,
 						Reasoning: reasoningBuilder.String(),
+						Usage:     finalUsage,
 						Done:      true,
 					}
 				}
@@ -247,6 +248,12 @@ func (t *BedrockTransport) ParseStream(ctx context.Context, body []byte) <-chan 
 							builder.Arguments.WriteString(streamEvent.Delta.PartialJSON)
 						}
 					}
+				}
+
+			case "metadata":
+				// Bedrock 流式响应的 metadata 事件包含 token 用量
+				if streamEvent.Usage != nil {
+					finalUsage = convertBedrockUsage(streamEvent.Usage)
 				}
 
 			case "message_delta":
@@ -394,13 +401,10 @@ func (p *BedrockProvider) CreateChatCompletionStream(ctx context.Context, req *C
 		return nil, fmt.Errorf("Bedrock 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
 	}
 
-	bodyBytes, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return nil, fmt.Errorf("读取流式响应体失败: %w", err)
-	}
-
-	return p.transport.ParseStream(ctx, bodyBytes), nil
+	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。
+	// 不再使用 io.ReadAll 将整个响应读入内存，避免大响应导致 OOM。
+	// resp.Body 的生命周期由 ParseStream 内部的 goroutine 通过 defer body.Close() 管理。
+	return p.transport.ParseStream(ctx, resp.Body), nil
 }
 
 // ListModels 返回 Bedrock 基础模型列表。
@@ -582,6 +586,7 @@ type bedrockStreamEvent struct {
 	Index        int                       `json:"index,omitempty"`
 	ContentBlock *bedrockStreamContentBlock `json:"contentBlock,omitempty"`
 	Delta        *bedrockStreamDelta        `json:"delta,omitempty"`
+	Usage        *bedrockUsage             `json:"usage,omitempty"` // metadata 事件中的 token 用量
 }
 
 // bedrockStreamContentBlock Bedrock 流式内容块。

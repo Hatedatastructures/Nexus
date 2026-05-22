@@ -5,6 +5,7 @@ package cron
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -17,6 +18,13 @@ import (
 	"time"
 
 	"nexus-agent/internal/state"
+)
+
+// 预编译正则表达式，避免每次函数调用时重复编译带来的性能开销
+var (
+	cronFieldRe = regexp.MustCompile(`^[\d\*\-,/]+$`)
+	isoDateRe   = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}`)
+	durationRe  = regexp.MustCompile(`^(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$`)
 )
 
 // ───────────────────────────── 常量 ─────────────────────────────
@@ -483,7 +491,7 @@ func parseSchedule(s string) (kind string, minutes int, cronExpr string, err err
 	if len(parts) >= 5 {
 		allCronChars := true
 		for _, p := range parts[:5] {
-			if !regexp.MustCompile(`^[\d\*\-,/]+$`).MatchString(p) {
+			if !cronFieldRe.MatchString(p) {
 				allCronChars = false
 				break
 			}
@@ -494,7 +502,7 @@ func parseSchedule(s string) (kind string, minutes int, cronExpr string, err err
 	}
 
 	// ISO 时间戳
-	if strings.Contains(s, "T") || regexp.MustCompile(`^\d{4}-\d{2}-\d{2}`).MatchString(s) {
+	if strings.Contains(s, "T") || isoDateRe.MatchString(s) {
 		// 解析为一次性作业 — 计算距离现在的分钟数
 		t, err := time.Parse(time.RFC3339, s)
 		if err != nil {
@@ -530,8 +538,7 @@ func parseSchedule(s string) (kind string, minutes int, cronExpr string, err err
 func parseDuration(s string) (int, error) {
 	s = strings.TrimSpace(s)
 	// 匹配模式: 数字 + 可选空格 + 单位
-	re := regexp.MustCompile(`^(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$`)
-	matches := re.FindStringSubmatch(strings.ToLower(s))
+	matches := durationRe.FindStringSubmatch(strings.ToLower(s))
 	if matches == nil {
 		return 0, fmt.Errorf("无效的持续时间: '%s'。格式: '30m', '2h', '1d'", s)
 	}
@@ -676,12 +683,17 @@ func advanceToNext(job *Job, now time.Time) *Job {
 	return &updated
 }
 
-// generateJobID 生成 12 字符的十六进制作业 ID。
+// generateJobID 使用加密安全的随机数生成 12 字符十六进制作业 ID。
+// 原实现基于时间戳，完全可预测，存在碰撞和被猜测的风险。
 func generateJobID() string {
 	b := make([]byte, 6)
-	nano := time.Now().UnixNano()
-	for i := range b {
-		b[i] = byte(nano >> (i * 8))
+	// 使用 crypto/rand 生成不可预测的随机字节
+	if _, err := rand.Read(b); err != nil {
+		// 极端情况降级: crypto/rand 在正常系统上不会失败
+		nano := time.Now().UnixNano()
+		for i := range b {
+			b[i] = byte(nano >> (i * 8))
+		}
 	}
 	return fmt.Sprintf("%x", b)
 }

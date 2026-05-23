@@ -106,7 +106,11 @@ func (c *Curator) SaveState() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(c.stateFile, data, 0644)
+	tmp := c.stateFile + ".tmp"
+		if err := os.WriteFile(tmp, data, 0644); err != nil {
+			return err
+		}
+		return os.Rename(tmp, c.stateFile)
 }
 
 // ───────────────────────────── 策展逻辑 ─────────────────────────────

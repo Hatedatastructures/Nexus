@@ -4,7 +4,11 @@
 package gateway
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -38,15 +42,17 @@ const lockoutThreshold = 5
 
 // PairingRecord 表示一个配对码记录。
 type PairingRecord struct {
-	Code           string    `json:"code"`             // 8 位配对码
-	Platform       string    `json:"platform"`         // 平台标识
-	UserID         string    `json:"user_id"`          // 用户 ID
-	CreatedAt      time.Time `json:"created_at"`       // 创建时间
-	ExpiresAt      time.Time `json:"expires_at"`       // 过期时间
-	Verified       bool      `json:"verified"`         // 是否已验证
-	Attempts       int       `json:"attempts"`         // 验证尝试次数
-	LockedUntil    time.Time `json:"locked_until"`     // 锁定截止时间
-	LastAttemptAt  time.Time `json:"last_attempt_at"`  // 最后尝试时间
+	Code           string    `json:"code"`              // legacy 明文配对码（旧记录保留，新记录为空）
+	Hash           string    `json:"hash,omitempty"`    // sha256(salt+code) hex（新记录使用）
+	Salt           string    `json:"salt,omitempty"`    // hex 编码的随机盐（新记录使用）
+	Platform       string    `json:"platform"`          // 平台标识
+	UserID         string    `json:"user_id"`           // 用户 ID
+	CreatedAt      time.Time `json:"created_at"`        // 创建时间
+	ExpiresAt      time.Time `json:"expires_at"`        // 过期时间
+	Verified       bool      `json:"verified"`          // 是否已验证
+	Attempts       int       `json:"attempts"`          // 验证尝试次数
+	LockedUntil    time.Time `json:"locked_until"`      // 锁定截止时间
+	LastAttemptAt  time.Time `json:"last_attempt_at"`   // 最后尝试时间
 	LastGeneratedAt time.Time `json:"last_generated_at"` // 最后生成时间
 }
 
@@ -130,9 +136,18 @@ func (s *PairingStore) GenerateCode(platform, userID string) (string, error) {
 		return "", fmt.Errorf("生成配对码失败: %w", err)
 	}
 
-	// 创建记录
+	// 生成随机盐并计算哈希
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("生成盐失败: %w", err)
+	}
+	hash := pairingHashCode(code, salt)
+
+	// 创建记录（Code 留空，仅存储哈希）
 	record := &PairingRecord{
-		Code:            code,
+		Code:            "",
+		Hash:            hash,
+		Salt:            hex.EncodeToString(salt),
 		Platform:        platform,
 		UserID:          userID,
 		CreatedAt:       now,
@@ -176,7 +191,20 @@ func (s *PairingStore) VerifyCode(platform, userID, code string) (bool, error) {
 
 	// Phase 1: 查找匹配的配对码
 	for _, r := range records {
-		if r.Code != code {
+		matched := false
+		if r.Salt != "" {
+			// 新记录: 哈希比较
+			salt, err := hex.DecodeString(r.Salt)
+			if err == nil {
+				computed := pairingHashCode(code, salt)
+				matched = subtle.ConstantTimeCompare([]byte(computed), []byte(r.Hash)) == 1
+			}
+		} else {
+			// Legacy 记录: 明文比较
+			matched = r.Code == code
+		}
+
+		if !matched {
 			continue
 		}
 
@@ -240,6 +268,18 @@ func (s *PairingStore) GetPendingCodes(platform, userID string) []*PairingRecord
 	}
 
 	return pending
+}
+
+// PendingCodeDisplay 返回用于显示的配对码标识。
+// 新记录显示哈希前缀，legacy 记录显示 "legacy"。
+func PendingCodeDisplay(r *PairingRecord) string {
+	if r.Salt != "" && r.Hash != "" {
+		if len(r.Hash) >= 8 {
+			return r.Hash[:8]
+		}
+		return r.Hash
+	}
+	return "legacy"
 }
 
 // PurgeExpired 清理所有平台上的过期配对码。
@@ -318,7 +358,7 @@ func (s *PairingStore) savePlatform(platform string) error {
 		return fmt.Errorf("序列化记录失败: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := atomicWriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("写入记录文件失败: %w", err)
 	}
 
@@ -356,4 +396,21 @@ func generateRandomCode(length int) (string, error) {
 	}
 
 	return string(code), nil
+}
+
+// pairingHashCode 使用 HMAC-SHA256 计算配对码哈希。
+func pairingHashCode(code string, salt []byte) string {
+	h := hmac.New(sha256.New, salt)
+	h.Write([]byte(code))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// atomicWriteFile 原子写入文件: 先写入临时文件，再重命名替换。
+// 防止崩溃时留下损坏文件。
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

@@ -27,16 +27,21 @@ type TelegramAdapter struct {
 	cancelFn      context.CancelFunc // 取消函数
 	disconnectOnce sync.Once         // 确保 Disconnect 只执行一次
 	mu             sync.Mutex        // 保护 cancelFn
+
+	// 状态消息缓存: "chatID:statusKey" → messageID
+	statusMsgIDs map[string]string
+	statusMu     sync.Mutex
 }
 
 // NewTelegramAdapter 创建 Telegram 适配器。
 // token 为 Telegram Bot Token。
 func NewTelegramAdapter(token string) *TelegramAdapter {
 	return &TelegramAdapter{
-		token:   token,
-		client:  &http.Client{Timeout: 30 * time.Second},
-		baseURL: "https://api.telegram.org/bot" + token,
-		msgCh:   make(chan *MessageEvent, 128),
+		token:         token,
+		client:        &http.Client{Timeout: 30 * time.Second},
+		baseURL:       "https://api.telegram.org/bot" + token,
+		msgCh:         make(chan *MessageEvent, 128),
+		statusMsgIDs:  make(map[string]string),
 	}
 }
 
@@ -122,6 +127,36 @@ func (t *TelegramAdapter) SendTyping(ctx context.Context, chatID string) error {
 		"action":  "typing",
 	})
 	return err
+}
+
+// SendOrUpdateStatus 发送或更新状态消息。
+// 如果同一 chatID+statusKey 已有缓存消息，则编辑而非追加新消息。
+func (t *TelegramAdapter) SendOrUpdateStatus(ctx context.Context, chatID, statusKey, content string) error {
+	key := chatID + ":" + statusKey
+
+	t.statusMu.Lock()
+	existingID, hasExisting := t.statusMsgIDs[key]
+	t.statusMu.Unlock()
+
+	if hasExisting {
+		_, err := t.EditMessage(ctx, chatID, existingID, content)
+		if err == nil {
+			return nil
+		}
+		// Edit 失败（消息被删除等），回退到发送新消息
+	}
+
+	result, err := t.Send(ctx, chatID, content, nil)
+	if err != nil {
+		return err
+	}
+
+	if result != nil && result.MessageID != "" {
+		t.statusMu.Lock()
+		t.statusMsgIDs[key] = result.MessageID
+		t.statusMu.Unlock()
+	}
+	return nil
 }
 
 // SendImage 发送图片。

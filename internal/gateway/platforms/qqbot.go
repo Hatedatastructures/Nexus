@@ -37,9 +37,29 @@ const (
 	qqbotOpIdentify        = 2
 	qqbotOpResume          = 6
 	qqbotOpReconnect       = 7
+	qqbotOpInvalidSession  = 9
 	qqbotOpHello           = 10
 	qqbotOpHeartbeatAck    = 11
 )
+
+// QQ Bot intents 精确位掩码
+const (
+	qqbotIntentC2CGroupAtMessages  = 1 << 25
+	qqbotIntentPublicGuildMessages = 1 << 30
+	qqbotIntentDirectMessage       = 1 << 12
+	qqbotIntentInteraction         = 1 << 26
+)
+
+// 致命 close code: 不可恢复，停止重连
+var qqbotFatalCloseCodes = map[int]bool{
+	4001: true, 4002: true, 4010: true, 4011: true,
+	4012: true, 4013: true, 4014: true,
+}
+
+// 会话清除 close code: 清空 session 后重连
+var qqbotSessionClearCodes = map[int]bool{
+	4006: true, 4007: true,
+}
 
 // 消息类型
 const (
@@ -341,12 +361,24 @@ func (a *QQBotAdapter) connectWebSocket(ctx context.Context, gatewayURL string, 
 		// 监听消息
 		a.listenLoop(msgCh)
 
-		// 连接断开，尝试重连
+		// 连接断开，检查 close code
 		a.mu.Lock()
 		a.connected = false
+		closeCode := 0
 		if a.conn != nil {
 			a.conn.Close()
 			a.conn = nil
+		}
+
+		if qqbotFatalCloseCodes[closeCode] {
+			slog.Error("[QQBot] fatal close code, stopping reconnect", "code", closeCode)
+			a.mu.Unlock()
+			return
+		}
+		if qqbotSessionClearCodes[closeCode] {
+			slog.Warn("[QQBot] session-clear close code, resetting session", "code", closeCode)
+			a.sessionID = ""
+			a.seqNo = 0
 		}
 		a.mu.Unlock()
 	}
@@ -358,7 +390,7 @@ func (a *QQBotAdapter) sendIdentify(conn *websocket.Conn) {
 		"op": qqbotOpIdentify,
 		"d": map[string]any{
 			"token":      a.accessToken,
-			"intents":    0x1FFFFF, // 所有事件
+			"intents":    qqbotIntentC2CGroupAtMessages | qqbotIntentPublicGuildMessages | qqbotIntentDirectMessage | qqbotIntentInteraction,
 			"shard":      []int{0, 1},
 			"properties": map[string]any{
 				"$os":      "linux",
@@ -450,8 +482,37 @@ func (a *QQBotAdapter) dispatchPayload(payload map[string]any, msgCh chan *Messa
 		a.mu.Unlock()
 
 	case qqbotOpReconnect:
+
 		slog.Warn("[QQBot] received Reconnect command")
+
 		return
+
+
+
+	case qqbotOpInvalidSession:
+
+		d := payload["d"]
+
+		a.mu.Lock()
+
+		if boolVal, ok := d.(bool); ok && boolVal {
+
+			slog.Warn("[QQBot] invalid session (resumable), will resume")
+
+		} else {
+
+			slog.Warn("[QQBot] invalid session (non-resumable), clearing session")
+
+			a.sessionID = ""
+
+			a.seqNo = 0
+
+		}
+
+		a.mu.Unlock()
+
+		return
+
 	}
 }
 

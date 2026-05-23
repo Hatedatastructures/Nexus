@@ -83,8 +83,13 @@ func (a *Allowlist) save() {
 		slog.Error("failed to serialize allowlist", "err", err)
 		return
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		slog.Error("failed to save allowlist", "path", path, "err", err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		slog.Error("failed to rename allowlist", "path", path, "err", err)
 	}
 }
 

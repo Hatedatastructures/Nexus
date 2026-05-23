@@ -84,6 +84,16 @@ func (a *WebhookAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, err
 	a.running = true
 	a.mu.Unlock()
 
+	// 空 secret 安全检查: 非 loopback 绑定时必须设置 secret
+	if a.secret == "" {
+		addr := fmt.Sprintf(":%d", a.port)
+		if !isLoopback(addr) {
+			slog.Error("[Webhook] refusing to start without WEBHOOK_SECRET on non-loopback address", "port", a.port)
+			return nil, fmt.Errorf("webhook: WEBHOOK_SECRET required on non-loopback address")
+		}
+		slog.Warn("[Webhook] WEBHOOK_SECRET not set, running without authentication (loopback only)")
+	}
+
 	// 创建消息通道
 	msgCh := make(chan *MessageEvent, 100)
 
@@ -363,4 +373,13 @@ func parseInt(s string) (int, error) {
 		}
 	}
 	return result, nil
+}
+
+// isLoopback 检查地址是否为 loopback 绑定。
+func isLoopback(addr string) bool {
+	host := strings.TrimPrefix(addr, ":")
+	if host == "" || host == "0.0.0.0" {
+		return false
+	}
+	return host == "127.0.0.1" || host == "localhost" || host == "::1"
 }

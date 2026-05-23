@@ -139,6 +139,28 @@ func (t *SkillManageTool) uninstallSkill(name string) (string, error) {
 
 	skillPath := filepath.Join(home, ".nexus", "skills", name)
 
+	// 路径遍历防护: 确保解析后的路径仍在 skills 目录内
+	absPath, err := filepath.Abs(skillPath)
+	if err != nil {
+		return ToolError(fmt.Sprintf("解析路径失败: %v", err)), nil
+	}
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err != nil && !os.IsNotExist(err) {
+		return ToolError(fmt.Sprintf("解析路径失败: %v", err)), nil
+	}
+	if resolved == "" {
+		resolved = absPath
+	}
+
+	skillsDir := filepath.Join(home, ".nexus", "skills")
+	absSkillsDir, _ := filepath.Abs(skillsDir)
+	if absSkillsDir != "" {
+		rel, err := filepath.Rel(absSkillsDir, resolved)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return ToolError("路径遍历攻击被阻止"), nil
+		}
+	}
+
 	// 检查是否存在
 	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
 		return ToolError(fmt.Sprintf("技能 %q 不存在", name)), nil

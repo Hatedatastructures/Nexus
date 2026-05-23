@@ -50,18 +50,29 @@ type AgentConfig struct {
 	Provider       string `yaml:"provider"`        // 默认提供者名称
 	MaxTokens      int    `yaml:"max_tokens"`      // 最大生成 token 数
 	MaxIterations  int    `yaml:"max_iterations"`  // 最大工具调用迭代次数 (默认 90)
-	FallbackModel  string `yaml:"fallback_model"`  // 备选故障转移模型
-	ToolDelay      float64 `yaml:"tool_delay"`     // 工具执行间隔 (秒)
-	SaveTrajectory bool   `yaml:"save_trajectory"` // 是否保存轨迹到文件
-	Proxy          string `yaml:"proxy"`           // HTTP/SOCKS5 代理地址 (空 = 回退到环境变量)
-	FallbackChain  []FallbackEntryConfig `yaml:"fallback_chain"` // 回退链配置
+	FallbackModel      string                `yaml:"fallback_model"`       // legacy 单条回退模型名
+	ToolDelay          float64               `yaml:"tool_delay"`           // 工具执行间隔 (秒)
+	SaveTrajectory     bool                  `yaml:"save_trajectory"`      // 是否保存轨迹到文件
+	Proxy              string                `yaml:"proxy"`                // HTTP/SOCKS5 代理地址
+	FallbackModelCfg   *FallbackModelConfig  `yaml:"fallback_model_cfg"`   // legacy 单条回退配置 (结构化)
+	FallbackChain      []FallbackEntryConfig `yaml:"fallback_chain"`       // 回退链配置
 }
 
 // FallbackEntryConfig 定义回退链中的单个条目。
 type FallbackEntryConfig struct {
-	Provider string `yaml:"provider"` // 提供者名称 (对应 providers 中的 key)
-	Model    string `yaml:"model"`    // 使用的模型名称
-	Priority int    `yaml:"priority"` // 优先级 (数字越小越优先)
+	Provider string `yaml:"provider"`           // 提供者名称 (对应 providers 中的 key)
+	Model    string `yaml:"model"`              // 使用的模型名称
+	Priority int    `yaml:"priority"`           // 优先级 (数字越小越优先)
+	BaseURL  string `yaml:"base_url,omitempty"` // API 基础 URL (覆盖提供者默认)
+	APIKey   string `yaml:"api_key,omitempty"`  // API 密钥 (覆盖提供者默认)
+}
+
+// FallbackModelConfig legacy 单条回退模型配置。
+type FallbackModelConfig struct {
+	Provider string `yaml:"provider"`           // 提供者名称
+	Model    string `yaml:"model"`              // 模型名称
+	BaseURL  string `yaml:"base_url,omitempty"` // API 基础 URL
+	APIKey   string `yaml:"api_key,omitempty"`  // API 密钥
 }
 
 // ───────────────────────────── 提供者配置 ─────────────────────────────

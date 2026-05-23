@@ -80,7 +80,7 @@ func (s *Store) searchLatin(ctx context.Context, query string, limit int) ([]*Se
 	)
 	if err != nil {
 		// FTS5 查询语法错误 —— 返回空结果
-		slog.Warn("FTS5 搜索语法错误", "query", query, "error", err)
+		slog.Warn("FTS5 search syntax error", "query", query, "error", err)
 		return nil, nil
 	}
 	defer rows.Close()
@@ -134,7 +134,7 @@ func (s *Store) searchTrigramFTS(ctx context.Context, rawQuery string, limit int
 		trigramQuery, limit,
 	)
 	if err != nil {
-		slog.Warn("Trigram FTS5 搜索错误", "query", trigramQuery, "error", err)
+		slog.Warn("trigram FTS5 search error", "query", trigramQuery, "error", err)
 		return nil, nil
 	}
 	defer rows.Close()

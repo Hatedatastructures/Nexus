@@ -80,11 +80,11 @@ func (a *Allowlist) save() {
 	path := filepath.Join(a.dir, allowlistFilename)
 	data, err := json.MarshalIndent(a.entries, "", "  ")
 	if err != nil {
-		slog.Error("序列化 allowlist 失败", "err", err)
+		slog.Error("failed to serialize allowlist", "err", err)
 		return
 	}
 	if err := os.WriteFile(path, data, 0600); err != nil {
-		slog.Error("保存 allowlist 失败", "path", path, "err", err)
+		slog.Error("failed to save allowlist", "path", path, "err", err)
 	}
 }
 
@@ -98,14 +98,14 @@ func (a *Allowlist) load() {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			slog.Warn("加载 allowlist 失败", "path", path, "err", err)
+			slog.Warn("failed to load allowlist", "path", path, "err", err)
 		}
 		return
 	}
 
 	var entries map[string]bool
 	if err := json.Unmarshal(data, &entries); err != nil {
-		slog.Warn("解析 allowlist 失败", "path", path, "err", err)
+		slog.Warn("failed to parse allowlist", "path", path, "err", err)
 		return
 	}
 	a.entries = entries

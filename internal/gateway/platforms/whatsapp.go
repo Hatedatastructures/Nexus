@@ -18,11 +18,12 @@ import (
 // WhatsAppAdapter 实现 WhatsApp Cloud API 适配器。
 // 使用 Webhook 接收消息，通过 /{phoneID}/messages 端点发送消息。
 type WhatsAppAdapter struct {
-	token   string             // 访问令牌 (系统用户或用户令牌)
-	phoneID string             // 电话号码 ID
-	client  *http.Client       // HTTP 客户端
-	baseURL string             // API 基础 URL
-	msgCh   chan *MessageEvent // 入站消息通道
+	token       string             // 访问令牌 (系统用户或用户令牌)
+	phoneID     string             // 电话号码 ID
+	verifyToken string             // Webhook 验证令牌
+	client      *http.Client       // HTTP 客户端
+	baseURL     string             // API 基础 URL
+	msgCh       chan *MessageEvent // 入站消息通道
 }
 
 // NewWhatsAppAdapter 创建 WhatsApp 适配器。
@@ -181,8 +182,7 @@ func (w *WhatsAppAdapter) ReceiveWebhook(payload []byte) error {
 
 // VerifyWebhook 验证 Webhook (用于 WhatsApp 配置验证)。
 func (w *WhatsAppAdapter) VerifyWebhook(mode string, challenge string, verifyToken string) (string, bool) {
-	// 生产环境应比对 verifyToken 和配置的令牌
-	if mode == "subscribe" {
+	if mode == "subscribe" && verifyToken == w.verifyToken {
 		return challenge, true
 	}
 	return "", false
@@ -208,6 +208,7 @@ func (w *WhatsAppAdapter) Configure(settings map[string]any) error {
 	}
 	w.token = token
 	w.phoneID = phoneID
+	w.verifyToken, _ = settings["verify_token"].(string)
 	w.client = &http.Client{Timeout: 30 * time.Second}
 	w.baseURL = "https://graph.facebook.com/v18.0"
 	w.msgCh = make(chan *MessageEvent, 128)
@@ -323,7 +324,7 @@ type whatsappMessage struct {
 	ID        string `json:"id"`
 	From      string `json:"from"`
 	Type      string `json:"type"`
-	Timestamp int64  `json:"timestamp,string"`
+	Timestamp int64  `json:"timestamp"`
 	Text      struct {
 		Body string `json:"body"`
 	} `json:"text"`

@@ -109,14 +109,14 @@ func (t *TranscriptionTool) Execute(ctx context.Context, args map[string]any) (s
 
 	// 安全敏感路径检查
 	if isPathSensitive(audioPath) {
-		slog.Warn("音频转录被阻止 (敏感路径)", "path", audioPath)
+		slog.Warn("audio transcription blocked (sensitive path)", "path", audioPath)
 		return ToolError(fmt.Sprintf("安全限制: 不允许访问敏感路径 %s", audioPath)), nil
 	}
 
 	// 检查文件是否存在和大小
 	info, err := os.Stat(audioPath)
 	if err != nil {
-		slog.Warn("音频文件不存在", "path", audioPath, "err", err)
+		slog.Warn("audio file not found", "path", audioPath, "err", err)
 		return ToolError(fmt.Sprintf("无法访问音频文件: %v", err)), nil
 	}
 	// Whisper API 限制 25MB
@@ -127,11 +127,11 @@ func (t *TranscriptionTool) Execute(ctx context.Context, args map[string]any) (s
 	// 调用 Whisper API 转录
 	transcript, err := t.transcribe(ctx, model, audioPath, language, responseFormat, temperature)
 	if err != nil {
-		slog.Error("音频转录失败", "path", audioPath, "err", err)
+		slog.Error("audio transcription failed", "path", audioPath, "err", err)
 		return ToolError(fmt.Sprintf("音频转录失败: %v", err)), nil
 	}
 
-	slog.Info("音频转录成功", "path", audioPath, "model", model, "chars", len(transcript))
+	slog.Info("audio transcription succeeded", "path", audioPath, "model", model, "chars", len(transcript))
 	return ToolResult(map[string]any{
 		"output":  transcript,
 		"audio":   audioPath,

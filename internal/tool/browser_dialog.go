@@ -110,7 +110,7 @@ func (t *BrowserHandleDialogTool) Execute(ctx context.Context, args map[string]a
 	info := globalDialogState.getPending()
 	if info == nil {
 		// 尝试等待对话框出现
-		slog.Info("无待处理对话框，等待 3 秒")
+		slog.Info("no pending dialog, waiting 3 seconds")
 		select {
 		case <-time.After(3 * time.Second):
 		case <-ctx.Done():
@@ -122,7 +122,7 @@ func (t *BrowserHandleDialogTool) Execute(ctx context.Context, args map[string]a
 		}
 	}
 
-	slog.Info("处理浏览器对话框",
+	slog.Info("handling browser dialog",
 		"type", info.Type,
 		"message", info.Message,
 		"action", action,
@@ -232,7 +232,7 @@ func SetupDialogListener(page *rod.Page) {
 	}
 
 	cancel := page.EachEvent(func(e *proto.PageJavascriptDialogOpening) {
-		slog.Info("检测到浏览器对话框",
+		slog.Info("browser dialog detected",
 			"type", string(e.Type),
 			"message", e.Message,
 		)
@@ -248,7 +248,7 @@ func SetupDialogListener(page *rod.Page) {
 	globalDialogState.listenerCancel = cancel
 	globalDialogState.mu.Unlock()
 
-	slog.Info("对话框监听器已启动")
+	slog.Info("dialog listener started")
 }
 
 // ───────────────────────────── init 注册 ─────────────────────────────

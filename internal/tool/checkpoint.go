@@ -138,7 +138,7 @@ func (m *CheckpointManager) EnsureCheckpoint(dir string) error {
 	}
 
 	if !hasChanges {
-		slog.Debug("检查点: 无变更，跳过提交", "dir", dir)
+		slog.Debug("checkpoint: no changes, skipping commit", "dir", dir)
 		return nil
 	}
 
@@ -147,7 +147,7 @@ func (m *CheckpointManager) EnsureCheckpoint(dir string) error {
 		return fmt.Errorf("提交检查点失败: %w", err)
 	}
 
-	slog.Info("检查点已创建", "dir", dir)
+	slog.Info("checkpoint created", "dir", dir)
 	return nil
 }
 
@@ -342,7 +342,7 @@ func (m *CheckpointManager) Restore(dir string, commitHash string) error {
 
 	// 创建当前状态的检查点 (恢复前自动备份)
 	if err := m.EnsureCheckpoint(dir); err != nil {
-		slog.Warn("恢复前创建检查点失败", "err", err)
+		slog.Warn("failed to create checkpoint before restore", "err", err)
 	}
 
 	// git checkout <commit>
@@ -359,10 +359,10 @@ func (m *CheckpointManager) Restore(dir string, commitHash string) error {
 
 	// 清理源目录中不在检查点中的文件
 	if err := m.cleanRemovedFiles(shadowDir, dir); err != nil {
-		slog.Warn("清理已删除文件失败", "err", err)
+		slog.Warn("failed to clean up deleted files", "err", err)
 	}
 
-	slog.Info("检查点已恢复", "dir", dir, "commit", commitHash)
+	slog.Info("checkpoint restored", "dir", dir, "commit", commitHash)
 	return nil
 }
 
@@ -620,6 +620,6 @@ func (t *CheckpointTool) restoreCheckpoint(dir, commit string) (string, error) {
 // ───────────────────────────── init 注册 ─────────────────────────────
 
 func init() {
-	slog.Debug("注册检查点管理工具")
+	slog.Debug("registering checkpoint management tool")
 	GetRegistry().Register(&CheckpointTool{})
 }

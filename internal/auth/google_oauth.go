@@ -219,14 +219,14 @@ func (g *GoogleOAuth) StartFlow(ctx context.Context) (*Token, error) {
 	// 在 goroutine 中启动 server
 	go func() {
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-			slog.Debug("OAuth 回调 server 已停止", "error", err)
+			slog.Debug("OAuth callback server stopped", "error", err)
 		}
 	}()
 
 	// 6. 打开浏览器
-	slog.Info("正在打开浏览器进行 Google 授权...", "url", authURL)
+	slog.Info("opening browser for Google authorization...", "url", authURL)
 	if err := openBrowser(authURL); err != nil {
-		slog.Warn("无法自动打开浏览器，请手动打开以下 URL", "url", authURL, "error", err)
+		slog.Warn("unable to auto-open browser, please manually open the following URL", "url", authURL, "error", err)
 	}
 
 	// 7. 等待回调结果或 context 取消
@@ -256,10 +256,10 @@ func (g *GoogleOAuth) StartFlow(ctx context.Context) (*Token, error) {
 
 	// 10. 持久化 token
 	if err := g.SaveToken(token); err != nil {
-		slog.Warn("保存 token 失败", "error", err)
+		slog.Warn("failed to save token", "error", err)
 	}
 
-	slog.Info("Google OAuth 授权成功")
+	slog.Info("Google OAuth authorization succeeded")
 	return token, nil
 }
 
@@ -322,7 +322,7 @@ func (g *GoogleOAuth) RefreshToken(ctx context.Context, token *Token) (*Token, e
 
 	// 持久化
 	if err := g.saveTokenFile(newToken); err != nil {
-		slog.Warn("保存刷新后的 token 失败", "error", err)
+		slog.Warn("failed to save refreshed token", "error", err)
 	}
 
 	return newToken, nil

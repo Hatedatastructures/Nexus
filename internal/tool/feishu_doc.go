@@ -227,7 +227,7 @@ func (t *FeishuDocReadTool) Execute(ctx context.Context, args map[string]any) (s
 
 	respBody, err := client.Request(ctx, "GET", uri, nil, paths)
 	if err != nil {
-		slog.Error("飞书文档读取失败", "doc_token", docToken, "err", err)
+		slog.Error("feishu document read failed", "doc_token", docToken, "err", err)
 		return ToolError(fmt.Sprintf("读取文档失败: %v", err)), nil
 	}
 
@@ -246,7 +246,7 @@ func (t *FeishuDocReadTool) Execute(ctx context.Context, args map[string]any) (s
 		return ToolError(fmt.Sprintf("飞书 API 错误: code=%d msg=%s", apiResp.Code, apiResp.Msg)), nil
 	}
 
-	slog.Info("飞书文档读取成功", "doc_token", docToken, "content_len", len(apiResp.Data.Content))
+	slog.Info("feishu document read succeeded", "doc_token", docToken, "content_len", len(apiResp.Data.Content))
 	return ToolResult(map[string]any{
 		"success": true,
 		"content": apiResp.Data.Content,

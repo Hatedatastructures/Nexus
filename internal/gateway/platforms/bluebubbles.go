@@ -145,7 +145,7 @@ func (a *BlueBubblesAdapter) Connect(ctx context.Context) (<-chan *MessageEvent,
 	a.msgCh = make(chan *MessageEvent, 100)
 	go a.pollLoop(ctx, a.msgCh)
 
-	slog.Info("[BlueBubbles] 已连接", "url", a.baseURL)
+	slog.Info("[BlueBubbles] connected", "url", a.baseURL)
 	return a.msgCh, nil
 }
 
@@ -157,7 +157,7 @@ func (a *BlueBubblesAdapter) Disconnect(ctx context.Context) error {
 	a.mu.Unlock()
 
 	a.closeOnce.Do(func() { close(a.msgCh) })
-	slog.Info("[BlueBubbles] 已断开")
+	slog.Info("[BlueBubbles] disconnected")
 	return nil
 }
 
@@ -181,7 +181,7 @@ func (a *BlueBubblesAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEv
 
 			messages, err := a.fetchNewMessages(ctx)
 			if err != nil {
-				slog.Warn("[BlueBubbles] 获取消息失败", "err", err)
+				slog.Warn("[BlueBubbles] failed to fetch messages", "err", err)
 				continue
 			}
 
@@ -563,11 +563,9 @@ func (a *BlueBubblesAdapter) apiRequest(ctx context.Context, method, path string
 	// 设置请求头
 	req.Header.Set("Content-Type", "application/json")
 
-	// 添加密码认证（查询参数）
+	// 添加密码认证（使用 header 传递）
 	if a.password != "" {
-		q := req.URL.Query()
-		q.Set("password", a.password)
-		req.URL.RawQuery = q.Encode()
+		req.Header.Set("Authorization", "Bearer "+a.password)
 	}
 
 	resp, err := a.httpClient.Do(req)

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
+	"crypto/subtle"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -181,7 +182,7 @@ func (w *WeChatAdapter) VerifySignature(signature string, timestamp string, nonc
 	sort.Strings(parts)
 	joined := strings.Join(parts, "")
 	hash := fmt.Sprintf("%x", sha1.Sum([]byte(joined)))
-	return hash == signature
+	return subtle.ConstantTimeCompare([]byte(hash), []byte(signature)) == 1
 }
 
 // ───────────────────────────── 自注册 ─────────────────────────────

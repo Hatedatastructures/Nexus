@@ -99,7 +99,7 @@ func (c *URLSafetyChecker) IsSafeURL(rawURL string) (bool, string) {
 	// ── DNS 解析 (失效即拒绝) ──
 	ips, err := net.LookupIP(hostname)
 	if err != nil {
-		slog.Warn("URL 安全检查: DNS 解析失败，阻止请求", "host", hostname, "err", err)
+		slog.Warn("URL safety check: DNS resolution failed, blocking request", "host", hostname, "err", err)
 		return false, fmt.Sprintf("DNS 解析失败 (安全策略阻止): %v", err)
 	}
 
@@ -254,6 +254,6 @@ func (t *URLSafetyTool) Execute(ctx context.Context, args map[string]any) (strin
 // ───────────────────────────── init 注册 ─────────────────────────────
 
 func init() {
-	slog.Debug("注册 URL 安全检查工具")
+	slog.Debug("registering URL safety check tool")
 	GetRegistry().Register(&URLSafetyTool{})
 }

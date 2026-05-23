@@ -154,60 +154,107 @@ func sanitizeContextContent(content string) (string, []string) {
 // loadContextFiles 按优先级搜索并读取上下文文件内容。
 //
 // 搜索策略:
-//  1. 从当前工作目录开始向上搜索 (最多 5 层)
+//  1. 从当前工作目录开始向上搜索到根目录
 //  2. 按 ContextFilePriority 定义的顺序查找
-//  3. 找到第一个存在的文件后立即返回
+//  3. 收集所有找到的文件，按 content hash 去重
+//  4. 单文件 4000 字符上限 + 总计 12000 字符预算
 //
 // 返回格式化后的上下文字符串 (含 Markdown 引用块)。
 // 未找到任何文件时返回空字符串。
 func (b *Builder) loadContextFiles() string {
-	// 获取当前工作目录
 	cwd, err := os.Getwd()
 	if err != nil {
-		slog.Warn("无法获取当前工作目录", "err", err)
+		slog.Warn("failed to get current working directory", "err", err)
 		return ""
 	}
 
-	// 向上搜索目录 (最多 5 层)
-	for depth := 0; depth < 5; depth++ {
+	const maxFileChars = 4000
+	const totalBudget = 12000
+	seen := make(map[string]bool) // content hash → seen
+	var results []string
+	totalChars := 0
+
+	for depth := 0; depth < 20; depth++ {
 		for _, filename := range ContextFilePriority {
 			path := filepath.Join(cwd, filename)
 			content, err := os.ReadFile(path)
-			if err == nil && len(content) > 0 {
-				slog.Debug("加载上下文文件", "path", path, "filename", filename)
-				rawContent := string(content)
+			if err != nil || len(content) == 0 {
+				continue
+			}
 
-				// 安全扫描: 检测 prompt injection
-				if threats := scanContextContent(rawContent); len(threats) > 0 {
-					slog.Warn("上下文文件包含潜在的 prompt injection 模式",
-						"path", path, "threats", strings.Join(threats, ", "))
-					// 清洗内容后使用
-					rawContent, _ = sanitizeContextContent(rawContent)
+			// Hash 去重 (使用内容前 64 字节作为简易 hash)
+			h :=简易Hash(content)
+			if seen[h] {
+				continue
+			}
+			seen[h] = true
+
+			slog.Debug("loading context file", "path", path, "filename", filename)
+			rawContent := string(content)
+
+			// 安全扫描
+			if threats := scanContextContent(rawContent); len(threats) > 0 {
+				slog.Warn("context file contains potential prompt injection pattern",
+					"path", path, "threats", strings.Join(threats, ", "))
+				rawContent, _ = sanitizeContextContent(rawContent)
+			}
+
+			// 单文件截断
+			if len(rawContent) > maxFileChars {
+				rawContent = rawContent[:maxFileChars] + "\n...[truncated]..."
+			}
+
+			// 预算检查
+			if totalChars+len(rawContent) > totalBudget {
+				remaining := totalBudget - totalChars
+				if remaining > 200 {
+					rawContent = rawContent[:remaining] + "\n...[budget exceeded]..."
+				} else {
+					break
 				}
+			}
 
-				// 格式化为代码块引用
-				return formatContextFileContent(filename, rawContent)
+			results = append(results, formatContextFileContent(filename, rawContent))
+			totalChars += len(rawContent)
+
+			if totalChars >= totalBudget {
+				break
 			}
 		}
 
-		// 向上一级目录
 		parent := filepath.Dir(cwd)
 		if parent == cwd {
-			break // 已到达根目录
+			break
 		}
 		cwd = parent
+
+		if totalChars >= totalBudget {
+			break
+		}
 	}
 
-	return ""
+	if len(results) == 0 {
+		return ""
+	}
+	return strings.Join(results, "")
 }
+
+// 简易Hash 返回内容的简易指纹用于去重。
+func 简易Hash(data []byte) string {
+	if len(data) < 64 {
+		return string(data)
+	}
+	return string(data[:32]) + string(data[len(data)-32:])
+}
+
+const maxContextFileContentLen = 8000
 
 // formatContextFileContent 将上下文文件内容格式化为系统提示词中的引用块。
 // 使用 Markdown 格式包裹，便于模型识别文件边界。
+// 超过 8000 字符的内容会被截断并添加提示。
 func formatContextFileContent(filename, content string) string {
-	// 确保内容不会超出合理大小 (最多 8000 字符)
-	if len(content) > 8000 {
-		content = content[:8000] + "\n...[内容截断，完整文件请查看磁盘]..."
+	if len(content) > maxContextFileContentLen {
+		content = content[:maxContextFileContentLen] + "\n\n... 内容截断 ..."
 	}
-
 	return "\n\n## 上下文文件: " + filename + "\n\n```markdown\n" + content + "\n```\n"
 }

@@ -82,7 +82,7 @@ func main() {
 	}
 
 	// 5. 创建 GatewayRunner
-	runner := gateway.NewGatewayRunner(&cfg.Gateway, &cfg.Agent, st, cronSched)
+	runner := gateway.NewGatewayRunner(&cfg.Gateway, cfg, st, cronSched)
 
 	// 6. 根据配置注册平台适配器 (从全局注册中心自动发现)
 	runner.RegisterFromRegistry(&cfg.Gateway)

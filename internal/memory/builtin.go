@@ -102,7 +102,7 @@ func (p *BuiltinProvider) Initialize(ctx context.Context, sessionID string) erro
 	p.systemPromptSnapshot = p.buildSystemPromptBlock()
 	p.mu.Unlock()
 
-	slog.Info("内置记忆: 初始化完成",
+	slog.Info("builtin memory: initialization completed",
 		"session_id", sessionID,
 		"memory_entries", len(p.memory),
 		"user_entries", len(p.user),
@@ -385,7 +385,7 @@ func (p *BuiltinProvider) HandleToolCall(ctx context.Context, toolName string, a
 
 // Shutdown 关闭提供者 (空操作)。
 func (p *BuiltinProvider) Shutdown(ctx context.Context) error {
-	slog.Info("内置记忆: 关闭")
+	slog.Info("builtin memory: shutdown")
 	return nil
 }
 
@@ -450,7 +450,7 @@ func (p *BuiltinProvider) add(ctx context.Context, target, content string) (stri
 	p.setEntries(target, entries)
 	p.mu.Unlock()
 
-	slog.Info("内置记忆: 添加条目", "target", target, "entries", len(entries))
+	slog.Info("builtin memory: entry added", "target", target, "entries", len(entries))
 	return toolSuccess(target, entries, "条目已添加。"), nil
 }
 
@@ -531,7 +531,7 @@ func (p *BuiltinProvider) replace(ctx context.Context, target, oldText, newConte
 	p.setEntries(target, entries)
 	p.mu.Unlock()
 
-	slog.Info("内置记忆: 替换条目", "target", target)
+	slog.Info("builtin memory: entry replaced", "target", target)
 	return toolSuccess(target, entries, "条目已替换。"), nil
 }
 
@@ -591,7 +591,7 @@ func (p *BuiltinProvider) remove(ctx context.Context, target, oldText string) (s
 	p.setEntries(target, entries)
 	p.mu.Unlock()
 
-	slog.Info("内置记忆: 删除条目", "target", target)
+	slog.Info("builtin memory: entry removed", "target", target)
 	return toolSuccess(target, entries, "条目已删除。"), nil
 }
 

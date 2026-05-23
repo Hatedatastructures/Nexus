@@ -190,7 +190,7 @@ func (t *GeminiTransport) ParseStream(ctx context.Context, body io.ReadCloser) <
 
 			var streamResp geminiStreamResponse
 			if err := json.Unmarshal([]byte(event.Data), &streamResp); err != nil {
-				slog.Debug("解析 Gemini SSE 数据失败", "error", err)
+				slog.Debug("failed to parse Gemini SSE data", "error", err)
 				continue
 			}
 
@@ -328,7 +328,9 @@ func (p *GeminiProvider) Name() string {
 // CreateChatCompletion 发送非流式聊天补全请求。
 func (p *GeminiProvider) CreateChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	if req.Model == "" {
-		req.Model = p.model
+		reqCopy := *req
+		reqCopy.Model = p.model
+		req = &reqCopy
 	}
 
 	httpReq, err := p.transport.BuildRequest(ctx, req, p.apiKey)
@@ -364,7 +366,9 @@ func (p *GeminiProvider) CreateChatCompletion(ctx context.Context, req *ChatRequ
 // CreateChatCompletionStream 发送流式聊天补全请求。
 func (p *GeminiProvider) CreateChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan *StreamDelta, error) {
 	if req.Model == "" {
-		req.Model = p.model
+		reqCopy := *req
+		reqCopy.Model = p.model
+		req = &reqCopy
 	}
 
 	if req.Metadata == nil {
@@ -629,13 +633,23 @@ func buildGeminiRequestBody(req *ChatRequest) *geminiRequestBody {
 	var systemTextParts []string
 	var contentList []geminiRequestContent
 
+	// 构建 callID → toolName 索引，用于 RoleTool 消息查找函数名
+	callIDToName := make(map[string]string)
+	for i := range req.Messages {
+		if req.Messages[i].Role == RoleAssistant && len(req.Messages[i].ToolCalls) > 0 {
+			for _, tc := range req.Messages[i].ToolCalls {
+				callIDToName[tc.ID] = tc.Name
+			}
+		}
+	}
+
 	for _, msg := range req.Messages {
 		if msg.Role == RoleSystem {
 			systemTextParts = append(systemTextParts, msg.Content)
 			continue
 		}
 
-		gemMsg := convertMessageToGemini(&msg)
+		gemMsg := convertMessageToGemini(&msg, callIDToName)
 		if gemMsg != nil {
 			contentList = append(contentList, *gemMsg)
 		}
@@ -723,7 +737,7 @@ func buildGeminiRequestBody(req *ChatRequest) *geminiRequestBody {
 }
 
 // convertMessageToGemini 将统一消息转换为 Gemini 格式。
-func convertMessageToGemini(msg *Message) *geminiRequestContent {
+func convertMessageToGemini(msg *Message, callIDToName map[string]string) *geminiRequestContent {
 	switch msg.Role {
 	case RoleUser:
 		parts := []geminiPart{}
@@ -776,11 +790,19 @@ func convertMessageToGemini(msg *Message) *geminiRequestContent {
 		if err := json.Unmarshal([]byte(content), &responseMap); err != nil {
 			responseMap = map[string]any{"output": content}
 		}
+		// 查找函数名：优先 msg.Name，然后从 callIDToName 查找
+		funcName := msg.Name
+		if funcName == "" {
+			funcName = callIDToName[msg.ToolCallID]
+		}
+		if funcName == "" {
+			funcName = "unknown_function"
+		}
 		return &geminiRequestContent{
 			Role: "user",
 			Parts: []geminiPart{{
 				FunctionResponse: &geminiFunctionResponse{
-					Name:     msg.Name,
+					Name:     funcName,
 					Response: responseMap,
 				},
 			}},
@@ -849,5 +871,5 @@ func buildGeminiToolExtra(part geminiPart) map[string]any {
 
 func init() {
 	RegisterTransport("gemini_api", &GeminiTransport{baseURL: DefaultGeminiBaseURL})
-	slog.Debug("Gemini 传输层已注册", "apiMode", "gemini_api", "time", time.Now())
+	slog.Debug("Gemini transport registered", "apiMode", "gemini_api", "time", time.Now())
 }

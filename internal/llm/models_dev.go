@@ -75,7 +75,7 @@ func (c *ModelsDevClient) GetModel(modelID string) *ModelDevInfo {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := c.Refresh(ctx); err != nil {
-			slog.Debug("Models.dev 缓存刷新失败", "error", err)
+			slog.Debug("Models.dev cache refresh failed", "error", err)
 		}
 	}()
 
@@ -122,7 +122,7 @@ func (c *ModelsDevClient) Refresh(ctx context.Context) error {
 
 	fetched, err := c.fetchFromAPI(ctx)
 	if err != nil {
-		slog.Warn("Models.dev API 请求失败，保留现有缓存", "error", err)
+		slog.Warn("Models.dev API request failed, keeping existing cache", "error", err)
 		return fmt.Errorf("models.dev API 请求失败: %w", err)
 	}
 
@@ -135,7 +135,7 @@ func (c *ModelsDevClient) Refresh(ctx context.Context) error {
 	}
 	c.cacheTime = time.Now()
 
-	slog.Info("Models.dev 缓存已刷新", "count", len(c.cache))
+	slog.Info("Models.dev cache refreshed", "count", len(c.cache))
 	return nil
 }
 

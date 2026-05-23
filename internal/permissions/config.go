@@ -84,7 +84,7 @@ func LoadConfig(path string) (*PermissionConfig, error) {
 		return nil, fmt.Errorf("解析权限配置 %s: %w", path, err)
 	}
 
-	slog.Info("已加载权限配置", "path", path, "rules", len(cfg.Rules))
+	slog.Info("permission config loaded", "path", path, "rules", len(cfg.Rules))
 	return &cfg, nil
 }
 
@@ -95,7 +95,7 @@ func LoadMergedConfig(projectDir string) (*PermissionConfig, error) {
 	// 加载用户级配置
 	home, err := os.UserHomeDir()
 	if err != nil {
-		slog.Debug("无法获取用户主目录", "err", err)
+		slog.Debug("unable to get user home directory", "err", err)
 	}
 	userCfgPath := ""
 	if home != "" {
@@ -103,7 +103,7 @@ func LoadMergedConfig(projectDir string) (*PermissionConfig, error) {
 	}
 	userCfg, err := LoadConfig(userCfgPath)
 	if err != nil {
-		slog.Warn("用户级权限配置加载失败，忽略", "path", userCfgPath, "err", err)
+		slog.Warn("user-level permission config load failed, ignoring", "path", userCfgPath, "err", err)
 		userCfg = &PermissionConfig{Version: 1}
 	}
 
@@ -114,7 +114,7 @@ func LoadMergedConfig(projectDir string) (*PermissionConfig, error) {
 	}
 	projectCfg, err := LoadConfig(projectCfgPath)
 	if err != nil {
-		slog.Warn("项目级权限配置加载失败，忽略", "path", projectCfgPath, "err", err)
+		slog.Warn("project-level permission config load failed, ignoring", "path", projectCfgPath, "err", err)
 		projectCfg = &PermissionConfig{Version: 1}
 	}
 

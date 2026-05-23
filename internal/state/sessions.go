@@ -120,7 +120,7 @@ func (s *Store) tryCheckpoint(ctx context.Context) {
 	if result.Next() {
 		if err := result.Scan(&busy, &total, &checkpointed); err == nil {
 			if total > 0 {
-				slog.Debug("WAL checkpoint 完成",
+				slog.Debug("WAL checkpoint completed",
 					"busy", busy,
 					"total", total,
 					"checkpointed", checkpointed,
@@ -399,7 +399,7 @@ func (s *Store) GetCompressionTip(ctx context.Context, id string) (*Session, err
 	}
 
 	// 超过最大遍历深度
-	slog.Warn("GetCompressionTip 达到最大遍历深度", "session_id", id)
+	slog.Warn("GetCompressionTip reached max traversal depth", "session_id", id)
 	return s.getSessionLocked(ctx, current)
 }
 

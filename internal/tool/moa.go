@@ -243,7 +243,7 @@ func (t *MoATool) callReferenceModels(ctx context.Context, userPrompt string) []
 
 			response, err := t.callWithRetry(ctx, m, "", userPrompt, moaReferenceTemperature)
 			if err != nil {
-				slog.Warn("[MoA] 参考模型调用失败", "model", m, "err", err)
+				slog.Warn("[MoA] reference model call failed", "model", m, "err", err)
 				return
 			}
 
@@ -267,7 +267,7 @@ func (t *MoATool) callWithRetry(ctx context.Context, model, systemPrompt, userPr
 			return response, nil
 		}
 
-		slog.Debug("[MoA] 模型调用失败，重试", "model", model, "attempt", i+1, "err", err)
+		slog.Debug("[MoA] model call failed, retrying", "model", model, "attempt", i+1, "err", err)
 
 		if i < len(backoff) {
 			time.Sleep(backoff[i])
@@ -285,7 +285,7 @@ func (t *MoATool) aggregateResponses(ctx context.Context, userPrompt string, res
 	// 调用聚合模型
 	finalResponse, err := t.callWithRetry(ctx, moaAggregatorModel, moaAggregatorSystemPrompt, aggregatorPrompt, moaAggregatorTemperature)
 	if err != nil {
-		slog.Warn("[MoA] 聚合失败，返回第一个参考响应", "err", err)
+		slog.Warn("[MoA] aggregation failed, returning first reference response", "err", err)
 		if len(responses) > 0 {
 			return responses[0]
 		}

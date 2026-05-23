@@ -77,7 +77,7 @@ func BuildAuthorizationURL(cfg *OAuthConfig, state string) (authURL, verifier st
 	}
 
 	u.RawQuery = q.Encode()
-	slog.Debug("已构建 OAuth 授权 URL",
+	slog.Debug("OAuth authorization URL built",
 		"auth_url", u.String(),
 		"state", state,
 	)
@@ -164,7 +164,7 @@ func doTokenRequest(tokenURL string, data url.Values, clientID string) (*OAuthTo
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		slog.Error("Token 端点返回错误",
+		slog.Error("Token endpoint returned error",
 			"status", resp.StatusCode,
 			"body", string(body),
 		)
@@ -202,7 +202,7 @@ func doTokenRequest(tokenURL string, data url.Values, clientID string) (*OAuthTo
 		token.ExpiresAt = time.Now().Unix() + tokenResp.ExpiresIn
 	}
 
-	slog.Info("Token 交换成功",
+	slog.Info("Token exchange succeeded",
 		"token_type", token.TokenType,
 		"expires_in", tokenResp.ExpiresIn,
 		"has_refresh", tokenResp.RefreshToken != "",
@@ -248,7 +248,7 @@ func CompleteOAuthFlow(cfg *OAuthConfig, code, state, verifier string) (*OAuthTo
 		return nil, err
 	}
 
-	slog.Info("OAuth 授权流程完成",
+	slog.Info("OAuth authorization flow completed",
 		"access_token_prefix", token.AccessToken[:min(10, len(token.AccessToken))],
 		"expires_at", token.ExpiresAt,
 	)

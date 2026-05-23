@@ -10,15 +10,21 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"nexus-agent/internal/agent"
 	"nexus-agent/internal/config"
 	"nexus-agent/internal/cron"
+	ctxbuilder "nexus-agent/internal/context"
 	"nexus-agent/internal/gateway/platforms"
 	"nexus-agent/internal/llm"
+	"nexus-agent/internal/memory"
+	"nexus-agent/internal/skill"
 	"nexus-agent/internal/state"
+	"nexus-agent/internal/tool"
 )
 
 // ───────────────────────────── 网关运行器 ─────────────────────────────
@@ -32,7 +38,8 @@ type GatewayRunner struct {
 	sessionMgr  *SessionManager             // 会话管理
 	deliveryMgr *DeliveryManager            // 消息投递管理
 	hookReg     *HookRegistry               // 消息钩子
-	agentConfig *config.AgentConfig         // 代理配置
+	agentConfig *config.AgentConfig         // 代理配置 (窄配置，保留向后兼容)
+	fullConfig  *config.Config              // 完整配置 (用于构建 Builder/Provider/Memory/Skill)
 	state       *state.Store                // 持久化存储
 	cronSched   *cron.Scheduler             // 定时调度器
 	wg          sync.WaitGroup              // goroutine 计数器
@@ -41,8 +48,8 @@ type GatewayRunner struct {
 }
 
 // NewGatewayRunner 创建网关运行器。
-// cfg 为网关配置，agentCfg 为代理配置，state 为持久化存储，cronSched 为定时调度器。
-func NewGatewayRunner(cfg *config.GatewayConfig, agentCfg *config.AgentConfig, state *state.Store, cronSched *cron.Scheduler) *GatewayRunner {
+// cfg 为网关配置，fullCfg 为完整配置 (用于构建 Builder/Provider)，state 为持久化存储，cronSched 为定时调度器。
+func NewGatewayRunner(cfg *config.GatewayConfig, fullCfg *config.Config, state *state.Store, cronSched *cron.Scheduler) *GatewayRunner {
 	// 初始化缓存
 	cacheSize := cfg.Cache.MaxSize
 	if cacheSize <= 0 {
@@ -59,7 +66,8 @@ func NewGatewayRunner(cfg *config.GatewayConfig, agentCfg *config.AgentConfig, s
 		sessionMgr:  NewSessionManager(),
 		deliveryMgr: NewDeliveryManager(4096),
 		hookReg:     NewHookRegistry(),
-		agentConfig: agentCfg,
+		agentConfig: &fullCfg.Agent,
+		fullConfig:  fullCfg,
 		state:       state,
 		cronSched:   cronSched,
 		shutdownCh:  make(chan struct{}),
@@ -83,14 +91,14 @@ func (g *GatewayRunner) RegisterFromRegistry(gwCfg *config.GatewayConfig) {
 
 	for _, entry := range gwCfg.Platforms {
 		if !entry.Enabled {
-			slog.Info("跳过未启用的平台", "platform", entry.Platform)
+			slog.Info("skipping disabled platform", "platform", entry.Platform)
 			continue
 		}
 
 		platform := platforms.Platform(entry.Platform)
 		adapter, err := registry.Create(platform)
 		if err != nil {
-			slog.Warn("平台适配器未注册，跳过",
+			slog.Warn("platform adapter not registered, skipping",
 				"platform", entry.Platform,
 				"err", err,
 			)
@@ -110,7 +118,7 @@ func (g *GatewayRunner) RegisterFromRegistry(gwCfg *config.GatewayConfig) {
 			}
 
 			if err := configurable.Configure(settings); err != nil {
-				slog.Warn("平台适配器配置失败，跳过",
+				slog.Warn("platform adapter configuration failed, skipping",
 					"platform", entry.Platform,
 					"err", err,
 				)
@@ -281,11 +289,30 @@ func (g *GatewayRunner) processMessage(ctx context.Context, adapter platforms.Pl
 
 	// 4. 获取或创建代理实例
 	sessionAgent, err := g.agentCache.GetOrCreate(sessionKey, func() (*agent.AIAgent, string) {
-		// 工厂函数: 创建新的 AIAgent 实例
-		// 基于配置构建，设置会话信息
-		a := agent.DefaultAgentFromConfig(g.agentConfig)
-		// 注: 实际使用时会通过更多选项配置 agent
-		return a, g.agentConfig.Model // signature = 模型名
+		platform := string(adapter.PlatformType())
+
+		// 构建记忆管理器
+		var memMgr *memory.Manager
+		if h, err := os.UserHomeDir(); err == nil {
+			builtinProvider := memory.NewBuiltinProvider(filepath.Join(h, ".nexus"))
+			memMgr = memory.NewManager(builtinProvider)
+		}
+
+		// 构建技能管理器
+		var skillMgr *skill.Manager
+		if h, err := os.UserHomeDir(); err == nil {
+			skillsDir := filepath.Join(h, ".nexus", "skills")
+			skillMgr = skill.NewManager(skillsDir, g.fullConfig.Skills.Disabled)
+		}
+
+		ctxBuilder := ctxbuilder.NewBuilder("", platform, memMgr, skillMgr)
+		a := agent.NewAgent(
+			agent.WithConfigProvider(g.fullConfig),
+			agent.WithToolRegistry(tool.GetRegistry()),
+			agent.WithContextBuilder(ctxBuilder),
+			agent.WithMemoryManager(memMgr),
+		)
+		return a, g.fullConfig.Agent.Model
 	})
 	if err != nil {
 		slog.Error("failed to get agent from cache", "err", err)
@@ -345,7 +372,7 @@ func (g *GatewayRunner) processMessage(ctx context.Context, adapter platforms.Pl
 	} else {
 		// 非流式路径: 最终回复为空时不发送空消息（原实现在 FinalResponse
 		// 为空时也会调用 Send 发送空字符串，某些平台上会显示空消息）
-		slog.Warn("对话完成但无最终回复",
+		slog.Warn("conversation completed but no final response",
 			"session_key", sessionKey,
 		)
 	}

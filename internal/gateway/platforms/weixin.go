@@ -152,7 +152,7 @@ func (a *WeixinAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, erro
 	// 启动长轮询循环
 	go a.pollLoop(ctx, msgCh)
 
-	slog.Info("[Weixin] 已连接", "account", a.accountID)
+	slog.Info("[Weixin] connected", "account", a.accountID)
 	return msgCh, nil
 }
 
@@ -163,7 +163,7 @@ func (a *WeixinAdapter) Disconnect(ctx context.Context) error {
 	a.connected = false
 	a.mu.Unlock()
 
-	slog.Info("[Weixin] 已断开")
+	slog.Info("[Weixin] disconnected")
 	return nil
 }
 
@@ -186,7 +186,7 @@ func (a *WeixinAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) 
 		updates, err := a.getUpdates(ctx)
 		if err != nil {
 			consecutiveFailures++
-			slog.Warn("[Weixin] 获取消息失败", "err", err, "consecutive", consecutiveFailures)
+			slog.Warn("[Weixin] failed to fetch messages", "err", err, "consecutive", consecutiveFailures)
 
 			if consecutiveFailures >= weixinMaxConsecutiveFailures {
 				time.Sleep(time.Duration(weixinBackoffDelaySeconds) * time.Second)

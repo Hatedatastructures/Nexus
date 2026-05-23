@@ -72,6 +72,10 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]any) (string, err
 		return ToolError("参数 endpoint 是必填项且必须为字符串"), nil
 	}
 
+	if safe, reason := CheckURLSafety(endpoint); !safe {
+		return ToolError(fmt.Sprintf("端点 URL 不安全: %s", reason)), nil
+	}
+
 	toolName, ok := args["tool_name"].(string)
 	if !ok || toolName == "" {
 		return ToolError("参数 tool_name 是必填项且必须为字符串"), nil
@@ -79,14 +83,14 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]any) (string, err
 
 	toolArgs, _ := args["arguments"].(map[string]any)
 
-	slog.Info("MCP 工具调用",
+	slog.Info("MCP tool invocation",
 		"endpoint", endpoint,
 		"tool", toolName,
 	)
 
 	result, err := callMCPTool(ctx, endpoint, toolName, toolArgs)
 	if err != nil {
-		slog.Error("MCP 工具调用失败", "err", err)
+		slog.Error("MCP tool invocation failed", "err", err)
 		return ToolError(fmt.Sprintf("MCP 工具调用失败: %v", err)), nil
 	}
 
@@ -130,7 +134,7 @@ func callMCPTool(ctx context.Context, endpoint, toolName string, toolArgs map[st
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return "", fmt.Errorf("读取响应失败: %w", err)
 	}

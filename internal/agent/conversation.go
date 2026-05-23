@@ -13,6 +13,8 @@ import (
 
 	"nexus-agent/internal/llm"
 	ictx "nexus-agent/internal/context"
+	"nexus-agent/internal/state"
+	"nexus-agent/internal/telemetry"
 )
 
 // ───────────────────────────── 工具结果 ─────────────────────────────
@@ -44,12 +46,24 @@ type toolCall struct {
 func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, history []llm.Message, systemMessage string) (*TurnResult, error) {
 	startTime := time.Now()
 
-	slog.Info("对话轮次开始",
+	slog.Info("conversation turn started",
 		"session_id", a.sessionID,
 		"model", a.model,
 		"platform", a.platform,
 		"history_len", len(history),
 	)
+
+	telemetry.RecordSimple(telemetry.EventTurnStarted, a.sessionID, map[string]any{
+		"model":    a.model,
+		"platform": a.platform,
+	})
+
+	// 会话持久化: 记录用户输入
+	if a.persister != nil {
+if err := a.persister.RecordPromptHistory(userMessage); err != nil {
+			slog.Warn("failed to record prompt history", "session_id", a.sessionID, "err", err)
+		}
+	}
 
 	// ── 初始化 ──
 	a.mu.Lock()
@@ -72,7 +86,27 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 		return result, result.Error
 	}
 
+	// 1.5. 记忆预取: 将相关记忆注入系统提示词
+	if a.memoryManager != nil {
+		prefetched, pfErr := a.memoryManager.PrefetchAll(ctx, userMessage)
+		if pfErr == nil && prefetched != "" {
+			systemPrompt += "\n\n# 相关记忆\n\n" + prefetched
+		}
+	}
+
 	// ── 2. 组装消息列表 ──
+	// 2.5. 恢复模式: 从 state.Store 加载历史
+	if a.resumeMode && a.state != nil && a.sessionID != "" && len(history) == 0 {
+		if records, err := a.state.GetMessages(ctx, a.sessionID, 50, 0); err == nil && len(records) > 0 {
+			for _, r := range records {
+				history = append(history, llm.Message{
+					Role:    llm.MessageRole(r.Role),
+					Content: r.Content,
+				})
+			}
+		}
+	}
+
 	messages := make([]llm.Message, 0, len(history)+2)
 	messages = append(messages, llm.Message{
 		Role:    llm.RoleSystem,
@@ -101,7 +135,7 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 	for a.iterationBudget.Consume() {
 		apiCallCount++
 
-		slog.Debug("LLM 调用",
+		slog.Debug("LLM call",
 			"session_id", a.sessionID,
 			"iteration", apiCallCount,
 			"remaining", a.iterationBudget.Remaining(),
@@ -116,7 +150,7 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 		if err != nil {
 			if llm.ClassifyFromError(err).ShouldCompress && compressionAttempts < maxCompressionAttempts {
 				compressionAttempts++
-				slog.Warn("上下文溢出，触发压缩",
+				slog.Warn("context overflow, triggering compression",
 					"session_id", a.sessionID,
 					"attempt", compressionAttempts,
 				)
@@ -126,6 +160,9 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 
 			result.Error = fmt.Errorf("LLM 调用失败: %w", err)
 			result.Completed = false
+			telemetry.RecordSimple(telemetry.EventTurnFailed, a.sessionID, map[string]any{
+				"error": err.Error(),
+			})
 			return result, result.Error
 		}
 
@@ -133,6 +170,21 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 		if resp.Usage != nil {
 			result.TotalTokens += int64(resp.Usage.TotalTokens)
 			result.CachedTokens += int64(resp.Usage.CacheReadTokens)
+
+			// 成本计算
+			usage := CanonicalUsage{
+				InputTokens:         int64(resp.Usage.PromptTokens),
+				OutputTokens:        int64(resp.Usage.CompletionTokens),
+				CacheReadTokens:     int64(resp.Usage.CacheReadTokens),
+				CacheCreationTokens: int64(resp.Usage.CacheWriteTokens),
+			}
+			providerName := ""
+			if a.provider != nil {
+				providerName = a.provider.Name()
+			}
+			if costResult, err := EstimateCost(providerName, a.model, usage); err == nil {
+				result.CostUSD += costResult.TotalCost
+			}
 		}
 
 		// 推理过程回调
@@ -155,7 +207,7 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 		if len(resp.ToolCalls) > 0 {
 			// Anthropic 的 tool_use stop reason 显式处理
 			if stopReason == llm.StopToolUse || stopReason == "tool_use" {
-				slog.Debug("LLM 返回 tool_use 停止", "session_id", a.sessionID, "tool_count", len(resp.ToolCalls))
+				slog.Debug("LLM returned tool_use stop", "session_id", a.sessionID, "tool_count", len(resp.ToolCalls))
 			}
 		} else if stopReason == llm.StopEndTurn || stopReason == "stop" || stopReason == "" {
 			// end_turn / stop / 空: 无工具调用，退出循环
@@ -191,8 +243,24 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 				resp.ToolCalls = filtered
 			}
 
+			// 遥测: 工具执行开始
+			for _, tc := range resp.ToolCalls {
+				telemetry.RecordSimple(telemetry.EventToolStarted, a.sessionID, map[string]any{
+					"tool": tc.Name,
+				})
+			}
+
 			toolResults := a.executeToolCalls(ctx, resp.ToolCalls)
 			toolCallCount += len(resp.ToolCalls)
+
+			// 遥测: 工具执行结束
+			for _, tr := range toolResults {
+				data := map[string]any{"tool": tr.Name}
+				if tr.Error != nil {
+					data["error"] = tr.Error.Error()
+				}
+				telemetry.RecordSimple(telemetry.EventToolFinished, a.sessionID, data)
+			}
 
 			// Check 已同时更新护栏状态（历史记录、连续重复计数），
 			// 不再需要单独调用 Record，否则会导致双重计数使拦截过早触发。
@@ -212,7 +280,13 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 			estimatedTokens := estimateTokensRough(messages)
 			if a.compressor.ShouldCompress(a.compressor.TailTokenBudget(), estimatedTokens) {
 				compressionAttempts++
+				telemetry.RecordSimple(telemetry.EventCompTriggered, a.sessionID, map[string]any{
+					"estimated_tokens": estimatedTokens,
+				})
 				messages, systemPrompt = a.performCompress(ctx, messages, systemPrompt)
+				telemetry.RecordSimple(telemetry.EventCompCompleted, a.sessionID, map[string]any{
+					"message_count": len(messages),
+				})
 			}
 		}
 	}
@@ -239,7 +313,7 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					slog.Error("记忆同步 goroutine panic",
+					slog.Error("memory sync goroutine panic",
 						"session_id", a.sessionID,
 						"panic", r,
 					)
@@ -253,13 +327,51 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 	a.messages = messages
 	a.mu.Unlock()
 
-	slog.Info("对话轮次完成",
+	slog.Info("conversation turn completed",
 		"session_id", a.sessionID,
 		"api_calls", apiCallCount,
 		"tool_calls", toolCallCount,
 		"tokens", result.TotalTokens,
 		"duration_ms", result.Duration.Milliseconds(),
 	)
+
+	telemetry.RecordSimple(telemetry.EventTurnCompleted, a.sessionID, map[string]any{
+		"api_calls":  apiCallCount,
+		"tool_calls": toolCallCount,
+		"tokens":     result.TotalTokens,
+		"completed":  result.Completed,
+	})
+
+	// 会话持久化: 记录助手回复
+	if a.persister != nil && result.FinalResponse != "" {
+		if err := a.persister.RecordMessage(&state.MessageRecord{
+			SessionID: a.sessionID,
+			Role:      "assistant",
+			Content:   result.FinalResponse,
+		}); err != nil {
+			slog.Warn("failed to record assistant message", "session_id", a.sessionID, "err", err)
+		}
+
+	}
+	// state.Store: 持久化用户消息和助手回复
+	if a.state != nil && a.sessionID != "" {
+		if err := a.state.InsertMessage(ctx, &state.MessageRecord{
+			SessionID: a.sessionID,
+			Role:      "user",
+			Content:   userMessage,
+		}); err != nil {
+			slog.Warn("failed to persist user message to state store", "session_id", a.sessionID, "err", err)
+		}
+		if result.FinalResponse != "" {
+			if err := a.state.InsertMessage(ctx, &state.MessageRecord{
+				SessionID: a.sessionID,
+				Role:      "assistant",
+				Content:   result.FinalResponse,
+			}); err != nil {
+				slog.Warn("failed to persist assistant message to state store", "session_id", a.sessionID, "err", err)
+			}
+		}
+	}
 
 	return result, nil
 }
@@ -325,14 +437,14 @@ func (a *AIAgent) preflightCompress(ctx context.Context, messages []llm.Message,
 		return messages, systemPrompt
 	}
 
-	slog.Info("预压缩: 上下文已超阈值",
+	slog.Info("pre-compression: context exceeded threshold",
 		"session_id", a.sessionID,
 		"estimated_tokens", estimatedTokens,
 	)
 
 	compressed, err := a.compressor.Compress(ctx, messages, a.provider, "")
 	if err != nil {
-		slog.Warn("预压缩失败", "session_id", a.sessionID, "err", err)
+		slog.Warn("pre-compression failed", "session_id", a.sessionID, "err", err)
 		return messages, systemPrompt
 	}
 
@@ -342,14 +454,14 @@ func (a *AIAgent) preflightCompress(ctx context.Context, messages []llm.Message,
 
 // performCompress 执行上下文压缩并返回压缩后的消息。
 func (a *AIAgent) performCompress(ctx context.Context, messages []llm.Message, systemPrompt string) ([]llm.Message, string) {
-	slog.Info("上下文压缩触发",
+	slog.Info("context compression triggered",
 		"session_id", a.sessionID,
 		"message_count", len(messages),
 	)
 
 	compressed, err := a.compressor.Compress(ctx, messages, a.provider, "")
 	if err != nil {
-		slog.Warn("压缩失败", "session_id", a.sessionID, "err", err)
+		slog.Warn("compression failed", "session_id", a.sessionID, "err", err)
 		return messages, systemPrompt
 	}
 
@@ -380,13 +492,18 @@ func (a *AIAgent) buildAPIRequest(messages []llm.Message, _ string) *llm.ChatReq
 	}
 
 	if a.reasoningCfg != nil && a.reasoningCfg.Enabled {
+		thinkingCfg := &llm.ThinkingConfig{
+			Type:         "enabled",
+			BudgetTokens: a.reasoningCfg.BudgetTokens,
+			Effort:       a.reasoningCfg.Effort,
+		}
 		if a.reasoningCfg.BudgetTokens > 0 {
-			req.Metadata = map[string]any{
-				"thinking": map[string]any{
-					"type":          "enabled",
-					"budget_tokens": a.reasoningCfg.BudgetTokens,
-				},
-			}
+			thinkingCfg.Type = "enabled"
+		} else {
+			thinkingCfg.Type = "auto"
+		}
+		if thinkingParams := llm.BuildThinkingParam(thinkingCfg, a.model); thinkingParams != nil {
+			req.Metadata = thinkingParams
 		}
 	}
 
@@ -429,7 +546,7 @@ func (a *AIAgent) callLLMWithRetry(ctx context.Context, req *llm.ChatRequest, me
 
 		// 分类错误并执行恢复策略
 		classified := llm.ClassifyFromError(err)
-		slog.Warn("LLM 调用失败",
+		slog.Warn("LLM call failed",
 			"session_id", a.sessionID,
 			"attempt", attempt+1,
 			"max_retries", maxRetries,
@@ -470,7 +587,7 @@ func (a *AIAgent) callLLMWithRetry(ctx context.Context, req *llm.ChatRequest, me
 		// 退避等待
 		if attempt < maxRetries-1 {
 			backoff := time.Duration(1<<uint(attempt)) * time.Second
-			slog.Debug("退避等待", "duration", backoff)
+			slog.Debug("backoff waiting", "duration", backoff)
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -513,6 +630,10 @@ func (a *AIAgent) handleStreamCall(ctx context.Context, req *llm.ChatRequest) (*
 	for delta := range deltaCh {
 		if delta.Error != nil {
 			return nil, delta.Error
+		}
+
+		if delta.Done {
+			break
 		}
 
 		if delta.Content != "" {
@@ -575,11 +696,26 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 func (a *AIAgent) executeParallel(ctx context.Context, calls []toolCall) []toolResult {
 	results := make([]toolResult, len(calls))
 	var wg sync.WaitGroup
+	toolCb := a.toolCallback
 
 	for i, pc := range calls {
 		wg.Add(1)
 		go func(idx int, c toolCall) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("tool execution panic in parallel",
+						"tool", c.call.Name,
+						"panic", r,
+					)
+					results[idx] = toolResult{
+						CallID: c.call.ID,
+						Name:   c.call.Name,
+						Result: fmt.Sprintf(`{"error": "工具执行发生内部错误: %v"}`, r),
+						Error:  fmt.Errorf("工具执行 panic: %v", r),
+					}
+				}
+			}()
 
 			// 命令安全审批（与 executeSequential 保持一致，防止绕过审批检查）
 			if a.approvalChecker != nil {
@@ -591,8 +727,8 @@ func (a *AIAgent) executeParallel(ctx context.Context, calls []toolCall) []toolR
 						Result: fmt.Sprintf(`{"error": "工具调用被拒绝: %s", "tool": "%s"}`, reason, c.call.Name),
 						Error:  fmt.Errorf("审批未通过: %s", reason),
 					}
-					if a.toolCallback != nil {
-						a.toolCallback(c.call.Name, c.args)
+					if toolCb != nil {
+						toolCb(c.call.Name, c.args)
 					}
 					return
 				}
@@ -605,8 +741,8 @@ func (a *AIAgent) executeParallel(ctx context.Context, calls []toolCall) []toolR
 				Result: result,
 				Error:  err,
 			}
-			if a.toolCallback != nil {
-				a.toolCallback(c.call.Name, c.args)
+			if toolCb != nil {
+				toolCb(c.call.Name, c.args)
 			}
 		}(i, pc)
 	}
@@ -637,17 +773,33 @@ func (a *AIAgent) executeSequential(ctx context.Context, calls []toolCall) []too
 			}
 		}
 
-		result, err := a.dispatchTool(ctx, pc.call.Name, pc.args)
-		results[i] = toolResult{
-			CallID: pc.call.ID,
-			Name:   pc.call.Name,
-			Result: result,
-			Error:  err,
-		}
-
-		if a.toolCallback != nil {
-			a.toolCallback(pc.call.Name, pc.args)
-		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("tool execution panic",
+						"tool", pc.call.Name,
+						"panic", r,
+					)
+					results[i] = toolResult{
+						CallID: pc.call.ID,
+						Name:   pc.call.Name,
+						Result: fmt.Sprintf(`{"error": "工具执行发生内部错误: %v"}`, r),
+						Error:  fmt.Errorf("工具执行 panic: %v", r),
+					}
+				}
+			}()
+			result, err := a.dispatchTool(ctx, pc.call.Name, pc.args)
+			results[i] = toolResult{
+				CallID: pc.call.ID,
+				Name:   pc.call.Name,
+				Result: result,
+				Error:  err,
+			}
+	
+			if a.toolCallback != nil {
+				a.toolCallback(pc.call.Name, pc.args)
+			}
+		}()
 	}
 
 	return results
@@ -663,7 +815,7 @@ func (a *AIAgent) applyGuardrails(toolCalls []llm.ToolCall) []llm.ToolCall {
 		if allowed {
 			filtered = append(filtered, tc)
 		} else {
-			slog.Warn("工具调用被护栏拦截",
+			slog.Warn("tool call blocked by guardrails",
 				"session_id", a.sessionID,
 				"tool", tc.Name,
 				"reason", reason,
@@ -692,7 +844,7 @@ func (a *AIAgent) dispatchTool(ctx context.Context, name string, args map[string
 
 			allowed, reason := a.fileSafety.CheckWrite(path, contentSize)
 			if !allowed {
-				slog.Warn("文件写入被安全检查器拦截",
+				slog.Warn("file write blocked by safety checker",
 					"session_id", a.sessionID,
 					"tool", name,
 					"path", path,
@@ -753,7 +905,7 @@ func parseToolArguments(argsJSON string) map[string]any {
 	}
 	var args map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		slog.Warn("工具参数 JSON 解析失败", "err", err)
+		slog.Warn("tool arguments JSON parse failed", "err", err)
 		return make(map[string]any)
 	}
 	return args
@@ -765,4 +917,3 @@ func parseToolArguments(argsJSON string) map[string]any {
 func estimateTokensRough(messages []llm.Message) int {
 	return llm.EstimateTokensRough(messages)
 }
-

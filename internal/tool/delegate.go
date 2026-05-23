@@ -106,7 +106,7 @@ func (t *DelegateTaskTool) Execute(ctx context.Context, args map[string]any) (st
 	subCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	slog.Info("启动子代理委派",
+	slog.Info("starting sub-agent delegation",
 		"task", truncateForLog(task, 200),
 		"role", role,
 		"timeout", timeout.String(),
@@ -120,7 +120,7 @@ func (t *DelegateTaskTool) Execute(ctx context.Context, args map[string]any) (st
 	// 单任务执行
 	result, err := t.executeSingleTask(subCtx, task, contextInfo, role)
 	if err != nil {
-		slog.Error("子代理执行失败", "task", truncateForLog(task, 100), "err", err)
+		slog.Error("sub-agent execution failed", "task", truncateForLog(task, 100), "err", err)
 		return ToolError(fmt.Sprintf("子代理执行失败: %v", err)), nil
 	}
 
@@ -138,7 +138,7 @@ func (t *DelegateTaskTool) executeSingleTask(ctx context.Context, task, contextI
 		return ToolError("子代理委派不可用: 子代理执行器未注入。请在 CLI 或网关启动时调用 tool.SetSubAgentRunner()"), nil
 	}
 
-	slog.Debug("调用子代理执行器", "task", truncateForLog(task, 100))
+	slog.Debug("calling sub-agent executor", "task", truncateForLog(task, 100))
 
 	// 执行子代理
 	result, err := runner(ctx, systemPrompt, task)
@@ -174,7 +174,7 @@ func (t *DelegateTaskTool) executeBatchTasks(ctx context.Context, tasksJSON, con
 		return ToolError("批量任务列表为空"), nil
 	}
 
-	slog.Info("批量子任务开始", "total", len(tasks))
+	slog.Info("batch subtasks started", "total", len(tasks))
 
 	// 计算每个子任务的超时
 	// 从父 context 获取剩余超时，平均分配给各任务，最小 60 秒
@@ -222,7 +222,7 @@ func (t *DelegateTaskTool) executeBatchTasks(ctx context.Context, tasksJSON, con
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			slog.Info("并行子任务执行中", "index", idx+1, "total", len(tasks), "task", truncateForLog(desc, 100))
+			slog.Info("parallel subtask executing", "index", idx+1, "total", len(tasks), "task", truncateForLog(desc, 100))
 
 			// 为子任务创建带独立超时的 context
 			subCtx, cancel := context.WithTimeout(ctx, perTaskTimeout)
@@ -235,7 +235,7 @@ func (t *DelegateTaskTool) executeBatchTasks(ctx context.Context, tasksJSON, con
 			if err != nil {
 				status = "failed"
 				errMsg = err.Error()
-				slog.Error("并行子任务失败", "index", idx+1, "err", err)
+				slog.Error("parallel subtask failed", "index", idx+1, "err", err)
 			}
 
 			results[idx] = taskResult{
@@ -263,7 +263,7 @@ func (t *DelegateTaskTool) executeBatchTasks(ctx context.Context, tasksJSON, con
 		}
 	}
 
-	slog.Info("批量子任务完成", "total", len(tasks), "completed", completed, "failed", failed)
+	slog.Info("batch subtasks completed", "total", len(tasks), "completed", completed, "failed", failed)
 
 	resultJSON, _ := json.Marshal(map[string]any{
 		"total":     len(tasks),

@@ -97,7 +97,7 @@ func (b *BaseEnvironment) Execute(ctx context.Context, action Action) (*Observat
 	// 更新状态
 	b.state = fmt.Sprintf("executing: %s", action.Type)
 
-	slog.Debug("环境: 执行动作",
+	slog.Debug("environment: executing action",
 		"name", b.Name,
 		"action_type", action.Type,
 		"history_len", len(b.history),
@@ -126,7 +126,7 @@ func (b *BaseEnvironment) Reset(ctx context.Context) error {
 	b.history = make([]Action, 0)
 	b.done = false
 
-	slog.Info("环境: 已重置", "name", b.Name)
+	slog.Info("environment: reset", "name", b.Name)
 	return nil
 }
 
@@ -138,7 +138,7 @@ func (b *BaseEnvironment) Step(ctx context.Context) (*Observation, error) {
 	default:
 	}
 
-	slog.Debug("环境: 步进", "name", b.Name, "state", b.state)
+	slog.Debug("environment: step", "name", b.Name, "state", b.state)
 	return &Observation{
 		State:  b.state,
 		Reward: 0.0,

@@ -56,7 +56,7 @@ func NewAuxiliaryClientWithConfig(router *ProviderRouter, cfg *AuxiliaryClientCo
 		retryCount: cfg.RetryCount,
 	}
 
-	slog.Info("AuxiliaryClient 已初始化", "retryCount", client.retryCount)
+	slog.Info("AuxiliaryClient initialized", "retryCount", client.retryCount)
 	return client
 }
 
@@ -87,7 +87,7 @@ func (c *AuxiliaryClient) chatCompletionWithStrategy(ctx context.Context, req *l
 			continue
 		}
 
-		slog.Debug("尝试提供者",
+		slog.Debug("trying provider",
 			"provider", entry.Provider.Name(),
 			"model", entry.Model,
 			"attempt", attempted+1,
@@ -96,7 +96,7 @@ func (c *AuxiliaryClient) chatCompletionWithStrategy(ctx context.Context, req *l
 		resp, err := c.tryProvider(ctx, entry, req)
 		if err == nil {
 			c.router.MarkHealthy(entry.Provider.Name(), true)
-			slog.Info("聊天补全成功",
+			slog.Info("chat completion succeeded",
 				"provider", entry.Provider.Name(),
 				"model", entry.Model,
 				"stopReason", resp.StopReason,
@@ -113,7 +113,7 @@ func (c *AuxiliaryClient) chatCompletionWithStrategy(ctx context.Context, req *l
 		switch action {
 		case actionRetry:
 			// 在当前提供者上重试
-			slog.Warn("在当前提供者上重试",
+			slog.Warn("retrying on current provider",
 				"provider", entry.Provider.Name(),
 				"error", err.Error(),
 			)
@@ -123,7 +123,7 @@ func (c *AuxiliaryClient) chatCompletionWithStrategy(ctx context.Context, req *l
 		case actionRetryThenFallback:
 			// 标记不健康，尝试下一个
 			c.router.MarkHealthy(entry.Provider.Name(), false)
-			slog.Warn("提供者失败，重试耗尽后降级",
+			slog.Warn("provider failed, fallback after retries exhausted",
 				"provider", entry.Provider.Name(),
 				"error", err.Error(),
 			)
@@ -132,7 +132,7 @@ func (c *AuxiliaryClient) chatCompletionWithStrategy(ctx context.Context, req *l
 		case actionImmediateFallback:
 			// 立即降级到下一个提供者
 			c.router.MarkHealthy(entry.Provider.Name(), false)
-			slog.Warn("立即降级到下一个提供者",
+			slog.Warn("immediately falling back to next provider",
 				"provider", entry.Provider.Name(),
 				"error", err.Error(),
 			)
@@ -140,7 +140,7 @@ func (c *AuxiliaryClient) chatCompletionWithStrategy(ctx context.Context, req *l
 
 		case actionAbort:
 			// 不可恢复的错误，直接返回
-			slog.Error("不可恢复的错误，终止降级",
+			slog.Error("unrecoverable error, aborting fallback",
 				"provider", entry.Provider.Name(),
 				"error", err.Error(),
 			)
@@ -172,7 +172,7 @@ func (c *AuxiliaryClient) chatCompletionStreamWithStrategy(ctx context.Context, 
 			continue
 		}
 
-		slog.Debug("尝试提供者（流式）",
+		slog.Debug("trying provider (streaming)",
 			"provider", entry.Provider.Name(),
 			"model", entry.Model,
 		)
@@ -221,7 +221,7 @@ func (c *AuxiliaryClient) tryProvider(ctx context.Context, entry *ProviderEntry,
 		if attempt > 0 {
 			// 重试前短暂等待
 			delay := ExponentialBackoff(attempt-1, 1*time.Second, 30*time.Second)
-			slog.Debug("重试等待", "attempt", attempt, "delay", delay.String())
+			slog.Debug("retry waiting", "attempt", attempt, "delay", delay.String())
 
 			timer := time.NewTimer(delay)
 			select {

@@ -109,7 +109,7 @@ func (t *ImageGenTool) Execute(ctx context.Context, args map[string]any) (string
 	// 调用 API 生成
 	imageURL, base64Data, err := t.generateImage(ctx, model, prompt, size, quality)
 	if err != nil {
-		slog.Error("图像生成失败", "prompt", prompt, "err", err)
+		slog.Error("image generation failed", "prompt", prompt, "err", err)
 		return ToolError(fmt.Sprintf("图像生成失败: %v", err)), nil
 	}
 
@@ -118,18 +118,18 @@ func (t *ImageGenTool) Execute(ctx context.Context, args map[string]any) (string
 	if outputPath != "" {
 		// 安全敏感路径检查
 		if isPathSensitive(outputPath) {
-			slog.Warn("图像保存被阻止 (敏感路径)", "path", outputPath)
+			slog.Warn("image save blocked (sensitive path)", "path", outputPath)
 			return ToolError(fmt.Sprintf("安全限制: 不允许写入敏感路径 %s", outputPath)), nil
 		}
 
 		if err := t.saveImage(outputPath, base64Data, imageURL); err != nil {
-			slog.Error("保存图片失败", "path", outputPath, "err", err)
+			slog.Error("failed to save image", "path", outputPath, "err", err)
 			return ToolError(fmt.Sprintf("保存图片失败: %v", err)), nil
 		}
 		savedPath = outputPath
 	}
 
-	slog.Info("图像生成成功", "prompt", prompt[:min(50, len(prompt))], "model", model)
+	slog.Info("image generation succeeded", "prompt", prompt[:min(50, len(prompt))], "model", model)
 
 	result := map[string]any{
 		"output": fmt.Sprintf("图片生成成功 (模型: %s, 尺寸: %s)", model, size),
@@ -199,7 +199,7 @@ func (t *ImageGenTool) generateImage(ctx context.Context, model, prompt, size, q
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return "", "", fmt.Errorf("读取响应失败: %w", err)
 	}
@@ -268,11 +268,11 @@ func (t *ImageGenTool) saveImage(path string, b64Data string, imageURL string) e
 		return fmt.Errorf("没有可用的图片数据")
 	}
 
-	if err := os.WriteFile(path, imgData, 0644); err != nil {
+	if err := os.WriteFile(path, imgData, 0600); err != nil {
 		return fmt.Errorf("写入文件失败: %w", err)
 	}
 
-	slog.Info("图片已保存", "path", path, "size", len(imgData))
+	slog.Info("image saved", "path", path, "size", len(imgData))
 	return nil
 }
 

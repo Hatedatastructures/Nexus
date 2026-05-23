@@ -46,12 +46,13 @@ var dockerDefaultSecurityArgs = []string{
 
 // DockerSecurityOptions 定义 Docker 容器的安全加固选项。
 type DockerSecurityOptions struct {
-	CapDrop     []string // 要移除的 capabilities
-	CapAdd      []string // 要添加的 capabilities
-	SecurityOpt []string // 安全选项
-	PIDsLimit   int      // 进程数限制
-	NoNewPrivs  bool     // 禁止新权限提升
-	TmpfsSizeMB int      // /tmp tmpfs 大小 (MB)
+	CapDrop      []string // 要移除的 capabilities
+	CapAdd       []string // 要添加的 capabilities
+	SecurityOpt  []string // 安全选项
+	PIDsLimit    int      // 进程数限制
+	NoNewPrivs   bool     // 禁止新权限提升
+	TmpfsSizeMB  int      // /tmp tmpfs 大小 (MB)
+	NetworkNone  bool     // 禁用网络 (--network=none)
 }
 
 // DefaultDockerSecurity 返回默认的安全加固配置。
@@ -63,6 +64,7 @@ func DefaultDockerSecurity() *DockerSecurityOptions {
 		PIDsLimit:   256,
 		NoNewPrivs:  true,
 		TmpfsSizeMB: 512,
+		NetworkNone: true,
 	}
 }
 
@@ -106,6 +108,9 @@ func NewDockerEnvironment(containerID, cwd string, sec *DockerSecurityOptions) *
 	}
 	if sec.TmpfsSizeMB > 0 {
 		e.securityOpts = append(e.securityOpts, "--tmpfs", fmt.Sprintf("/tmp:rw,nosuid,size=%dm", sec.TmpfsSizeMB))
+	}
+	if sec.NetworkNone {
+		e.securityOpts = append(e.securityOpts, "--network", "none")
 	}
 
 	return e
@@ -189,7 +194,7 @@ func (e *DockerEnvironment) Execute(ctx context.Context, command string, opts *E
 	// 更新 CWD (Docker 环境不直接跟踪，保持原值)
 	result.CWD = cwd
 
-	slog.Debug("Docker 命令执行完成",
+	slog.Debug("Docker command execution completed",
 		"container", e.containerID,
 		"exitCode", result.ExitCode,
 		"duration", duration.String(),
@@ -234,7 +239,7 @@ func (e *DockerEnvironment) ExecuteBackground(ctx context.Context, command strin
 
 	// 提取容器内的进程 ID
 	containerPID := strings.TrimSpace(stdout.String())
-	slog.Info("Docker 后台进程已启动", "container", e.containerID, "containerPID", containerPID)
+	slog.Info("Docker background process started", "container", e.containerID, "containerPID", containerPID)
 	_ = containerPID
 
 	return handle, nil

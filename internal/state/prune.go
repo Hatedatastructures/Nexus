@@ -87,7 +87,7 @@ func (s *Store) AutoPrune(ctx context.Context, maxAgeDays int) (int, error) {
 	}
 
 	if len(removedIDs) > 0 {
-		slog.Info("自动清理过期会话",
+		slog.Info("auto-pruned expired sessions",
 			"count", len(removedIDs),
 			"max_age_days", maxAgeDays,
 		)

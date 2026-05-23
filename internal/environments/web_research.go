@@ -109,7 +109,7 @@ func (w *WebResearchEnvironment) SetQuery(query string) {
 	defer w.mu.Unlock()
 	w.query = query
 	w.startTime = time.Now()
-	slog.Info("网页研究: 设置查询", "query", query)
+	slog.Info("web research: query set", "query", query)
 }
 
 // Execute 执行网页研究环境中的动作。
@@ -176,7 +176,7 @@ func (w *WebResearchEnvironment) handleSearch(action Action) (*Observation, erro
 	// 评估搜索质量并更新分数
 	w.evaluateQuality()
 
-	slog.Info("网页研究: 搜索", "keywords", keywords, "sources_count", len(w.sources))
+	slog.Info("web research: search", "keywords", keywords, "sources_count", len(w.sources))
 
 	return &Observation{
 		State:  fmt.Sprintf("已找到来源 (%d/%d), 阶段: %s", len(w.sources), w.maxSources, w.phase.phaseName()),
@@ -206,7 +206,7 @@ func (w *WebResearchEnvironment) handleRead(action Action) (*Observation, error)
 		w.phase = PhaseDeepDive
 	}
 
-	slog.Info("网页研究: 深入阅读", "phase", w.phase.phaseName())
+	slog.Info("web research: deep read", "phase", w.phase.phaseName())
 
 	return &Observation{
 		State:  fmt.Sprintf("正在深入阅读, 阶段: %s", w.phase.phaseName()),
@@ -233,7 +233,7 @@ func (w *WebResearchEnvironment) handleValidate(action Action) (*Observation, er
 		}
 	}
 
-	slog.Info("网页研究: 交叉验证",
+	slog.Info("web research: cross-validate",
 		"verified", verifiedCount,
 		"total", len(w.sources),
 	)
@@ -275,7 +275,7 @@ func (w *WebResearchEnvironment) handleSynthesize(action Action) (*Observation, 
 	}
 	w.findings = append(w.findings, finding)
 
-	slog.Info("网页研究: 综合总结",
+	slog.Info("web research: synthesize",
 		"findings_count", len(w.findings),
 		"confidence", finding.Confidence,
 	)
@@ -305,7 +305,7 @@ func (w *WebResearchEnvironment) handleSubmit() (*Observation, error) {
 	w.phase = PhaseComplete
 	w.done = true
 
-	slog.Info("网页研究: 提交完成",
+	slog.Info("web research: submitted",
 		"sources", len(w.sources),
 		"findings", len(w.findings),
 		"quality_score", w.qualityScore,
@@ -350,7 +350,7 @@ func (w *WebResearchEnvironment) Step(ctx context.Context) (*Observation, error)
 
 	w.evaluateQuality()
 
-	slog.Debug("网页研究: 阶段推进", "phase", w.phase.phaseName())
+	slog.Debug("web research: phase advanced", "phase", w.phase.phaseName())
 
 	return &Observation{
 		State:  fmt.Sprintf("阶段已推进至: %s", w.phase.phaseName()),

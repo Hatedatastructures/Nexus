@@ -36,7 +36,8 @@ type AIAgent struct {
 	skillManager    *skill.Manager      // 技能管理器
 	contextBuilder  *context.Builder    // 系统提示词构建器
 	compressor      *context.Compressor // 上下文压缩器
-	state           *state.Store        // 持久化存储
+	state           *state.Store              // 持久化存储
+	persister       *state.SessionPersister   // 会话 JSONL 持久化
 	credentialPool  *credential.Pool    // 凭证池
 	approvalChecker *approval.Checker   // 命令审批
 	sandboxEnv      sandbox.Environment // 沙箱环境
@@ -58,6 +59,7 @@ type AIAgent struct {
 	mu                sync.Mutex           // 并发保护
 	iterationBudget   *IterationBudget     // 迭代预算
 	guardrails        *ToolCallGuardrails  // 工具调用安全护栏
+		recoveryEngine    *RecoveryEngine      // 错误恢复引擎
 	cachedSystemPrompt string              // 缓存的系统提示词
 	messages          []llm.Message        // 当前对话消息列表
 	maxRetries        int                  // 最大重试次数
@@ -66,6 +68,7 @@ type AIAgent struct {
 	router            *ProviderRouter      // 多提供者路由器 (优先级/健康检查)
 	fallbackChain     *FallbackChain       // 回退链 (主提供者失败后的降级路径)
 	pendingFallbackChain []config.FallbackEntryConfig // 待构建的回退链配置 (延迟解析)
+	resumeMode        bool                 // 是否从历史会话恢复
 }
 
 // ───────────────────────────── 构造函数 ─────────────────────────────
@@ -79,6 +82,7 @@ func NewAgent(opts ...AgentOption) *AIAgent {
 		maxTokens:       4096,
 		iterationBudget: NewIterationBudget(90),
 		guardrails:      NewToolCallGuardrails(),
+		recoveryEngine:  NewRecoveryEngine(),
 		maxRetries:      3,
 	}
 
@@ -110,7 +114,7 @@ func (a *AIAgent) InitRouter(entries []*ProviderEntry) {
 		return
 	}
 	a.router = NewProviderRouter(entries)
-	slog.Info("AIAgent: ProviderRouter 已初始化", "entry_count", len(entries))
+	slog.Info("AIAgent: ProviderRouter initialized", "entry_count", len(entries))
 }
 
 // InitFallbackChain 从延迟解析的配置构建回退链。
@@ -141,4 +145,15 @@ func (a *AIAgent) Router() *ProviderRouter {
 // FallbackChain 返回回退链 (用于外部检查)。
 func (a *AIAgent) FallbackChain() *FallbackChain {
 	return a.fallbackChain
+}
+
+// Shutdown 清理 AIAgent 持有的资源。
+// 在代理实例被缓存驱逐或会话结束时调用。
+func (a *AIAgent) Shutdown() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// 清空内部消息缓存
+	a.messages = nil
+	a.cachedSystemPrompt = ""
 }

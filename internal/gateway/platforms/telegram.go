@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -19,11 +20,13 @@ import (
 // TelegramAdapter 实现 Telegram Bot API 的 HTTP 长轮询适配器。
 // 使用 getUpdates 方法接收消息，通过 sendMessage/editMessageText 发送/编辑消息。
 type TelegramAdapter struct {
-	token    string             // Bot Token
-	client   *http.Client       // HTTP 客户端
-	baseURL  string             // API 基础 URL: https://api.telegram.org/bot{token}
-	msgCh    chan *MessageEvent // 入站消息通道
-	cancelFn context.CancelFunc // 取消函数
+	token         string             // Bot Token
+	client        *http.Client       // HTTP 客户端
+	baseURL       string             // API 基础 URL: https://api.telegram.org/bot{token}
+	msgCh         chan *MessageEvent // 入站消息通道
+	cancelFn      context.CancelFunc // 取消函数
+	disconnectOnce sync.Once         // 确保 Disconnect 只执行一次
+	mu             sync.Mutex        // 保护 cancelFn
 }
 
 // NewTelegramAdapter 创建 Telegram 适配器。
@@ -51,18 +54,27 @@ func (t *TelegramAdapter) SupportsStreaming() bool { return true }
 
 // Connect 启动长轮询 goroutine 开始接收消息。
 func (t *TelegramAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error) {
-	ctx, t.cancelFn = context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+
+	t.mu.Lock()
+	t.cancelFn = cancel
+	t.mu.Unlock()
+
 	go t.pollLoop(ctx)
 	slog.Info("telegram adapter connected")
 	return t.msgCh, nil
 }
 
-// Disconnect 取消上下文并关闭消息通道。
-func (t *TelegramAdapter) Disconnect(ctx context.Context) error {
-	if t.cancelFn != nil {
-		t.cancelFn()
-	}
-	close(t.msgCh)
+// Disconnect 取消上下文并等待 pollLoop 退出。
+func (t *TelegramAdapter) Disconnect(_ context.Context) error {
+	t.disconnectOnce.Do(func() {
+		t.mu.Lock()
+		if t.cancelFn != nil {
+			t.cancelFn()
+		}
+		t.mu.Unlock()
+		// pollLoop 会在 ctx.Done() 后关闭 msgCh
+	})
 	slog.Info("telegram adapter disconnected")
 	return nil
 }
@@ -167,6 +179,8 @@ func (t *TelegramAdapter) SendDocument(ctx context.Context, chatID string, fileP
 
 // pollLoop 长轮询循环。
 func (t *TelegramAdapter) pollLoop(ctx context.Context) {
+	defer close(t.msgCh) // pollLoop 退出时关闭 channel，避免外部 close 导致 panic
+
 	offset := 0
 	retryDelay := time.Second
 

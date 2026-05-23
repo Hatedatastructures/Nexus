@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"gopkg.in/yaml.v3"
 )
 
 // ───────────────────────────── ShellHook 实现 ─────────────────────────────
@@ -116,7 +118,7 @@ func (m *HookManager) Register(hook Hook) error {
 	defer m.mu.Unlock()
 
 	m.hooks = append(m.hooks, hook)
-	slog.Info("Hook 已注册", "name", hook.Name(), "event", hook.Event())
+	slog.Info("Hook registered", "name", hook.Name(), "event", hook.Event())
 	return nil
 }
 
@@ -198,18 +200,18 @@ func (m *HookManager) executeChain(ctx context.Context, eventType string, toolNa
 		// 执行 hook
 		resp, err := hook.Execute(ctx, event)
 		if err != nil {
-			slog.Warn("Hook 执行失败，跳过", "name", hook.Name(), "event", eventType, "err", err)
+			slog.Warn("Hook execution failed, skipping", "name", hook.Name(), "event", eventType, "err", err)
 			continue
 		}
 
 		// pre_tool_call: block 终止链
 		if eventType == EventPreToolCall && resp.IsBlock() {
-			slog.Info("Hook 阻止工具调用", "name", hook.Name(), "tool", toolName, "reason", resp.Reason)
+			slog.Info("Hook blocked tool call", "name", hook.Name(), "tool", toolName, "reason", resp.Reason)
 			return resp, true, nil
 		}
 
 		// post_tool_call 或 allow/modify: 继续执行下一个 hook
-		slog.Debug("Hook 执行完成", "name", hook.Name(), "event", eventType, "decision", resp.Decision)
+		slog.Debug("Hook execution completed", "name", hook.Name(), "event", eventType, "decision", resp.Decision)
 	}
 
 	return nil, false, nil
@@ -226,7 +228,7 @@ func (m *HookManager) promptAllow(command string) bool {
 
 	// 检查 stdin 是否为终端 (非管道/重定向)
 	if fi.Mode()&os.ModeCharDevice == 0 {
-		slog.Warn("Hook 需要确认但 stdin 非终端，默认拒绝", "command", command)
+		slog.Warn("Hook requires confirmation but stdin is not a terminal, defaulting to deny", "command", command)
 		return false
 	}
 
@@ -283,18 +285,18 @@ func (m *HookManager) LoadFromDir(dir string) error {
 		path := filepath.Join(dir, entry.Name())
 		spec, err := parseHookFile(path)
 		if err != nil {
-			slog.Warn("解析 hook 文件失败", "path", path, "err", err)
+			slog.Warn("failed to parse hook file", "path", path, "err", err)
 			continue
 		}
 
 		hook, err := NewShellHook(spec)
 		if err != nil {
-			slog.Warn("创建 hook 失败", "path", path, "err", err)
+			slog.Warn("failed to create hook", "path", path, "err", err)
 			continue
 		}
 
 		if err := m.Register(hook); err != nil {
-			slog.Warn("注册 hook 失败", "path", path, "err", err)
+			slog.Warn("failed to register hook", "path", path, "err", err)
 		}
 	}
 
@@ -308,8 +310,7 @@ func (m *HookManager) AllowlistRef() *Allowlist {
 
 // ───────────────────────────── YAML 解析 ─────────────────────────────
 
-// parseHookFile 简单解析 YAML 格式的 hook 配置文件。
-// 手动提取 event / command / matcher / timeout 字段。
+// parseHookFile 使用 yaml.v3 解析 YAML 格式的 hook 配置文件。
 func parseHookFile(path string) (HookSpec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -317,30 +318,8 @@ func parseHookFile(path string) (HookSpec, error) {
 	}
 
 	var spec HookSpec
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "#") || line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		value = strings.Trim(value, "\"'")
-
-		switch key {
-		case "event":
-			spec.Event = value
-		case "command":
-			spec.Command = value
-		case "matcher":
-			spec.Matcher = value
-		case "timeout":
-			fmt.Sscanf(value, "%d", &spec.TimeoutSec)
-		}
+	if err := yaml.Unmarshal(data, &spec); err != nil {
+		return HookSpec{}, err
 	}
 
 	return spec, nil

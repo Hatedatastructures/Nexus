@@ -63,7 +63,7 @@ func (h *SkillsHub) Search(ctx context.Context, query string) ([]*SkillMeta, err
 		repo := strings.TrimPrefix(query, "github:")
 		meta, err := h.searchGitHubRepo(ctx, repo)
 		if err != nil {
-			slog.Warn("技能中心: GitHub 搜索失败", "repo", repo, "error", err)
+			slog.Warn("skill hub: GitHub search failed", "repo", repo, "error", err)
 		} else if meta != nil {
 			results = append(results, meta)
 		}
@@ -73,7 +73,7 @@ func (h *SkillsHub) Search(ctx context.Context, query string) ([]*SkillMeta, err
 	// 通用 GitHub 代码搜索
 	githubResults, err := h.searchGitHubCode(ctx, query)
 	if err != nil {
-		slog.Warn("技能中心: GitHub 搜索失败", "query", query, "error", err)
+		slog.Warn("skill hub: GitHub search failed", "query", query, "error", err)
 	} else {
 		results = append(results, githubResults...)
 	}
@@ -236,7 +236,7 @@ func (h *SkillsHub) Install(ctx context.Context, identifier string) (*Skill, err
 
 	// 3. 安全扫描 (存根 — 未来实现)
 	if warn := securityScan(skill, content); warn != "" {
-		slog.Warn("技能: 安全扫描警告", "name", skill.Name, "warning", warn)
+		slog.Warn("skill: security scan warning", "name", skill.Name, "warning", warn)
 	}
 
 	// 4. 安装到技能目录
@@ -252,11 +252,11 @@ func (h *SkillsHub) Install(ctx context.Context, identifier string) (*Skill, err
 
 	// 5. 记录安装来源
 	if err := h.writeLockFile(skill.Name, source, identifier); err != nil {
-		slog.Warn("技能: 写入 lock.json 失败", "name", skill.Name, "error", err)
+		slog.Warn("skill: failed to write lock.json", "name", skill.Name, "error", err)
 	}
 
 	skill.Path = targetFile
-	slog.Info("技能: 安装完成", "name", skill.Name, "source", source)
+	slog.Info("skill: installed", "name", skill.Name, "source", source)
 
 	return skill, nil
 }
@@ -383,6 +383,18 @@ func securityScan(skill *Skill, content []byte) string {
 		{regexp.MustCompile(`(?i)(?:wget|curl)\s+.*\|\s*bash`), "远程脚本管道执行"},
 		{regexp.MustCompile(`(?i)eval\s*` + "`"), "eval 反引号命令执行"},
 		{regexp.MustCompile(`(?i)exec\s*\(`), "exec 系统调用"},
+		// 编码混淆检测
+		{regexp.MustCompile(`(?i)base64\s+(-d|--decode)`), "base64 解码 (可能用于混淆恶意载荷)"},
+		{regexp.MustCompile(`\\x[0-9a-fA-F]{2}`), "十六进制编码 (可能用于混淆)"},
+		// 命令注入模式
+		{regexp.MustCompile(`\$\{[^}]+\}`), "环境变量扩展 (可能用于命令注入)"},
+		{regexp.MustCompile(`\$\([^)]+\)`), "命令替换 $(...) (可能用于命令注入)"},
+		// 常见混淆函数
+		{regexp.MustCompile(`(?i)\b(eval|exec|spawn|subprocess)\s*[\(\[]`), "动态代码执行函数"},
+		// 反弹 shell 模式
+		{regexp.MustCompile(`(?i)\bnc\s+(-l|-lk|-lp)`), "netcat 监听 (可能的反弹 shell)"},
+		{regexp.MustCompile(`(?i)\bncat\s+(-l|--listen)`), "ncat 监听 (可能的反弹 shell)"},
+		{regexp.MustCompile(`(?i)\bsocat\s+`), "socat 网络转发 (可能的反弹 shell)"},
 	}
 
 	for _, p := range dangerousPatterns {
@@ -428,7 +440,7 @@ func securityScan(skill *Skill, content []byte) string {
 		return "warning: " + strings.Join(warnings, "; ")
 	}
 
-	slog.Debug("技能: 安全扫描通过", "name", skill.Name)
+	slog.Debug("skill: security scan passed", "name", skill.Name)
 	return ""
 }
 

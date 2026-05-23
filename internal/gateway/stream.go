@@ -35,7 +35,8 @@ type StreamConsumer struct {
 	editInterval time.Duration             // 最小编辑间隔
 	lastEditTime time.Time                 // 上次编辑时间
 	deltaCh      chan string               // 增量通道
-	done         chan struct{}             // 完成信号
+	done         chan struct{}              // 完成信号
+	runDone      chan struct{}              // Run goroutine 退出信号
 	finished     atomic.Bool               // 是否已完成
 }
 
@@ -55,6 +56,7 @@ func NewStreamConsumer(adapter platforms.PlatformAdapter, chatID string, bufferS
 		editInterval: editInterval,
 		deltaCh:      make(chan string, 256),
 		done:         make(chan struct{}),
+		runDone:      make(chan struct{}),
 	}
 }
 
@@ -81,6 +83,8 @@ func (s *StreamConsumer) OnDelta(text string) {
 // 在独立 goroutine 中运行，通过 ctx 取消。
 // 消费 deltaCh 中的文本增量，缓冲并渐进编辑平台消息。
 func (s *StreamConsumer) Run(ctx context.Context) {
+	defer close(s.runDone) // 通知 Finish goroutine 已退出
+
 	// 连续失败计数 (用于指数退避)
 	consecutiveFailures := 0
 	const maxConsecutiveFailures = 3
@@ -141,6 +145,13 @@ func (s *StreamConsumer) Run(ctx context.Context) {
 func (s *StreamConsumer) Finish(ctx context.Context) string {
 	s.finished.Store(true)
 	close(s.done)
+
+	// 等待 Run goroutine 退出后再读取共享状态 (buffer, currentMsgID)
+	select {
+	case <-s.runDone:
+	case <-ctx.Done():
+		return ""
+	}
 
 	finalText := s.buffer.String()
 

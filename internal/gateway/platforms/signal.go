@@ -136,7 +136,7 @@ func (a *SignalAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, erro
 	// 启动 SSE 监听
 	go a.sseListener(ctx, msgCh)
 
-	slog.Info("[Signal] 已连接", "account", a.account)
+	slog.Info("[Signal] connected", "account", a.account)
 	return msgCh, nil
 }
 
@@ -147,7 +147,7 @@ func (a *SignalAdapter) Disconnect(ctx context.Context) error {
 	a.connected = false
 	a.mu.Unlock()
 
-	slog.Info("[Signal] 已断开")
+	slog.Info("[Signal] disconnected")
 	return nil
 }
 
@@ -170,7 +170,7 @@ func (a *SignalAdapter) sseListener(ctx context.Context, msgCh chan *MessageEven
 
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
-			slog.Warn("[Signal] 创建请求失败", "err", err)
+			slog.Warn("[Signal] failed to create request", "err", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -179,7 +179,7 @@ func (a *SignalAdapter) sseListener(ctx context.Context, msgCh chan *MessageEven
 
 		resp, err := a.httpClient.Do(req)
 		if err != nil {
-			slog.Warn("[Signal] SSE 连接失败", "err", err)
+			slog.Warn("[Signal] SSE connection failed", "err", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -209,7 +209,7 @@ func (a *SignalAdapter) parseSSEStream(body io.ReadCloser, msgCh chan *MessageEv
 		var envelope map[string]any
 		if err := decoder.Decode(&envelope); err != nil {
 			if err != io.EOF {
-				slog.Debug("[Signal] 解析 SSE 失败", "err", err)
+				slog.Debug("[Signal] SSE parse failed", "err", err)
 			}
 			return
 		}

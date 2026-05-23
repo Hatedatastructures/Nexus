@@ -192,7 +192,7 @@ func (c *Checker) Check(ctx context.Context, command string) (Result, string) {
 	// 检查自定义黑名单
 	for _, blocked := range c.blocklist {
 		if strings.Contains(command, blocked) {
-			slog.Warn("命令匹配自定义黑名单，拒绝执行",
+			slog.Warn("command matched custom blocklist, denying execution",
 				"command", truncateForLog(command, 200),
 				"blocked_pattern", blocked,
 			)
@@ -209,7 +209,7 @@ func (c *Checker) Check(ctx context.Context, command string) (Result, string) {
 
 	// 硬封锁检查 (任何模式下都拒绝)
 	if result, reason := c.checkHardBlocked(command); result == Denied {
-		slog.Warn("命令匹配硬封锁模式",
+		slog.Warn("command matched hard-block pattern",
 			"command", truncateForLog(command, 200),
 			"reason", reason,
 		)
@@ -233,7 +233,7 @@ func (c *Checker) Check(ctx context.Context, command string) (Result, string) {
 
 		// 检查危险模式
 		if result, reason := c.checkDangerous(command); result != Approved {
-			slog.Info("命令需要用户审批",
+			slog.Info("command requires user approval",
 				"command", truncateForLog(command, 200),
 				"reason", reason,
 			)
@@ -296,13 +296,28 @@ func (c *Checker) checkDangerous(command string) (Result, string) {
 }
 
 // isSafe 检查命令是否为明确安全的操作。
+// 即使匹配安全模式，也拒绝包含 shell 链式元字符的命令。
 func (c *Checker) isSafe(command string) bool {
 	for _, sp := range safePatterns {
 		if sp.MatchString(command) {
+			// 匹配安全模式后，检查是否包含 shell 链式元字符
+			// 如 "ls; rm -rf /" 匹配 "^\s*ls\s" 但实际执行危险操作
+			if containsShellMetacharacters(command) {
+				return false
+			}
 			return true
 		}
 	}
 	return false
+}
+
+// containsShellMetacharacters 检查命令是否包含 shell 链式元字符。
+// 这些字符可用于在看似安全的命令后追加危险操作。
+func containsShellMetacharacters(cmd string) bool {
+	return strings.ContainsAny(cmd, ";|`$") ||
+		strings.Contains(cmd, "&&") ||
+		strings.Contains(cmd, "||") ||
+		strings.Contains(cmd, "$(")
 }
 
 // isSafeDelete 检查递归删除是否在安全的子目录中执行。

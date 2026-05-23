@@ -128,7 +128,7 @@ func (t *SkillViewTool) Execute(ctx context.Context, args map[string]any) (strin
 func getSkillList() []map[string]string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		slog.Debug("skill: 获取主目录失败", "err", err)
+		slog.Debug("skill: failed to get home directory", "err", err)
 		return nil
 	}
 
@@ -237,7 +237,7 @@ func parseSkillFrontmatter(content []byte) (name, description string) {
 // ───────────────────────────── init 注册 ─────────────────────────────
 
 func init() {
-	slog.Debug("注册技能管理工具")
+	slog.Debug("registering skill management tool")
 	GetRegistry().Register(&SkillsListTool{})
 	GetRegistry().Register(&SkillViewTool{})
 }

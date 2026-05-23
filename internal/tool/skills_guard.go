@@ -102,7 +102,7 @@ func initThreatPatterns() []ThreatPattern {
 	for _, p := range rawPatterns {
 		compiled, err := regexp.Compile(p.Pattern)
 		if err != nil {
-			slog.Warn("编译威胁模式失败", "name", p.Name, "err", err)
+			slog.Warn("failed to compile threat pattern", "name", p.Name, "err", err)
 			continue
 		}
 		patterns = append(patterns, ThreatPattern{
@@ -363,6 +363,6 @@ func (t *SkillScanTool) Execute(ctx context.Context, args map[string]any) (strin
 // ───────────────────────────── init 注册 ─────────────────────────────
 
 func init() {
-	slog.Debug("注册技能安全扫描工具")
+	slog.Debug("registering skill security scan tool")
 	GetRegistry().Register(&SkillScanTool{})
 }

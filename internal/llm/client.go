@@ -107,7 +107,7 @@ func getProxyURL(proxy string) *url.URL {
 	}
 	proxyURL, err := url.Parse(proxy)
 	if err != nil {
-		slog.Warn("解析代理 URL 失败", "proxy", proxy, "error", err)
+		slog.Warn("failed to parse proxy URL", "proxy", proxy, "error", err)
 		return nil
 	}
 	return proxyURL
@@ -118,13 +118,13 @@ func getProxyURL(proxy string) *url.URL {
 func resolveProxyFunc(proxy string) func(*http.Request) (*url.URL, error) {
 	// 优先使用配置中的代理
 	if proxyURL := getProxyURL(proxy); proxyURL != nil {
-		slog.Debug("使用配置代理", "proxy", proxyURL.String())
+		slog.Debug("using configured proxy", "proxy", proxyURL.String())
 		return http.ProxyURL(proxyURL)
 	}
 
 	// 回退到环境变量代理 (HTTP_PROXY, HTTPS_PROXY, NO_PROXY)
 	// http.ProxyFromEnvironment 会自动读取这些环境变量
-	slog.Debug("未配置代理，回退到环境变量 (HTTP_PROXY/HTTPS_PROXY)")
+	slog.Debug("no proxy configured, falling back to environment variables (HTTP_PROXY/HTTPS_PROXY)")
 	return http.ProxyFromEnvironment
 }
 
@@ -160,7 +160,7 @@ func retryWithBackoff[T any](
 		}
 
 		lastErr = err
-		slog.Debug("HTTP 请求失败，将重试",
+		slog.Debug("HTTP request failed, will retry",
 			"attempt", attempt+1,
 			"maxRetries", maxRetries,
 			"statusCode", statusCode,
@@ -183,7 +183,7 @@ func retryWithBackoff[T any](
 			waitTime = maxBackoff
 		}
 
-		slog.Debug("等待后重试", "waitTime", waitTime.String())
+		slog.Debug("retrying after wait", "waitTime", waitTime.String())
 		timer := time.NewTimer(waitTime)
 		select {
 		case <-ctx.Done():

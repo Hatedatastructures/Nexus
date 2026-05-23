@@ -137,11 +137,11 @@ func (t *SendMessageTool) Execute(ctx context.Context, args map[string]any) (str
 	}
 
 	if err != nil {
-		slog.Error("消息发送失败", "platform", platform, "chat_id", chatID, "err", err)
+		slog.Error("message send failed", "platform", platform, "chat_id", chatID, "err", err)
 		return ToolError(fmt.Sprintf("消息发送失败 (%s): %v", platform, err)), nil
 	}
 
-	slog.Info("消息发送成功", "platform", platform, "chat_id", chatID)
+	slog.Info("message sent successfully", "platform", platform, "chat_id", chatID)
 	return ToolResult(result), nil
 }
 
@@ -195,7 +195,7 @@ func (t *SendMessageTool) doTelegramPost(ctx context.Context, token, method stri
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return nil, err
 	}
@@ -350,10 +350,11 @@ func (t *SendMessageTool) sendFeishu(ctx context.Context, chatID, message string
 		return nil, fmt.Errorf("获取飞书 Token 失败: %w", err)
 	}
 
+	contentBytes, _ := json.Marshal(map[string]string{"text": message})
 	body := map[string]any{
 		"receive_id": chatID,
 		"msg_type":   "text",
-		"content":    `{"text":"` + message + `"}`,
+		"content":    string(contentBytes),
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
@@ -438,9 +439,10 @@ func (t *SendMessageTool) sendDingTalk(ctx context.Context, chatID, message stri
 	}
 
 	// 企业内部应用方式
+	msgParamBytes, _ := json.Marshal(map[string]string{"content": message})
 	body := map[string]any{
-		"msgKey":  "sampleText",
-		"msgParam": `{"content":"` + message + `"}`,
+		"msgKey":   "sampleText",
+		"msgParam": string(msgParamBytes),
 	}
 
 	chatIDs := strings.Split(chatID, ",")

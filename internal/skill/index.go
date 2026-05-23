@@ -80,14 +80,14 @@ func BuildSkillsIndexWithCache(skills []*Skill, tools []string, platform string,
 
 	if cacheDir != "" {
 		if err := os.MkdirAll(cacheDir, 0700); err != nil {
-			slog.Debug("技能: 创建缓存目录失败", "dir", cacheDir, "error", err)
+			slog.Debug("skill: failed to create cache directory", "dir", cacheDir, "error", err)
 		} else {
 			cachePath := filepath.Join(cacheDir, ".skills_prompt_snapshot.json")
 			data, err := json.MarshalIndent(snapshot, "", "  ")
 			if err != nil {
-				slog.Debug("技能: 序列化缓存失败", "error", err)
+				slog.Debug("skill: failed to serialize cache", "error", err)
 			} else if err := os.WriteFile(cachePath, data, 0644); err != nil {
-				slog.Debug("技能: 写入缓存失败", "path", cachePath, "error", err)
+				slog.Debug("skill: failed to write cache", "path", cachePath, "error", err)
 			}
 		}
 	}
@@ -106,7 +106,7 @@ func LoadSkillsIndexFromCache(cacheDir string) string {
 
 	var snapshot skillsIndexSnapshot
 	if err := json.Unmarshal(data, &snapshot); err != nil {
-		slog.Debug("技能: 解析缓存失败", "path", cachePath, "error", err)
+		slog.Debug("skill: failed to parse cache", "path", cachePath, "error", err)
 		return ""
 	}
 

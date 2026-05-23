@@ -45,13 +45,13 @@ func DeliverResult(ctx context.Context, job *Job, result string, platformAdapter
 
 	// 检查静默标记
 	if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(result)), silentMarker) {
-		slog.Info("Cron: 作业返回静默标记，跳过投递", "job_id", job.ID)
+		slog.Info("Cron: job returned silent marker, skipping delivery", "job_id", job.ID)
 		return nil
 	}
 
 	// 如果没有平台适配器可用，仅记录日志
 	if platformAdapters == nil || len(platformAdapters) == 0 {
-		slog.Debug("Cron: 无平台适配器可用，跳过投递", "job_id", job.ID)
+		slog.Debug("Cron: no platform adapter available, skipping delivery", "job_id", job.ID)
 		return nil
 	}
 
@@ -79,7 +79,7 @@ func DeliverResult(ctx context.Context, job *Job, result string, platformAdapter
 		// 发送消息
 		sendResult, sendErr := adapter.Send(ctx, chatID, content, nil)
 		if sendErr != nil {
-			slog.Warn("Cron: 投递到平台失败",
+			slog.Warn("Cron: failed to deliver to platform",
 				"job_id", job.ID,
 				"platform", platform,
 				"error", sendErr,
@@ -89,7 +89,7 @@ func DeliverResult(ctx context.Context, job *Job, result string, platformAdapter
 		}
 
 		if sendResult != nil && !sendResult.Success {
-			slog.Warn("Cron: 平台返回发送失败",
+			slog.Warn("Cron: platform returned send failure",
 				"job_id", job.ID,
 				"platform", platform,
 				"error", sendResult.Error,
@@ -99,7 +99,7 @@ func DeliverResult(ctx context.Context, job *Job, result string, platformAdapter
 		}
 
 		successCount++
-		slog.Info("Cron: 投递成功",
+		slog.Info("Cron: delivery succeeded",
 			"job_id", job.ID,
 			"platform", platform,
 			"chat_id", chatID,

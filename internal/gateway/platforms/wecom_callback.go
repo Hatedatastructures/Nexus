@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
+	"crypto/subtle"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -23,6 +25,7 @@ import (
 const (
 	wecomCallbackRequestTimeout = 15 * time.Second
 	wecomCallbackMaxMessageLen  = 2048
+	wecomCallbackMaxBodySize    = 1 << 20 // 1MB
 )
 
 // ───────────────────────────── WeComCallbackAdapter ─────────────────────────────
@@ -106,19 +109,19 @@ func (a *WeComCallbackAdapter) Connect(ctx context.Context) (<-chan *MessageEven
 
 	go func() {
 		addr := fmt.Sprintf(":%d", a.webhookPort)
-		slog.Info("[WeCom Callback] 启动 webhook 服务器", "addr", addr)
+		slog.Info("[WeCom Callback] webhook server started", "addr", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
-			slog.Error("[WeCom Callback] webhook 服务器失败", "err", err)
+			slog.Error("[WeCom Callback] webhook server failed", "err", err)
 		}
 	}()
 
-	slog.Info("[WeCom Callback] 已连接", "corp_id", a.corpID)
+	slog.Info("[WeCom Callback] connected", "corp_id", a.corpID)
 	return a.msgCh, nil
 }
 
 func (a *WeComCallbackAdapter) Disconnect(ctx context.Context) error {
 	a.running = false
-	slog.Info("[WeCom Callback] 已断开")
+	slog.Info("[WeCom Callback] disconnected")
 	return nil
 }
 
@@ -230,7 +233,7 @@ func (a *WeComCallbackAdapter) handleVerification(w http.ResponseWriter, r *http
 
 	// 验证签名
 	expectedSignature := a.generateSignature(timestamp, nonce, echoStr)
-	if msgSignature != expectedSignature {
+	if subtle.ConstantTimeCompare([]byte(msgSignature), []byte(expectedSignature)) != 1 {
 		http.Error(w, "签名验证失败", http.StatusForbidden)
 		return
 	}
@@ -241,7 +244,7 @@ func (a *WeComCallbackAdapter) handleVerification(w http.ResponseWriter, r *http
 }
 
 func (a *WeComCallbackAdapter) handleMessage(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, wecomCallbackMaxBodySize))
 	if err != nil {
 		http.Error(w, "读取请求失败", http.StatusBadRequest)
 		return
@@ -294,7 +297,12 @@ func (a *WeComCallbackAdapter) generateSignature(timestamp, nonce, echostr strin
 }
 
 func (a *WeComCallbackAdapter) getAccessToken(ctx context.Context) (string, error) {
-	apiURL := fmt.Sprintf("https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=%s&corpsecret=%s", a.corpID, a.encodingAESKey)
+	u, _ := url.Parse("https://qyapi.weixin.qq.com/cgi-bin/gettoken")
+	q := u.Query()
+	q.Set("corpid", a.corpID)
+	q.Set("corpsecret", a.encodingAESKey)
+	u.RawQuery = q.Encode()
+	apiURL := u.String()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {

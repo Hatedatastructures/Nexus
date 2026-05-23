@@ -190,7 +190,7 @@ func (a *QQBotAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error
 	// 连接 WebSocket
 	go a.connectWebSocket(ctx, gatewayURL, msgCh)
 
-	slog.Info("[QQBot] 已连接", "app_id", a.appID)
+	slog.Info("[QQBot] connected", "app_id", a.appID)
 	return msgCh, nil
 }
 
@@ -206,7 +206,7 @@ func (a *QQBotAdapter) Disconnect(ctx context.Context) error {
 		a.conn = nil
 	}
 
-	slog.Info("[QQBot] 已断开")
+	slog.Info("[QQBot] disconnected")
 	return nil
 }
 
@@ -289,19 +289,19 @@ func (a *QQBotAdapter) connectWebSocket(ctx context.Context, gatewayURL string, 
 		if err != nil {
 			delay := backoff[min(backoffIdx, len(backoff)-1)]
 			backoffIdx++
-			slog.Warn("[QQBot] WebSocket 连接失败", "err", err, "retry_after", delay)
+			slog.Warn("[QQBot] WebSocket connection failed", "err", err, "retry_after", delay)
 			time.Sleep(delay)
 
 			// 刷新 token
 			if err := a.getAccessToken(ctx); err != nil {
-				slog.Warn("[QQBot] 刷新 token 失败", "err", err)
+				slog.Warn("[QQBot] failed to refresh token", "err", err)
 				continue
 			}
 
 			// 获取新的 gateway URL
 			newURL, err := a.getGatewayURL(ctx)
 			if err != nil {
-				slog.Warn("[QQBot] 获取 gateway URL 失败", "err", err)
+				slog.Warn("[QQBot] failed to get gateway URL", "err", err)
 				continue
 			}
 			gatewayURL = newURL
@@ -369,7 +369,7 @@ func (a *QQBotAdapter) sendIdentify(conn *websocket.Conn) {
 	}
 
 	if err := conn.WriteJSON(identifyReq); err != nil {
-		slog.Warn("[QQBot] 发送 Identify 失败", "err", err)
+		slog.Warn("[QQBot] failed to send Identify", "err", err)
 	}
 }
 
@@ -385,7 +385,7 @@ func (a *QQBotAdapter) sendResume(conn *websocket.Conn) {
 	}
 
 	if err := conn.WriteJSON(resumeReq); err != nil {
-		slog.Warn("[QQBot] 发送 Resume 失败", "err", err)
+		slog.Warn("[QQBot] failed to send Resume", "err", err)
 	}
 }
 
@@ -403,7 +403,7 @@ func (a *QQBotAdapter) listenLoop(msgCh chan *MessageEvent) {
 
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			slog.Warn("[QQBot] 读取消息失败", "err", err)
+			slog.Warn("[QQBot] failed to read message", "err", err)
 			return
 		}
 
@@ -432,7 +432,7 @@ func (a *QQBotAdapter) dispatchPayload(payload map[string]any, msgCh chan *Messa
 		case "READY":
 			a.sessionID = getString(d, "session_id", "")
 			a.botOpenID = getString(d, "user", "")
-			slog.Info("[QQBot] 已认证", "session_id", a.sessionID)
+			slog.Info("[QQBot] authenticated", "session_id", a.sessionID)
 
 		case "C2C_MESSAGE_CREATE":
 			a.onC2CMessage(d, msgCh)
@@ -450,7 +450,7 @@ func (a *QQBotAdapter) dispatchPayload(payload map[string]any, msgCh chan *Messa
 		a.mu.Unlock()
 
 	case qqbotOpReconnect:
-		slog.Warn("[QQBot] 收到 Reconnect 指令")
+		slog.Warn("[QQBot] received Reconnect command")
 		return
 	}
 }
@@ -596,7 +596,7 @@ func (a *QQBotAdapter) heartbeatLoop() {
 			}
 
 			if err := conn.WriteJSON(heartbeatReq); err != nil {
-				slog.Debug("[QQBot] 心跳发送失败", "err", err)
+				slog.Debug("[QQBot] heartbeat send failed", "err", err)
 			}
 		}
 	}
@@ -703,7 +703,52 @@ func (a *QQBotAdapter) SendImage(ctx context.Context, chatID string, imageURL st
 
 // uploadMedia 上传媒体文件。
 func (a *QQBotAdapter) uploadMedia(ctx context.Context, chatID, fileURL string, mediaType int) (string, error) {
-	// 简化实现：发送 file_info 格式的 URL
+	// QQ Bot 媒体上传: 先下载文件，再通过 /v2/users/{openid}/files 上传
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("创建下载请求失败: %w", err)
+	}
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("下载媒体文件失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("下载媒体文件返回 HTTP %d", resp.StatusCode)
+	}
+
+	// 限制下载大小 (10MB)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	if err != nil {
+		return "", fmt.Errorf("读取媒体文件失败: %w", err)
+	}
+
+	// 构建上传请求
+	var endpoint string
+	if strings.HasPrefix(chatID, "group:") {
+		groupID := strings.TrimPrefix(chatID, "group:")
+		endpoint = fmt.Sprintf("/v2/groups/%s/files", groupID)
+	} else {
+		endpoint = fmt.Sprintf("/v2/users/%s/files", chatID)
+	}
+
+	// 使用 callAPI 上传
+	uploadBody := map[string]any{
+		"file_type": mediaType,
+		"file_data": data,
+	}
+	result, err := a.callAPI(ctx, endpoint, uploadBody)
+	if err != nil {
+		// 上传失败时回退到 URL 格式
+		slog.Warn("QQ Bot media upload failed, falling back to URL format", "err", err)
+		return fmt.Sprintf("url:%s", fileURL), nil
+	}
+
+	if fileUUID, ok := result["file_uuid"].(string); ok {
+		return fileUUID, nil
+	}
 	return fmt.Sprintf("url:%s", fileURL), nil
 }
 

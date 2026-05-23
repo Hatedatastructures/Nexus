@@ -78,7 +78,7 @@ func (m *MatrixAdapter) SupportsStreaming() bool { return false }
 func (m *MatrixAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error) {
 	// 获取初始 sync token
 	if _, err := m.doSync(ctx, "", 0); err != nil {
-		slog.Warn("matrix 初始同步失败，将继续轮询", "err", err)
+		slog.Warn("matrix initial sync failed, will continue polling", "err", err)
 	}
 
 	go m.syncLoop(ctx)
@@ -226,7 +226,6 @@ type matrixEvent struct {
 // doSync 执行一次 /sync 请求。
 func (m *MatrixAdapter) doSync(ctx context.Context, since string, timeout uint) (*syncResponse, error) {
 	params := url.Values{}
-	params.Set("access_token", m.accessToken)
 	if since != "" {
 		params.Set("since", since)
 	}
@@ -239,6 +238,7 @@ func (m *MatrixAdapter) doSync(ctx context.Context, since string, timeout uint) 
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("Authorization", "Bearer "+m.accessToken)
 
 	resp, err := m.client.Do(req)
 	if err != nil {
@@ -276,7 +276,7 @@ func (m *MatrixAdapter) syncLoop(ctx context.Context) {
 
 		sr, err := m.doSync(ctx, m.syncToken, 30000)
 		if err != nil {
-			slog.Warn("matrix sync 失败", "err", err)
+			slog.Warn("matrix sync failed", "err", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -388,12 +388,13 @@ func (m *MatrixAdapter) doAPI(ctx context.Context, method, path string, body any
 		bodyReader = bytes.NewReader(data)
 	}
 
-	reqURL := m.homeServer + path + "?access_token=" + url.QueryEscape(m.accessToken)
+	reqURL := m.homeServer + path
 	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+m.accessToken)
 
 	resp, err := m.client.Do(req)
 	if err != nil {

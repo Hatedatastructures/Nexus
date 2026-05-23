@@ -173,9 +173,23 @@ func WithStateStore(s *state.Store) AgentOption {
 	return func(a *AIAgent) { a.state = s }
 }
 
+// WithSessionPersister 设置会话 JSONL 持久化器
+func WithSessionPersister(p *state.SessionPersister) AgentOption {
+	return func(a *AIAgent) { a.persister = p }
+}
+
 // WithCredentialPool 设置凭证池
 func WithCredentialPool(p *credential.Pool) AgentOption {
 	return func(a *AIAgent) { a.credentialPool = p }
+}
+
+// WithResumeSession 设置会话恢复模式和 session ID。
+// 启用后 RunConversation 会从 state.Store 加载历史消息。
+func WithResumeSession(sessionID string) AgentOption {
+	return func(a *AIAgent) {
+		a.sessionID = sessionID
+		a.resumeMode = true
+	}
 }
 
 // WithApprovalChecker 设置命令审批检查器
@@ -192,6 +206,20 @@ func WithSandboxEnv(e sandbox.Environment) AgentOption {
 // 用于在工具 dispatch 层面对 file_write/file_edit/patch 操作进行二次防护。
 func WithFileSafety(fs *FileSafetyChecker) AgentOption {
 	return func(a *AIAgent) { a.fileSafety = fs }
+}
+
+// WithAllowedRoot 设置文件写入允许的根目录。
+// 设置后，所有文件写入路径必须在此目录下，防止路径遍历攻击。
+func WithAllowedRoot(root string) AgentOption {
+	return func(a *AIAgent) {
+		if root == "" {
+			return
+		}
+		if a.fileSafety == nil {
+			a.fileSafety = NewFileSafetyChecker()
+		}
+		a.fileSafety.SetAllowedRoot(root)
+	}
 }
 
 // WithSessionID 设置会话 ID

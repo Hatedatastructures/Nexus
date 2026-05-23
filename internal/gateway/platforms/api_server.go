@@ -4,12 +4,14 @@ package platforms
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -58,6 +60,33 @@ func (a *APIServerAdapter) PlatformType() Platform { return PlatformAPIServer }
 func (a *APIServerAdapter) MaxMessageLength() int  { return 128000 }
 func (a *APIServerAdapter) SupportsStreaming() bool { return true }
 
+// bearerAuthMiddleware 检查 NEXUS_API_KEY 环境变量，
+// 如果已设置则要求 Authorization: Bearer <key> 头部，
+// 如果未设置则跳过认证 (向后兼容)。
+func bearerAuthMiddleware(next http.Handler) http.Handler {
+	apiKey := os.Getenv("NEXUS_API_KEY")
+	if apiKey == "" {
+		slog.Warn("[API Server] NEXUS_API_KEY not set, API endpoints are unauthenticated")
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, "Unauthorized: missing Authorization header", http.StatusUnauthorized)
+			return
+		}
+
+		const prefix = "Bearer "
+		if !strings.HasPrefix(authHeader, prefix) || subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(authHeader, prefix)), []byte(apiKey)) != 1 {
+			http.Error(w, "Unauthorized: invalid API key", http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (a *APIServerAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error) {
 	a.mu.Lock()
 	a.running = true
@@ -71,15 +100,15 @@ func (a *APIServerAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, e
 
 	a.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", a.port),
-		Handler:      mux,
+		Handler:      bearerAuthMiddleware(mux),
 		ReadTimeout:  apiServerRequestTimeout,
 		WriteTimeout: apiServerRequestTimeout,
 	}
 
 	go func() {
-		slog.Info("[API Server] 启动", "port", a.port)
+		slog.Info("[API Server] started", "port", a.port)
 		if err := a.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("[API Server] 启动失败", "err", err)
+			slog.Error("[API Server] start failed", "err", err)
 		}
 	}()
 

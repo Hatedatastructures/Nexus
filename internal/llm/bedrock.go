@@ -109,10 +109,10 @@ func (t *BedrockTransport) BuildRequest(ctx context.Context, req *ChatRequest, a
 
 	if accessKey != "" && secretKey != "" {
 		if err := signAWSRequest(httpReq, bodyBytes, accessKey, secretKey, sessionToken, t.region); err != nil {
-			slog.Warn("AWS SigV4 签名失败，将发送未签名请求", "error", err)
+			slog.Warn("AWS SigV4 signing failed, sending unsigned request", "error", err)
 		}
 	} else {
-		slog.Debug("未找到 AWS credentials，将发送未签名请求（假设使用代理或 IAM role）")
+		slog.Debug("AWS credentials not found, sending unsigned request (assuming proxy or IAM role)")
 	}
 
 	// 支持 GetBody 以便重试
@@ -220,7 +220,7 @@ func (t *BedrockTransport) ParseStream(ctx context.Context, body io.ReadCloser) 
 			// Bedrock 流式响应也是 SSE 格式，使用 message_delta 事件
 			var streamEvent bedrockStreamEvent
 			if err := json.Unmarshal([]byte(event.Data), &streamEvent); err != nil {
-				slog.Debug("解析 Bedrock SSE 数据失败", "error", err)
+				slog.Debug("failed to parse Bedrock SSE data", "error", err)
 				continue
 			}
 
@@ -332,7 +332,9 @@ func (p *BedrockProvider) Name() string {
 // CreateChatCompletion 发送非流式聊天补全请求。
 func (p *BedrockProvider) CreateChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	if req.Model == "" {
-		req.Model = p.model
+		reqCopy := *req
+		reqCopy.Model = p.model
+		req = &reqCopy
 	}
 
 	httpReq, err := p.transport.BuildRequest(ctx, req, p.apiKey)
@@ -368,7 +370,9 @@ func (p *BedrockProvider) CreateChatCompletion(ctx context.Context, req *ChatReq
 // CreateChatCompletionStream 发送流式聊天补全请求。
 func (p *BedrockProvider) CreateChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan *StreamDelta, error) {
 	if req.Model == "" {
-		req.Model = p.model
+		reqCopy := *req
+		reqCopy.Model = p.model
+		req = &reqCopy
 	}
 
 	if req.Metadata == nil {
@@ -848,5 +852,5 @@ func convertBedrockUsage(usage *bedrockUsage) *TokenUsage {
 
 func init() {
 	RegisterTransport("bedrock_converse", &BedrockTransport{region: DefaultBedrockRegion})
-	slog.Debug("Bedrock 传输层已注册", "apiMode", "bedrock_converse", "region", DefaultBedrockRegion, "time", time.Now())
+	slog.Debug("Bedrock transport registered", "apiMode", "bedrock_converse", "region", DefaultBedrockRegion, "time", time.Now())
 }

@@ -41,7 +41,7 @@ func BuildChannelDirectory(ctx context.Context, adapters []platforms.PlatformAda
 		if lister, ok := adapter.(ChannelLister); ok {
 			channels, err := lister.ListChannels(ctx)
 			if err != nil {
-				slog.Warn("频道目录: API 枚举失败",
+				slog.Warn("channel directory: API enumeration failed",
 					"platform", string(platformType),
 					"error", err,
 				)
@@ -73,7 +73,7 @@ func BuildChannelDirectory(ctx context.Context, adapters []platforms.PlatformAda
 		}
 	}
 
-	slog.Debug("频道目录: 构建完成", "count", len(entries))
+	slog.Debug("channel directory: build complete", "count", len(entries))
 	return entries
 }
 

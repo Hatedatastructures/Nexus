@@ -151,7 +151,7 @@ func (e *LocalEnvironment) Execute(ctx context.Context, command string, opts *Ex
 		}
 	}
 
-	slog.Debug("命令执行完成",
+	slog.Debug("command execution completed",
 		"cwd", cwd,
 		"exitCode", result.ExitCode,
 		"duration", duration.String(),
@@ -190,7 +190,7 @@ func (e *LocalEnvironment) ExecuteBackground(ctx context.Context, command string
 		process: cmd.Process,
 	}
 
-	slog.Info("后台进程已启动", "pid", cmd.Process.Pid, "command", truncateShellCmd(command, 100))
+	slog.Info("background process started", "pid", cmd.Process.Pid, "command", truncateShellCmd(command, 100))
 	return handle, nil
 }
 

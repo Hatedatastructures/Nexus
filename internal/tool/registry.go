@@ -49,7 +49,7 @@ func (r *Registry) Register(tool Tool) {
 
 	// 重复注册警告 (保留原有行为: 后注册覆盖先注册)
 	if _, exists := r.tools[name]; exists {
-		slog.Warn("工具名冲突，覆盖注册", "name", name)
+		slog.Warn("tool name conflict, overwriting registration", "name", name)
 	}
 
 	r.tools[name] = &ToolEntry{
@@ -75,7 +75,17 @@ func appendUnique(slice []string, val string) []string {
 // Dispatch 执行指定名称的工具。
 // args 是从模型工具调用中解析的参数键值对。
 // 返回 JSON 格式的结果字符串。
-func (r *Registry) Dispatch(ctx context.Context, name string, args map[string]any) (string, error) {
+func (r *Registry) Dispatch(ctx context.Context, name string, args map[string]any) (result string, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("tool dispatch panic", "tool", name, "panic", rec)
+			errJSON := map[string]string{"error": fmt.Sprintf("工具执行发生内部错误: %v", rec)}
+			data, _ := json.Marshal(errJSON)
+			result = string(data)
+			err = fmt.Errorf("工具执行 panic: %v", rec)
+		}
+	}()
+
 	entry := r.getEntry(name)
 	if entry == nil {
 		errJSON := map[string]string{"error": fmt.Sprintf("未知工具: %s", name)}
@@ -83,9 +93,9 @@ func (r *Registry) Dispatch(ctx context.Context, name string, args map[string]an
 		return string(data), nil
 	}
 
-	result, err := entry.Tool.Execute(ctx, args)
+	result, err = entry.Tool.Execute(ctx, args)
 	if err != nil {
-		slog.Warn("工具执行失败", "tool", name, "err", err)
+		slog.Warn("tool execution failed", "tool", name, "err", err)
 		errJSON := map[string]string{"error": fmt.Sprintf("工具执行失败: %v", err)}
 		data, _ := json.Marshal(errJSON)
 		return string(data), nil
@@ -125,8 +135,10 @@ func (r *Registry) GetEntry(name string) *ToolEntry {
 	return r.getEntry(name)
 }
 
-// getEntry 内部不加锁版本
+// getEntry 读取锁保护的工具查找
 func (r *Registry) getEntry(name string) *ToolEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	entry, ok := r.tools[name]
 	if !ok {
 		return nil

@@ -52,7 +52,7 @@ func (m *Manager) Submit(ctx context.Context, taskName string, fn func(ctx conte
 	// 启动执行 goroutine
 	go m.run(taskCtx, w, fn)
 
-	slog.Info("worker: 任务已提交", "id", id, "task", taskName)
+	slog.Info("worker: task submitted", "id", id, "task", taskName)
 	return w
 }
 
@@ -60,33 +60,33 @@ func (m *Manager) Submit(ctx context.Context, taskName string, fn func(ctx conte
 func (m *Manager) run(ctx context.Context, w *Worker, fn func(ctx context.Context) (any, error)) {
 	// 转换为 Running 状态
 	if err := w.Transition(StateRunning); err != nil {
-		slog.Error("worker: 无法启动任务", "id", w.ID, "error", err)
+		slog.Error("worker: unable to start task", "id", w.ID, "error", err)
 		return
 	}
 
-	slog.Info("worker: 任务开始执行", "id", w.ID, "task", w.TaskName)
+	slog.Info("worker: task execution started", "id", w.ID, "task", w.TaskName)
 
 	// 执行任务
 	result, err := fn(ctx)
 
 	// 检查是否已被取消（cancel 回调可能已将状态设为 Cancelled）
 	if w.State() == StateCancelled {
-		slog.Info("worker: 任务已被取消", "id", w.ID, "task", w.TaskName)
+		slog.Info("worker: task cancelled", "id", w.ID, "task", w.TaskName)
 		return
 	}
 
 	// 根据结果设置终态
 	if err != nil {
 		if setErr := w.SetError(err); setErr != nil {
-			slog.Error("worker: 无法设置失败状态", "id", w.ID, "error", setErr)
+			slog.Error("worker: unable to set failed status", "id", w.ID, "error", setErr)
 		} else {
-			slog.Warn("worker: 任务执行失败", "id", w.ID, "task", w.TaskName, "error", err)
+			slog.Warn("worker: task execution failed", "id", w.ID, "task", w.TaskName, "error", err)
 		}
 	} else {
 		if setErr := w.SetResult(result); setErr != nil {
-			slog.Error("worker: 无法设置完成状态", "id", w.ID, "error", setErr)
+			slog.Error("worker: unable to set completed status", "id", w.ID, "error", setErr)
 		} else {
-			slog.Info("worker: 任务执行完成", "id", w.ID, "task", w.TaskName)
+			slog.Info("worker: task execution completed", "id", w.ID, "task", w.TaskName)
 		}
 	}
 }
@@ -110,7 +110,7 @@ func (m *Manager) Cancel(id string) error {
 	}
 
 	w.Cancel()
-	slog.Info("worker: 任务已取消", "id", id, "task", w.TaskName)
+	slog.Info("worker: task cancelled", "id", id, "task", w.TaskName)
 	return nil
 }
 

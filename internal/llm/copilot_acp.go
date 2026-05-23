@@ -90,7 +90,9 @@ func (p *CopilotProvider) Name() string {
 func (p *CopilotProvider) CreateChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	// 确保模型已设置
 	if req.Model == "" {
-		req.Model = p.model
+		reqCopy := *req
+		reqCopy.Model = p.model
+		req = &reqCopy
 	}
 
 	httpReq, err := p.buildCopilotRequest(ctx, req, false)
@@ -123,7 +125,9 @@ func (p *CopilotProvider) CreateChatCompletion(ctx context.Context, req *ChatReq
 func (p *CopilotProvider) CreateChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan *StreamDelta, error) {
 	// 确保模型已设置
 	if req.Model == "" {
-		req.Model = p.model
+		reqCopy := *req
+		reqCopy.Model = p.model
+		req = &reqCopy
 	}
 
 	httpReq, err := p.buildCopilotRequest(ctx, req, true)
@@ -165,7 +169,7 @@ func (p *CopilotProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
 		// 请求失败时返回已知模型列表
-		slog.Debug("获取 Copilot 模型列表失败，返回已知模型", "error", err)
+		slog.Debug("failed to fetch Copilot model list, returning known models", "error", err)
 		return p.defaultModels(), nil
 	}
 	defer resp.Body.Close()
@@ -176,7 +180,7 @@ func (p *CopilotProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		slog.Debug("Copilot 模型列表返回非 200，返回已知模型", "status", resp.StatusCode)
+		slog.Debug("Copilot model list returned non-200, returning known models", "status", resp.StatusCode)
 		return p.defaultModels(), nil
 	}
 
@@ -265,5 +269,5 @@ func (p *CopilotProvider) defaultModels() []ModelInfo {
 // ───────────────────────────── init 注册 ─────────────────────────────
 
 func init() {
-	slog.Debug("Copilot ACP 提供者已加载", "time", time.Now())
+	slog.Debug("Copilot ACP provider loaded", "time", time.Now())
 }

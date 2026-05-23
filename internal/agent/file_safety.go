@@ -23,6 +23,10 @@ type FileSafetyChecker struct {
 
 	// maxWriteSize 是单次写入的最大字节数。默认 10MB。
 	maxWriteSize int64
+
+	// allowedRoot 是允许写入的根目录。如果非空，所有写入路径必须在此目录下。
+	// 防止路径遍历攻击 (如 "../../../etc/passwd")。
+	allowedRoot string
 }
 
 // 默认最大写入大小: 10MB
@@ -77,6 +81,23 @@ func NewFileSafetyCheckerWithConfig(paths []string, extensions []string, maxSize
 	return fs
 }
 
+// SetAllowedRoot 设置允许写入的根目录。
+// 设置后，所有写入操作的目标路径必须在此目录下，防止路径遍历攻击。
+func (fs *FileSafetyChecker) SetAllowedRoot(root string) {
+	if root != "" {
+		// 规范化根目录
+		absRoot, err := filepath.Abs(root)
+		if err == nil {
+			// 尝试解析符号链接
+			if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
+				fs.allowedRoot = resolved
+				return
+			}
+			fs.allowedRoot = absRoot
+		}
+	}
+}
+
 // ───────────────────────────── 核心检查方法 ─────────────────────────────
 
 // CheckWrite 检查对指定路径的写入操作是否允许。
@@ -91,6 +112,23 @@ func (fs *FileSafetyChecker) CheckWrite(path string, contentSize int64) (allowed
 	// 检查写入大小限制
 	if contentSize > fs.maxWriteSize {
 		return false, "写入内容超过大小限制 (" + formatSize(contentSize) + " > " + formatSize(fs.maxWriteSize) + ")"
+	}
+
+	// 路径遍历检测: 如果设置了 allowedRoot，验证目标路径在其范围内
+	if fs.allowedRoot != "" {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return false, "无法解析路径: " + err.Error()
+		}
+		// 解析符号链接
+		resolved := absPath
+		if r, err := filepath.EvalSymlinks(absPath); err == nil {
+			resolved = r
+		}
+		rel, err := filepath.Rel(fs.allowedRoot, resolved)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return false, "路径超出允许范围: " + path
+		}
 	}
 
 	// 规范化路径用于匹配

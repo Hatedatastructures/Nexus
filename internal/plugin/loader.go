@@ -57,7 +57,7 @@ func (l *Loader) Discover() ([]*Manifest, error) {
 
 		manifests, err := l.discoverInDir(dir)
 		if err != nil {
-			slog.Warn("插件: 扫描目录失败",
+			slog.Warn("plugin: directory scan failed",
 				"dir", dir,
 				"error", err,
 			)
@@ -67,7 +67,7 @@ func (l *Loader) Discover() ([]*Manifest, error) {
 		for _, m := range manifests {
 			// 按平台过滤
 			if !manifestMatchesPlatform(m) {
-				slog.Debug("插件: 跳过不兼容平台的插件",
+				slog.Debug("plugin: skipped incompatible platform",
 					"name", m.Name,
 					"platforms", m.Platforms,
 				)
@@ -79,7 +79,7 @@ func (l *Loader) Discover() ([]*Manifest, error) {
 				seen[m.Name] = m
 				ordered = append(ordered, m.Name)
 			} else {
-				slog.Debug("插件: 跳过重复插件",
+				slog.Debug("plugin: skipped duplicate plugin",
 					"name", m.Name,
 					"dir", dir,
 				)
@@ -92,7 +92,7 @@ func (l *Loader) Discover() ([]*Manifest, error) {
 		result = append(result, seen[name])
 	}
 
-	slog.Info("插件: 发现完毕", "count", len(result))
+	slog.Info("plugin: discovery complete", "count", len(result))
 	return result, nil
 }
 
@@ -117,7 +117,7 @@ func (l *Loader) Validate(m *Manifest) error {
 	// 检查必需的环境变量
 	for _, envName := range m.RequiresEnv {
 		if os.Getenv(envName) == "" {
-			slog.Warn("插件: 缺少必需的环境变量",
+			slog.Warn("plugin: missing required environment variable",
 				"plugin", m.Name,
 				"env", envName,
 			)
@@ -128,7 +128,7 @@ func (l *Loader) Validate(m *Manifest) error {
 	// 检查外部依赖
 	for _, dep := range m.ExternalDeps {
 		if !isInPATH(dep) {
-			slog.Warn("插件: 外部依赖不可用",
+			slog.Warn("plugin: external dependency unavailable",
 				"plugin", m.Name,
 				"dep", dep,
 			)
@@ -166,7 +166,7 @@ func (l *Loader) discoverInDir(dir string) ([]*Manifest, error) {
 
 		m, err := ParseManifest(path)
 		if err != nil {
-			slog.Debug("插件: 解析清单失败",
+			slog.Debug("plugin: manifest parse failed",
 				"path", path,
 				"error", err,
 			)

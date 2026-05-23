@@ -102,7 +102,7 @@ func (m *Manager) LoadAll(ctx context.Context) error {
 		m.skills[skill.Name] = skill
 	}
 
-	slog.Info("技能: 加载完成", "count", len(m.skills))
+	slog.Info("skill: loaded", "count", len(m.skills))
 	return nil
 }
 
@@ -161,7 +161,7 @@ func (m *Manager) Create(skill *Skill) error {
 	m.skills[skill.Name] = skill
 	m.mu.Unlock()
 
-	slog.Info("技能: 创建完成", "name", skill.Name, "path", skill.Path)
+	slog.Info("skill: created", "name", skill.Name, "path", skill.Path)
 	return nil
 }
 
@@ -191,7 +191,7 @@ func (m *Manager) Update(name string, skill *Skill) error {
 	}
 
 	m.skills[name] = skill
-	slog.Info("技能: 更新完成", "name", name)
+	slog.Info("skill: updated", "name", name)
 	return nil
 }
 
@@ -208,7 +208,7 @@ func (m *Manager) Delete(name string) error {
 	// 删除磁盘文件
 	skillDir := filepath.Dir(skill.Path)
 	if err := os.RemoveAll(skillDir); err != nil {
-		slog.Warn("技能: 删除目录失败", "dir", skillDir, "error", err)
+		slog.Warn("skill: failed to delete directory", "dir", skillDir, "error", err)
 	}
 
 	delete(m.skills, name)
@@ -222,7 +222,7 @@ func (m *Manager) Delete(name string) error {
 	}
 	m.disabled = newDisabled
 
-	slog.Info("技能: 删除完成", "name", name)
+	slog.Info("skill: deleted", "name", name)
 	return nil
 }
 
@@ -241,7 +241,7 @@ func (m *Manager) Install(ctx context.Context, source, identifier string) error 
 	m.skills[skill.Name] = skill
 	m.mu.Unlock()
 
-	slog.Info("技能: 安装完成", "name", skill.Name, "source", source)
+	slog.Info("skill: installed", "name", skill.Name, "source", source)
 	return nil
 }
 
@@ -259,7 +259,7 @@ func (m *Manager) Disable(name string) {
 		}
 	}
 	m.disabled = append(m.disabled, name)
-	slog.Info("技能: 已禁用", "name", name)
+	slog.Info("skill: disabled", "name", name)
 }
 
 // Enable 重新启用之前被禁用的技能。
@@ -274,7 +274,7 @@ func (m *Manager) Enable(name string) {
 		}
 	}
 	m.disabled = newDisabled
-	slog.Info("技能: 已启用", "name", name)
+	slog.Info("skill: enabled", "name", name)
 }
 
 // ───────────────────────────── 内部方法 ─────────────────────────────

@@ -65,7 +65,7 @@ func PreprocessReferences(ctx context.Context, message string, tokenBudget int) 
 
 		content, err := expandReference(ctx, ref)
 		if err != nil {
-			slog.Debug("展开引用失败", "ref", ref.Raw, "err", err)
+			slog.Debug("reference expansion failed", "ref", ref.Raw, "err", err)
 			continue
 		}
 

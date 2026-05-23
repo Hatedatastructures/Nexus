@@ -133,7 +133,7 @@ func (e *ModalEnvironment) Cleanup() error {
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 
-	slog.Info("Modal 沙箱已清理", "sandbox_id", e.sandboxID)
+	slog.Info("Modal sandbox cleaned up", "sandbox_id", e.sandboxID)
 	e.sandboxID = ""
 	return nil
 }
@@ -169,6 +169,6 @@ func (e *ModalEnvironment) createSandbox(ctx context.Context) error {
 	}
 
 	e.sandboxID = result.ID
-	slog.Info("Modal 沙箱已创建", "sandbox_id", e.sandboxID)
+	slog.Info("Modal sandbox created", "sandbox_id", e.sandboxID)
 	return nil
 }

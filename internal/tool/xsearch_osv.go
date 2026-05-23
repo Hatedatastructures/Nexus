@@ -297,7 +297,7 @@ func (t *OSVCheckTool) Execute(ctx context.Context, args map[string]any) (string
 		vulns = append(vulns, entry)
 	}
 
-	slog.Info("OSV 漏洞查询完成", "package", pkgDesc, "ecosystem", ecosystem, "vulns", len(vulns))
+	slog.Info("OSV vulnerability query completed", "package", pkgDesc, "ecosystem", ecosystem, "vulns", len(vulns))
 
 	return ToolResult(map[string]any{
 		"package": pkgName, "version": version, "ecosystem": ecosystem,

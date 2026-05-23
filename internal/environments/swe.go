@@ -105,7 +105,7 @@ func (s *SWEEnvironment) SetTask(desc string) {
 	defer s.mu.Unlock()
 	s.taskDescription = desc
 	s.startTime = time.Now()
-	slog.Info("软件工程: 设置任务", "description", desc)
+	slog.Info("SWE: task set", "description", desc)
 }
 
 // Execute 执行软件工程环境中的动作。
@@ -161,7 +161,7 @@ func (s *SWEEnvironment) handleReadFile(action Action) (*Observation, error) {
 		}, nil
 	}
 
-	slog.Debug("软件工程: 读取文件", "path", path, "size", len(content))
+	slog.Debug("SWE: read file", "path", path, "size", len(content))
 
 	return &Observation{
 		State:  fmt.Sprintf("已读取文件: %s (%d 字节)", path, len(content)),
@@ -203,7 +203,7 @@ func (s *SWEEnvironment) handleWriteFile(action Action) (*Observation, error) {
 	// 更新评分
 	s.evaluateScore()
 
-	slog.Info("软件工程: 写入文件",
+	slog.Info("SWE: write file",
 		"path", path,
 		"size", len(content),
 		"new_file", isNew,
@@ -253,7 +253,7 @@ func (s *SWEEnvironment) handleRunTest(action Action) (*Observation, error) {
 
 	s.evaluateScore()
 
-	slog.Info("软件工程: 运行测试",
+	slog.Info("SWE: run test",
 		"name", result.Name,
 		"passed", result.Passed,
 		"message", result.Message,
@@ -306,7 +306,7 @@ func (s *SWEEnvironment) handleCommit(action Action) (*Observation, error) {
 
 	s.evaluateScore()
 
-	slog.Info("软件工程: 提交变更",
+	slog.Info("SWE: commit changes",
 		"hash", commit.Hash,
 		"message", commit.Message,
 		"files_count", len(changedFiles),
@@ -358,7 +358,7 @@ func (s *SWEEnvironment) handleSubmit() (*Observation, error) {
 	s.done = true
 	s.evaluateScore()
 
-	slog.Info("软件工程: 任务完成",
+	slog.Info("SWE: task completed",
 		"files", len(s.files),
 		"tests", len(s.tests),
 		"commits", len(s.commits),
@@ -403,7 +403,7 @@ func (s *SWEEnvironment) Step(ctx context.Context) (*Observation, error) {
 		s.done = true
 	}
 
-	slog.Debug("软件工程: 阶段推进", "phase", s.phase.phaseName())
+	slog.Debug("SWE: phase advanced", "phase", s.phase.phaseName())
 
 	return &Observation{
 		State:  fmt.Sprintf("阶段已推进至: %s", s.phase.phaseName()),

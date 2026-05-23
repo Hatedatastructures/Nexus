@@ -57,10 +57,27 @@ func NewAgentCache(maxSize int, idleTTL time.Duration) *AgentCache {
 // sessionKey 为会话键，factory 在缓存未命中时创建新代理并返回 (agent, signature)。
 // 调用者负责在完成后调用 releaseInUse 释放 inUse 标记。
 func (c *AgentCache) GetOrCreate(sessionKey string, factory func() (*agent.AIAgent, string)) (*agent.AIAgent, error) {
+	// Fast path: check cache under lock
+	c.mu.Lock()
+	if entry, ok := c.entries[sessionKey]; ok {
+		entry.lastAccess = time.Now()
+		entry.inUse = true
+		if entry.element != nil {
+			c.lruList.MoveToFront(entry.element)
+		}
+		c.mu.Unlock()
+		return entry.agent, nil
+	}
+	c.mu.Unlock()
+
+	// Slow path: create agent outside lock (避免工厂创建串行化)
+	newAgent, sig := factory()
+
+	// Re-acquire lock to store
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// 命中: 更新访问时间，移到 LRU 表头，标记为使用中
+	// Double-check: another goroutine might have created it
 	if entry, ok := c.entries[sessionKey]; ok {
 		entry.lastAccess = time.Now()
 		entry.inUse = true
@@ -69,9 +86,6 @@ func (c *AgentCache) GetOrCreate(sessionKey string, factory func() (*agent.AIAge
 		}
 		return entry.agent, nil
 	}
-
-	// 未命中: 调用工厂创建新代理
-	newAgent, sig := factory()
 
 	// 容量检查: 超出上限则驱逐最少使用的条目
 	if len(c.entries) >= c.maxSize {
@@ -132,7 +146,9 @@ func (c *AgentCache) SweepIdle(ctx context.Context) int {
 	// 异步清理被驱逐的代理
 	for _, entry := range expired {
 		go func(e *cacheEntry) {
-			// 代理缓存条目驱逐时的清理。AIAgent 当前未实现 Close() 接口，后续可添加资源释放逻辑。
+			if e.agent != nil {
+				e.agent.Shutdown()
+			}
 			slog.Debug("evicted idle agent from cache", "idle_duration", now.Sub(e.lastAccess))
 		}(entry)
 	}
@@ -196,10 +212,12 @@ func (c *AgentCache) evictLRU() bool {
 			"cache_size", len(c.entries),
 		)
 
-		// 异步清理
-		go func(e *cacheEntry) {
-			// 代理缓存条目驱逐时的清理。AIAgent 当前未实现 Close() 接口，后续可添加资源释放逻辑。
-		}(entry)
+				// 异步清理被驱逐的代理
+			go func(e *cacheEntry) {
+				if e.agent != nil {
+					e.agent.Shutdown()
+				}
+			}(entry)
 
 		return true
 	}

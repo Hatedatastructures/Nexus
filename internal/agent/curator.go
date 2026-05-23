@@ -136,10 +136,10 @@ func (c *Curator) ApplyAutomaticTransitions(skills []CuratorSkill) []CuratorSkil
 		case SkillStateActive:
 			if age > curatorArchiveAge {
 				skill.State = SkillStateArchived
-				slog.Info("技能已归档", "name", skill.Name, "last_used", skill.LastUsed)
+				slog.Info("skill archived", "name", skill.Name, "last_used", skill.LastUsed)
 			} else if age > curatorMaxSkillAge {
 				skill.State = SkillStateStale
-				slog.Info("技能已过期", "name", skill.Name, "last_used", skill.LastUsed)
+				slog.Info("skill expired", "name", skill.Name, "last_used", skill.LastUsed)
 			}
 
 		case SkillStateStale:
@@ -170,7 +170,7 @@ func (c *Curator) Run(ctx context.Context) (*ReviewResult, error) {
 		return nil, nil
 	}
 
-	slog.Info("开始策展", "last_run", c.state.LastRun)
+	slog.Info("curation started", "last_run", c.state.LastRun)
 
 	// 应用自动状态转换
 	c.state.Skills = c.ApplyAutomaticTransitions(c.state.Skills)
@@ -187,14 +187,14 @@ func (c *Curator) Run(ctx context.Context) (*ReviewResult, error) {
 	c.mu.Unlock()
 
 	if err := c.SaveState(); err != nil {
-		slog.Warn("保存策展状态失败", "err", err)
+		slog.Warn("save curation state failed", "err", err)
 	}
 
 	result := &ReviewResult{
 		Summary: fmt.Sprintf("策展完成，共 %d 个技能", len(c.state.Skills)),
 	}
 
-	slog.Info("策展完成", "skills", len(c.state.Skills), "run_count", c.state.RunCount)
+	slog.Info("curation completed", "skills", len(c.state.Skills), "run_count", c.state.RunCount)
 	return result, nil
 }
 

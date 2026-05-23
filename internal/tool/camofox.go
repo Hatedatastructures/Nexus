@@ -703,7 +703,7 @@ func (t *CamofoxCloseTool) Execute(ctx context.Context, args map[string]any) (st
 	baseURL := GetCamofoxURL()
 	_, err := camofoxDelete(ctx, baseURL+"/sessions/"+session.UserID, camofoxDefaultTimeout)
 	if err != nil {
-		slog.Warn("关闭 CamoFox 会话失败", "err", err)
+		slog.Warn("failed to close CamoFox session", "err", err)
 	}
 
 	return ToolResult(map[string]any{"success": true, "closed": true}), nil

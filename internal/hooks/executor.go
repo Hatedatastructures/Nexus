@@ -50,7 +50,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, hook *ShellHook, event *Hoo
 	// 解析响应
 	resp, err := parseResponse(stdout)
 	if err != nil {
-		slog.Warn("解析 hook 响应失败，使用默认 allow", "command", hook.Command(), "err", err)
+		slog.Warn("failed to parse hook response, defaulting to allow", "command", hook.Command(), "err", err)
 		return &HookResponse{Decision: "allow"}, nil
 	}
 

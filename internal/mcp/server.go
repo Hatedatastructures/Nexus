@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 )
 
 // ───────────────────────────── 构造函数 ─────────────────────────────
@@ -54,7 +55,7 @@ func (s *MCPServer) RegisterTool(name string) error {
 	}
 
 	s.tools = append(s.tools, def)
-	slog.Debug("MCP 工具已注册", "name", name)
+	slog.Debug("MCP tool registered", "name", name)
 	return nil
 }
 
@@ -72,10 +73,10 @@ func (s *MCPServer) RegisterAllTools(ctx context.Context) error {
 		default:
 		}
 		if err := s.RegisterTool(name); err != nil {
-			slog.Warn("注册 MCP 工具失败", "name", name, "err", err)
+			slog.Warn("failed to register MCP tool", "name", name, "err", err)
 		}
 	}
-	slog.Info("MCP 工具批量注册完成", "count", len(s.tools))
+	slog.Info("MCP tools bulk registration completed", "count", len(s.tools))
 	return nil
 }
 
@@ -116,7 +117,7 @@ func (s *MCPServer) HandleRequest(ctx context.Context, req *JSONRPCRequest) *JSO
 func (s *MCPServer) handleInitialize(_ context.Context, params map[string]any) map[string]any {
 	s.initialized = true
 
-	slog.Info("MCP 初始化请求",
+	slog.Info("MCP initialize request",
 		"client_info", params,
 		"server", s.serverInfo.Name,
 		"version", s.serverInfo.Version,
@@ -225,20 +226,14 @@ func (s *MCPServer) RunStdioLoop(ctx context.Context) error {
 
 // trimLine 去除行首尾空白。
 func trimLine(s string) string {
-	result := ""
-	for _, c := range s {
-		if c != '\n' && c != '\r' && c != ' ' && c != '\t' {
-			result += string(c)
-		}
-	}
-	return result
+	return strings.TrimSpace(s)
 }
 
 // writeResponse 将 JSON-RPC 响应写入输出。
 func writeResponse(w *bufio.Writer, resp *JSONRPCResponse) {
 	data, err := json.Marshal(resp)
 	if err != nil {
-		slog.Error("序列化响应失败", "err", err)
+		slog.Error("failed to serialize response", "err", err)
 		return
 	}
 	fmt.Fprintln(w, string(data))

@@ -83,7 +83,7 @@ func NewPairingStore(baseDir string) (*PairingStore, error) {
 
 	// 加载已有记录
 	if err := store.loadAll(); err != nil {
-		slog.Warn("配对: 加载历史记录失败", "error", err)
+		slog.Warn("pairing: failed to load history", "error", err)
 	}
 
 	return store, nil
@@ -145,10 +145,10 @@ func (s *PairingStore) GenerateCode(platform, userID string) (string, error) {
 
 	// 持久化
 	if err := s.savePlatform(platform); err != nil {
-		slog.Warn("配对: 保存记录失败", "platform", platform, "error", err)
+		slog.Warn("pairing: failed to save record", "platform", platform, "error", err)
 	}
 
-	slog.Info("配对: 生成配对码",
+	slog.Info("pairing: code generated",
 		"platform", platform,
 		"user_id", userID,
 		"code", code[:4]+"****",
@@ -173,15 +173,10 @@ func (s *PairingStore) VerifyCode(platform, userID, code string) (bool, error) {
 	now := time.Now()
 
 	records := s.getRecords(platform, userID)
+
+	// Phase 1: 查找匹配的配对码
 	for _, r := range records {
 		if r.Code != code {
-			// 码不匹配: 递增尝试次数，检查是否需要锁定
-			r.Attempts++
-			r.LastAttemptAt = now
-			if r.Attempts > lockoutThreshold {
-				r.LockedUntil = now.Add(10 * time.Minute)
-				_ = s.savePlatform(platform)
-			}
 			continue
 		}
 
@@ -201,18 +196,30 @@ func (s *PairingStore) VerifyCode(platform, userID, code string) (bool, error) {
 			return false, fmt.Errorf("验证已锁定，请等待 %s 后重试", remaining)
 		}
 
-		// 所有检查通过，标记为已验证（不再递增 attempts）
+		// 所有检查通过，标记为已验证
 		r.Verified = true
 		_ = s.savePlatform(platform)
 
-		slog.Info("配对: 配对码验证成功",
+		slog.Info("pairing: code verification succeeded",
 			"platform", platform,
 			"user_id", userID,
 		)
 		return true, nil
 	}
 
-	// 未找到匹配的配对码
+	// Phase 2: 未找到匹配 — 对所有未验证记录递增 Attempts
+	for _, r := range records {
+		if r.Verified {
+			continue
+		}
+		r.Attempts++
+		r.LastAttemptAt = now
+		if r.Attempts > lockoutThreshold {
+			r.LockedUntil = now.Add(10 * time.Minute)
+		}
+	}
+	_ = s.savePlatform(platform)
+
 	return false, fmt.Errorf("无效的配对码")
 }
 
@@ -258,7 +265,7 @@ func (s *PairingStore) PurgeExpired() int {
 	}
 
 	if total > 0 {
-		slog.Info("配对: 清理过期配对码", "count", total)
+		slog.Info("pairing: purged expired codes", "count", total)
 	}
 
 	return total
@@ -286,13 +293,13 @@ func (s *PairingStore) loadAll() error {
 
 		data, err := os.ReadFile(path)
 		if err != nil {
-			slog.Warn("配对: 读取平台文件失败", "platform", platform, "error", err)
+			slog.Warn("pairing: failed to read platform file", "platform", platform, "error", err)
 			continue
 		}
 
 		var records []*PairingRecord
 		if err := json.Unmarshal(data, &records); err != nil {
-			slog.Warn("配对: 解析平台文件失败", "platform", platform, "error", err)
+			slog.Warn("pairing: failed to parse platform file", "platform", platform, "error", err)
 			continue
 		}
 

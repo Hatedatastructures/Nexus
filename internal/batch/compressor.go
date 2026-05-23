@@ -70,7 +70,7 @@ func (c *Compressor) CompressTrajectory(ctx context.Context, turns []TrajectoryT
 	// 生成中间轮次摘要
 	summary, err := c.summarizeMiddle(ctx, middle)
 	if err != nil {
-		slog.Warn("轨迹压缩失败，保留原始", "err", err)
+		slog.Warn("trajectory compression failed, keeping original", "err", err)
 		return turns, nil
 	}
 

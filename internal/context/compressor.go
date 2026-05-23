@@ -29,7 +29,7 @@ const (
 func (c *Compressor) ShouldCompress(contextLimit, totalTokens int) bool {
 	// Anti-thrash: 如果连续两次压缩未显著减少 token，跳过
 	if c.consecutiveSummaries >= summaryAntiThrashThreshold {
-		slog.Debug("跳过压缩: 连续无效压缩",
+		slog.Debug("skipping compression: consecutive ineffective compressions",
 			"consecutive", c.consecutiveSummaries,
 		)
 		return false
@@ -54,7 +54,7 @@ func (c *Compressor) recordCompressionResult(beforeTokens, afterTokens int) {
 	reduction := float64(beforeTokens-afterTokens) / float64(beforeTokens)
 	if reduction < 0.15 {
 		c.consecutiveSummaries++
-		slog.Debug("无效压缩: token 减少不足",
+		slog.Debug("ineffective compression: insufficient token reduction",
 			"reduction", reduction,
 			"consecutive", c.consecutiveSummaries,
 		)
@@ -86,7 +86,7 @@ func (c *Compressor) Compress(ctx context.Context, messages []llm.Message, auxPr
 	nMessages := len(messages)
 	minForCompress := c.protectFirstN + 3 + 1
 	if nMessages <= minForCompress {
-		slog.Warn("消息太少无法压缩",
+		slog.Warn("too few messages to compress",
 			"messages", nMessages,
 			"min_for_compress", minForCompress,
 		)
@@ -99,7 +99,7 @@ func (c *Compressor) Compress(ctx context.Context, messages []llm.Message, auxPr
 	// Phase 1: 工具输出修剪 (廉价预处理，无 LLM 调用)
 	prunedMessages, prunedCount := c.pruneOldToolResults(messages, 20, c.tailTokenBudget)
 	if prunedCount > 0 {
-		slog.Info("预压缩: 修剪了旧工具结果",
+		slog.Info("pre-compression: pruned old tool results",
 			"pruned_count", prunedCount,
 		)
 	}
@@ -119,7 +119,7 @@ func (c *Compressor) Compress(ctx context.Context, messages []llm.Message, auxPr
 
 	turnsToSummarize := messages[compressStart:compressEnd]
 
-	slog.Info("上下文压缩触发",
+	slog.Info("context compression triggered",
 		"tokens", displayTokens,
 		"threshold", int(float64(c.tailTokenBudget)*c.thresholdPercent),
 		"compress_start", compressStart,
@@ -134,7 +134,7 @@ func (c *Compressor) Compress(ctx context.Context, messages []llm.Message, auxPr
 		summary, err = c.generateSummary(ctx, turnsToSummarize, auxProvider, "", focusTopic)
 		if err != nil {
 			// generateSummary 已返回降级总结，仅记录日志
-			slog.Warn("总结生成使用了降级策略", "err", err)
+			slog.Warn("summary generation used degraded strategy", "err", err)
 		}
 	}
 
@@ -162,17 +162,25 @@ func (c *Compressor) Compress(ctx context.Context, messages []llm.Message, auxPr
 		}
 		compressed = append(compressed, summaryMsg)
 	} else {
-		// 无辅助 LLM 提供者时的最终降级
-		nDropped := compressEnd - compressStart
-		fallbackSummary := fmt.Sprintf(
-			"%s\n总结生成不可用。%d 条消息已被移除以释放上下文空间，但无法总结。"+
-				"基于下方的最近消息和文件/资源的当前状态继续。",
-			SummaryPrefix, nDropped,
-		)
-		compressed = append(compressed, llm.Message{
-			Role:    llm.RoleUser,
-			Content: fallbackSummary,
-		})
+		// 无辅助 LLM 提供者时: 尝试 FormatSummary 结构化降级
+		turnsToFormat := messages[compressStart:compressEnd]
+		if structuredSummary := FormatSummary(turnsToFormat); structuredSummary != "" {
+			compressed = append(compressed, llm.Message{
+				Role:    llm.RoleUser,
+				Content: SummaryPrefix + "\n" + structuredSummary,
+			})
+		} else {
+			nDropped := compressEnd - compressStart
+			fallbackSummary := fmt.Sprintf(
+				"%s\n总结生成不可用。%d 条消息已被移除以释放上下文空间，但无法总结。"+
+					"基于下方的最近消息和文件/资源的当前状态继续。",
+				SummaryPrefix, nDropped,
+			)
+			compressed = append(compressed, llm.Message{
+				Role:    llm.RoleUser,
+				Content: fallbackSummary,
+			})
+		}
 	}
 
 	// 尾部消息
@@ -186,7 +194,7 @@ func (c *Compressor) Compress(ctx context.Context, messages []llm.Message, auxPr
 	// 更新 anti-thrash 计数器
 	c.recordCompressionResult(displayTokens, estimateTokensRough(compressed))
 
-	slog.Info("压缩完成",
+	slog.Info("compression completed",
 		"original_messages", nMessages,
 		"compressed_messages", len(compressed),
 	)
@@ -289,7 +297,7 @@ func (c *Compressor) ensureLastUserMessageInTail(messages []llm.Message, cutIdx 
 	}
 
 	// 最终用户消息在压缩区域中 — 将其拉入尾部
-	slog.Debug("锚定尾部切割到最终用户消息",
+	slog.Debug("anchoring tail cut to final user message",
 		"last_user_message_idx", lastUserIdx,
 		"original_cut_idx", cutIdx,
 	)
@@ -346,7 +354,7 @@ func (c *Compressor) sanitizeToolPairs(messages []llm.Message) []llm.Message {
 			filtered = append(filtered, msg)
 		}
 		messages = filtered
-		slog.Info("压缩清理: 移除了孤立的 tool_result",
+		slog.Info("compression cleanup: removed orphaned tool_result",
 			"count", len(orphanedResults),
 		)
 	}
@@ -376,7 +384,7 @@ func (c *Compressor) sanitizeToolPairs(messages []llm.Message) []llm.Message {
 			}
 		}
 		messages = patched
-		slog.Info("压缩清理: 添加了存根 tool_result",
+		slog.Info("compression cleanup: added stub tool_result",
 			"count", len(missingResults),
 		)
 	}

@@ -1,7 +1,3 @@
-// policy.go 定义策略引擎。
-// 策略由一组有序规则组成，采用"首个命中生效"的匹配模式。
-// 规则按声明顺序依次匹配，第一条命中的规则决定权限级别。
-
 package permissions
 
 import (
@@ -41,7 +37,7 @@ func (r *Rule) Match(toolName string, args map[string]any) bool {
 	matched, err := filepath.Match(r.ToolPattern, toolName)
 	if err != nil {
 		// 无效的 glob 模式，视为不匹配
-		slog.Debug("权限规则 glob 模式无效", "pattern", r.ToolPattern, "err", err)
+		slog.Debug("permission rule glob pattern invalid", "pattern", r.ToolPattern, "err", err)
 		return false
 	}
 	if !matched {
@@ -148,7 +144,7 @@ func (p *Policy) Evaluate(toolName string, args map[string]any) Decision {
 			if reason == "" {
 				reason = fmt.Sprintf("匹配规则 #%d: %s", i, rule.ToolPattern)
 			}
-			slog.Debug("权限规则命中",
+			slog.Debug("permission rule matched",
 				"policy", p.Name,
 				"rule_idx", i,
 				"tool", toolName,
@@ -192,12 +188,24 @@ func DefaultPolicy() *Policy {
 		Name:        "default",
 		Description: "内置默认策略: 只读=放行, 写入=询问一次, 危险=每次询问",
 		Rules: []Rule{
-			// ── 硬封锁: 绝对禁止的操作 ──
+			// ── 硬封锁: 绝对禁止的操作 (每条规则独立，使用 OR 语义) ──
 			{
 				ToolPattern: "terminal",
-				ArgPatterns: []string{"command~=rm\\s+(-[a-zA-Z]*f[a-zA-Z]*\\s+)?/", "command~=mkfs"},
+				ArgPatterns: []string{"command~=rm\\s+(-[a-zA-Z]*f[a-zA-Z]*\\s+)?/"},
 				Level:       LevelAutoDeny,
-				Reason:      "禁止执行破坏性系统命令",
+				Reason:      "禁止执行 rm -rf /",
+			},
+			{
+				ToolPattern: "terminal",
+				ArgPatterns: []string{"command~=mkfs"},
+				Level:       LevelAutoDeny,
+				Reason:      "禁止执行 mkfs",
+			},
+			{
+				ToolPattern: "terminal",
+				ArgPatterns: []string{"command~=dd\\s+.*of=/dev/"},
+				Level:       LevelAutoDeny,
+				Reason:      "禁止执行 dd 写设备",
 			},
 			// ── 自动放行: 只读/查询工具 ──
 			{

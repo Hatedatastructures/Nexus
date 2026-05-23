@@ -103,7 +103,7 @@ func (t *CodeExecuteTool) Execute(ctx context.Context, args map[string]any) (str
 	// 创建临时目录
 	tmpDir, err := os.MkdirTemp("", "nexus-code-*")
 	if err != nil {
-		slog.Error("创建临时目录失败", "err", err)
+		slog.Error("failed to create temp directory", "err", err)
 		return ToolError(fmt.Sprintf("创建临时目录失败: %v", err)), nil
 	}
 	defer os.RemoveAll(tmpDir)
@@ -111,7 +111,7 @@ func (t *CodeExecuteTool) Execute(ctx context.Context, args map[string]any) (str
 	// 创建代码文件
 	ext := t.fileExtension(language)
 	codeFile := filepath.Join(tmpDir, "code"+ext)
-	if err := os.WriteFile(codeFile, []byte(code), 0644); err != nil {
+	if err := os.WriteFile(codeFile, []byte(code), 0600); err != nil {
 		return ToolError(fmt.Sprintf("写入代码文件失败: %v", err)), nil
 	}
 
@@ -171,7 +171,7 @@ func (t *CodeExecuteTool) Execute(ctx context.Context, args map[string]any) (str
 		}
 	}
 
-	slog.Info("代码执行完成",
+	slog.Info("code execution completed",
 		"language", language,
 		"duration", duration.String(),
 		"exitCode", exitCode,

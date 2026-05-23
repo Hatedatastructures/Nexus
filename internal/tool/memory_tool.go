@@ -90,8 +90,8 @@ func (t *MemoryTool) Schema() *ToolSchema {
 			"properties": map[string]any{
 				"action": map[string]any{
 					"type":        "string",
-					"description": "操作类型: read (读取), write (写入/追加), replace (替换), remove (删除)",
-					"enum":        []string{"read", "write", "replace", "remove"},
+					"description": "操作类型: add (添加记忆), replace (替换记忆), remove (删除记忆)",
+					"enum":        []string{"add", "replace", "remove"},
 				},
 				"target": map[string]any{
 					"type":        "string",
@@ -122,14 +122,14 @@ func (t *MemoryTool) Execute(ctx context.Context, args map[string]any) (string, 
 
 	// 验证 action 值
 	switch action {
-	case "read", "write", "replace", "remove":
+	case "add", "replace", "remove":
 		// 合法操作
 	default:
 		return ToolError(fmt.Sprintf("不支持的 action: %s。支持的操作: read, write, replace, remove", action)), nil
 	}
 
 	// 写入/替换/删除操作需要 target
-	if action != "read" {
+	if action != "add" {
 		target, ok := args["target"].(string)
 		if !ok || target == "" {
 			return ToolError("参数 target 是必填项 (memory 或 user)"), nil
@@ -144,14 +144,14 @@ func (t *MemoryTool) Execute(ctx context.Context, args map[string]any) (string, 
 	if mgr != nil {
 		result, err := mgr.HandleToolCall(ctx, "memory", args)
 		if err != nil {
-			slog.Error("记忆管理器处理失败", "action", action, "err", err)
+			slog.Error("memory manager processing failed", "action", action, "err", err)
 			return ToolError(fmt.Sprintf("记忆操作失败: %v", err)), nil
 		}
 		return result, nil
 	}
 
 	// 无记忆管理器时的降级处理
-	slog.Warn("记忆管理器未配置，返回占位结果", "action", action)
+	slog.Warn("memory manager not configured, returning placeholder result", "action", action)
 
 	result, _ := json.Marshal(map[string]any{
 		"output": fmt.Sprintf("记忆操作 '%s' 已接收。记忆管理器未配置，操作未持久化。", action),

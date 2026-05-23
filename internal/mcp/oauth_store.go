@@ -69,7 +69,7 @@ func (s *TokenStore) SaveToken(token *OAuthToken) error {
 		return fmt.Errorf("重命名令牌文件失败: %w", err)
 	}
 
-	slog.Debug("OAuth 令牌已持久化", "path", s.tokensPath)
+	slog.Debug("OAuth token persisted", "path", s.tokensPath)
 	return nil
 }
 
@@ -93,7 +93,7 @@ func (s *TokenStore) LoadToken() (*OAuthToken, error) {
 		return nil, fmt.Errorf("令牌文件中没有 access_token")
 	}
 
-	slog.Debug("已从磁盘加载 OAuth 令牌", "path", s.tokensPath)
+	slog.Debug("loaded OAuth token from disk", "path", s.tokensPath)
 	return &token, nil
 }
 
@@ -104,7 +104,7 @@ func (s *TokenStore) DeleteToken() error {
 		return fmt.Errorf("删除令牌文件失败: %w", err)
 	}
 
-	slog.Debug("已删除 OAuth 令牌文件", "path", s.tokensPath)
+	slog.Debug("deleted OAuth token file", "path", s.tokensPath)
 	return nil
 }
 

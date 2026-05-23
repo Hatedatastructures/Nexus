@@ -192,7 +192,7 @@ func (l *SkillLoader) DiscoverAll() ([]*Skill, error) {
 
 		skills, err := l.discoverInDir(dir)
 		if err != nil {
-			slog.Warn("技能: 扫描目录失败",
+			slog.Warn("skill: failed to scan directory",
 				"dir", dir,
 				"error", err,
 			)
@@ -202,7 +202,7 @@ func (l *SkillLoader) DiscoverAll() ([]*Skill, error) {
 		for _, skill := range skills {
 			// 按平台过滤
 			if !skillMatchesPlatform(skill) {
-				slog.Debug("技能: 跳过不兼容平台的技能",
+				slog.Debug("skill: skipped incompatible platform",
 					"name", skill.Name,
 					"platforms", skill.Platforms,
 				)
@@ -222,7 +222,7 @@ func (l *SkillLoader) DiscoverAll() ([]*Skill, error) {
 		result = append(result, seen[name])
 	}
 
-	slog.Info("技能: 发现完毕", "count", len(result))
+	slog.Info("skill: discovery completed", "count", len(result))
 	return result, nil
 }
 
@@ -244,7 +244,7 @@ func (l *SkillLoader) Load(name string) (*Skill, error) {
 		data, err := os.ReadFile(skillPath)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				slog.Debug("技能: 读取文件失败", "path", skillPath, "error", err)
+				slog.Debug("skill: failed to read file", "path", skillPath, "error", err)
 			}
 			continue
 		}
@@ -298,13 +298,13 @@ func (l *SkillLoader) discoverInDir(dir string) ([]*Skill, error) {
 
 		data, err := os.ReadFile(path)
 		if err != nil {
-			slog.Debug("技能: 读取文件失败", "path", path, "error", err)
+			slog.Debug("skill: failed to read file", "path", path, "error", err)
 			return nil
 		}
 
 		skill, err := ParseSkillMarkdown(data)
 		if err != nil {
-			slog.Debug("技能: 解析失败", "path", path, "error", err)
+			slog.Debug("skill: parse failed", "path", path, "error", err)
 			return nil
 		}
 

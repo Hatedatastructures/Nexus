@@ -79,7 +79,7 @@ func (s *Scheduler) run(ctx context.Context, fn tickFn, logMsg string) error {
 		return err
 	}
 
-	slog.Info("Cron: 调度器启动", "mode", logMsg, "interval", s.interval)
+	slog.Info("Cron: scheduler started", "mode", logMsg, "interval", s.interval)
 
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
@@ -87,11 +87,11 @@ func (s *Scheduler) run(ctx context.Context, fn tickFn, logMsg string) error {
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info("Cron: 调度器停止", "mode", logMsg)
+			slog.Info("Cron: scheduler stopped", "mode", logMsg)
 			return ctx.Err()
 		case <-ticker.C:
 			if err := fn(ctx); err != nil {
-				slog.Error("Cron: tick 失败", "mode", logMsg, "error", err)
+				slog.Error("Cron: tick failed", "mode", logMsg, "error", err)
 			}
 		}
 	}
@@ -120,7 +120,7 @@ func (s *Scheduler) tick(ctx context.Context) error {
 	// 获取文件锁
 	lock, err := s.acquireLock()
 	if err != nil {
-		slog.Debug("Cron: tick 跳过 — 锁已被占用")
+		slog.Debug("Cron: tick skipped — lock already held")
 		return nil
 	}
 	defer s.releaseLock(lock)
@@ -135,12 +135,12 @@ func (s *Scheduler) tick(ctx context.Context) error {
 		return nil
 	}
 
-	slog.Info("Cron: 到期作业", "count", len(dueJobs))
+	slog.Info("Cron: due jobs", "count", len(dueJobs))
 
 	// 预计算所有重复作业的下次执行时间
 	for _, job := range dueJobs {
 		if err := s.manager.AdvanceNextRun(ctx, job); err != nil {
-			slog.Warn("Cron: 推进下次执行时间失败",
+			slog.Warn("Cron: failed to advance next run time",
 				"job_id", job.ID, "error", err,
 			)
 		}
@@ -149,7 +149,7 @@ func (s *Scheduler) tick(ctx context.Context) error {
 	// 顺序执行作业 (由调度器保证单线程)
 	for _, job := range dueJobs {
 		if err := s.executor.Execute(ctx, job); err != nil {
-			slog.Error("Cron: 作业执行失败",
+			slog.Error("Cron: job execution failed",
 				"job_id", job.ID,
 				"name", job.Name,
 				"error", err,
@@ -160,7 +160,7 @@ func (s *Scheduler) tick(ctx context.Context) error {
 
 		// 投递结果
 		if err := DeliverResult(ctx, job, job.LastStatus, nil); err != nil {
-			slog.Warn("Cron: 投递结果失败",
+			slog.Warn("Cron: result delivery failed",
 				"job_id", job.ID, "error", err,
 			)
 		}
@@ -186,13 +186,13 @@ func (s *Scheduler) tickWithAdapters(ctx context.Context, adapters map[platforms
 		return nil
 	}
 
-	slog.Info("Cron: 到期作业", "count", len(dueJobs))
+	slog.Info("Cron: due jobs", "count", len(dueJobs))
 
 	for _, job := range dueJobs {
 		s.manager.AdvanceNextRun(ctx, job)
 
 		if err := s.executor.Execute(ctx, job); err != nil {
-			slog.Error("Cron: 作业执行失败",
+			slog.Error("Cron: job execution failed",
 				"job_id", job.ID,
 				"error", err,
 			)

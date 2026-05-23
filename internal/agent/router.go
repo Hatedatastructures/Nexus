@@ -120,7 +120,7 @@ func newProviderRouter(entries []*ProviderEntry, cfg *ProviderRouterConfig) *Pro
 		go r.healthCheckLoop()
 	}
 
-	slog.Info("ProviderRouter 已初始化", "providerCount", len(r.entries))
+	slog.Info("ProviderRouter initialized", "providerCount", len(r.entries))
 	return r
 }
 
@@ -136,7 +136,7 @@ func (r *ProviderRouter) ChatCompletion(ctx context.Context, req *llm.ChatReques
 	for _, entry := range ordered {
 		// 跳过不健康的提供者
 		if !entry.Healthy.Load() {
-			slog.Debug("跳过不健康的提供者", "provider", entry.Provider.Name(), "model", entry.Model)
+			slog.Debug("skipping unhealthy provider", "provider", entry.Provider.Name(), "model", entry.Model)
 			continue
 		}
 
@@ -151,7 +151,7 @@ func (r *ProviderRouter) ChatCompletion(ctx context.Context, req *llm.ChatReques
 		if err == nil {
 			// 成功：标记健康
 			r.MarkHealthy(entry.Provider.Name(), true)
-			slog.Debug("提供者请求成功", "provider", entry.Provider.Name(), "model", entry.Model)
+			slog.Debug("provider request succeeded", "provider", entry.Provider.Name(), "model", entry.Model)
 			return resp, nil
 		}
 
@@ -162,7 +162,7 @@ func (r *ProviderRouter) ChatCompletion(ctx context.Context, req *llm.ChatReques
 		if shouldFallback {
 			// 需要降级：标记不健康
 			r.MarkHealthy(entry.Provider.Name(), false)
-			slog.Warn("提供者失败，将尝试下一个",
+			slog.Warn("provider failed, trying next",
 				"provider", entry.Provider.Name(),
 				"model", entry.Model,
 				"error", err.Error(),
@@ -171,7 +171,7 @@ func (r *ProviderRouter) ChatCompletion(ctx context.Context, req *llm.ChatReques
 		}
 
 		// 不可降级的错误（如认证失败），直接返回
-		slog.Error("提供者不可恢复错误，终止路由",
+		slog.Error("provider unrecoverable error, aborting routing",
 			"provider", entry.Provider.Name(),
 			"model", entry.Model,
 			"error", err.Error(),
@@ -197,7 +197,7 @@ func (r *ProviderRouter) ChatCompletionStream(ctx context.Context, req *llm.Chat
 	var lastErr error
 	for _, entry := range ordered {
 		if !entry.Healthy.Load() {
-			slog.Debug("跳过不健康的提供者（流式）", "provider", entry.Provider.Name(), "model", entry.Model)
+			slog.Debug("skipping unhealthy provider (streaming)", "provider", entry.Provider.Name(), "model", entry.Model)
 			continue
 		}
 
@@ -217,7 +217,7 @@ func (r *ProviderRouter) ChatCompletionStream(ctx context.Context, req *llm.Chat
 		lastErr = err
 		if r.shouldFallback(err) {
 			r.MarkHealthy(entry.Provider.Name(), false)
-			slog.Warn("流式提供者失败，将尝试下一个",
+			slog.Warn("streaming provider failed, trying next",
 				"provider", entry.Provider.Name(),
 				"model", entry.Model,
 				"error", err.Error(),
@@ -246,7 +246,7 @@ func (r *ProviderRouter) MarkHealthy(name string, healthy bool) {
 			if !healthy {
 				entry.LastErr.Store(time.Now())
 			}
-			slog.Debug("标记提供者健康状态",
+			slog.Debug("marking provider health status",
 				"provider", name,
 				"healthy", healthy,
 			)
@@ -283,7 +283,7 @@ func (r *ProviderRouter) GetEntries() []*ProviderEntry {
 func (r *ProviderRouter) Stop() {
 	r.stopOnce.Do(func() {
 		close(r.stopCh)
-		slog.Info("ProviderRouter 已停止")
+		slog.Info("ProviderRouter stopped")
 	})
 }
 
@@ -294,7 +294,7 @@ func (r *ProviderRouter) healthCheckLoop() {
 	ticker := time.NewTicker(r.healthInterval)
 	defer ticker.Stop()
 
-	slog.Info("健康检查协程已启动", "interval", r.healthInterval.String())
+	slog.Info("health check goroutine started", "interval", r.healthInterval.String())
 
 	for {
 		select {
@@ -330,11 +330,11 @@ func (r *ProviderRouter) runHealthChecks() {
 		_, err := entry.Provider.ListModels(ctx)
 		if err == nil {
 			r.MarkHealthy(entry.Provider.Name(), true)
-			slog.Info("健康检查通过，恢复提供者",
+			slog.Info("health check passed, restoring provider",
 				"provider", entry.Provider.Name(),
 			)
 		} else {
-			slog.Debug("健康检查失败，保持不健康",
+			slog.Debug("health check failed, remaining unhealthy",
 				"provider", entry.Provider.Name(),
 				"error", err.Error(),
 			)

@@ -134,7 +134,7 @@ func (m *JobManager) Create(ctx context.Context, job *Job) error {
 		return fmt.Errorf("保存作业列表失败: %w", err)
 	}
 
-	slog.Info("Cron: 创建作业",
+	slog.Info("Cron: job created",
 		"id", job.ID,
 		"name", job.Name,
 		"kind", kind,
@@ -251,7 +251,7 @@ func (m *JobManager) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("保存作业列表失败: %w", err)
 	}
 
-	slog.Info("Cron: 删除作业", "id", id)
+	slog.Info("Cron: job deleted", "id", id)
 	return nil
 }
 
@@ -290,7 +290,7 @@ func (m *JobManager) GetDueJobs(ctx context.Context) ([]*Job, error) {
 				// 错过时间 > 半个周期 — 快进
 				newNext := advanceToNext(job, now)
 				if newNext != nil {
-					slog.Info("Cron: 作业错过计划时间，快进至下次",
+					slog.Info("Cron: job missed schedule, fast-forwarding to next",
 						"id", job.ID,
 						"name", job.Name,
 						"missed_seconds", int(missed),
@@ -318,7 +318,7 @@ func (m *JobManager) GetDueJobs(ctx context.Context) ([]*Job, error) {
 			}
 		}
 		if err := m.saveAll(allJobs); err != nil {
-			slog.Warn("Cron: 批量更新作业失败", "error", err)
+			slog.Warn("Cron: batch update jobs failed", "error", err)
 		}
 	}
 

@@ -146,7 +146,7 @@ func (a *MattermostAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, 
 	// 连接 WebSocket
 	go a.connectWebSocket(ctx, msgCh)
 
-	slog.Info("[Mattermost] 已连接", "user_id", a.botUserID)
+	slog.Info("[Mattermost] connected", "user_id", a.botUserID)
 	return msgCh, nil
 }
 
@@ -162,7 +162,7 @@ func (a *MattermostAdapter) Disconnect(ctx context.Context) error {
 		a.conn = nil
 	}
 
-	slog.Info("[Mattermost] 已断开")
+	slog.Info("[Mattermost] disconnected")
 	return nil
 }
 
@@ -198,7 +198,7 @@ func (a *MattermostAdapter) connectWebSocket(ctx context.Context, msgCh chan *Me
 		if err != nil {
 			delay := backoff[min(backoffIdx, len(backoff)-1)]
 			backoffIdx++
-			slog.Warn("[Mattermost] WebSocket 连接失败", "err", err, "retry_after", delay)
+			slog.Warn("[Mattermost] WebSocket connection failed", "err", err, "retry_after", delay)
 			time.Sleep(delay)
 			continue
 		}
@@ -252,7 +252,7 @@ func (a *MattermostAdapter) listenLoop(msgCh chan *MessageEvent) {
 
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			slog.Warn("[Mattermost] 读取消息失败", "err", err)
+			slog.Warn("[Mattermost] failed to read message", "err", err)
 			return
 		}
 
@@ -378,7 +378,7 @@ func (a *MattermostAdapter) heartbeatLoop() {
 		}
 
 		if err := conn.WriteJSON(pingReq); err != nil {
-			slog.Debug("[Mattermost] 心跳发送失败", "err", err)
+			slog.Debug("[Mattermost] heartbeat send failed", "err", err)
 		}
 	}
 }

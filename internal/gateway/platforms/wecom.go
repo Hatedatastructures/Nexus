@@ -54,12 +54,12 @@ type WeComAdapter struct {
 	allowFrom   []string
 	groupPolicy string
 	groupAllowFrom []string
-	messageHandler func(*MessageEvent)
 
 	// 连接状态
 	conn        *websocket.Conn
 	running     bool
 	connected   bool
+	msgCh       chan *MessageEvent
 
 	// 并发控制
 	mu            sync.Mutex
@@ -109,7 +109,7 @@ func (d *wecomDeduplicator) isDuplicate(msgID string) bool {
 }
 
 // NewWeComAdapter 创建企业微信适配器。
-func NewWeComAdapter(botID, secret string, messageHandler func(*MessageEvent)) *WeComAdapter {
+func NewWeComAdapter(botID, secret string) *WeComAdapter {
 	wsURL := os.Getenv("WECOM_WEBSOCKET_URL")
 	if wsURL == "" {
 		wsURL = wecomDefaultWSURL
@@ -133,7 +133,7 @@ func NewWeComAdapter(botID, secret string, messageHandler func(*MessageEvent)) *
 		groupPolicy:    groupPolicy,
 		allowFrom:      getEnvList("WECOM_ALLOW_FROM"),
 		groupAllowFrom: getEnvList("WECOM_GROUP_ALLOW_FROM"),
-		messageHandler: messageHandler,
+		msgCh:          make(chan *MessageEvent, 64),
 		pendingResps:   make(map[string]chan map[string]any),
 		dedup:          newWecomDeduplicator(wecomDedupMaxSize),
 		replyReqIDs:    make(map[string]string),
@@ -145,9 +145,9 @@ func NewWeComAdapter(botID, secret string, messageHandler func(*MessageEvent)) *
 // ───────────────────────────── 连接生命周期 ─────────────────────────────
 
 // Connect 连接到企业微信 Gateway。
-func (a *WeComAdapter) Connect(ctx context.Context) error {
+func (a *WeComAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error) {
 	if a.botID == "" || a.secret == "" {
-		return fmt.Errorf("WECOM_BOT_ID 和 WECOM_SECRET 是必填项")
+		return nil, fmt.Errorf("WECOM_BOT_ID 和 WECOM_SECRET 是必填项")
 	}
 
 	a.mu.Lock()
@@ -157,7 +157,7 @@ func (a *WeComAdapter) Connect(ctx context.Context) error {
 	// 连接 WebSocket
 	conn, err := a.openConnection(ctx)
 	if err != nil {
-		return fmt.Errorf("连接失败: %w", err)
+		return nil, fmt.Errorf("连接失败: %w", err)
 	}
 
 	a.conn = conn
@@ -169,12 +169,12 @@ func (a *WeComAdapter) Connect(ctx context.Context) error {
 	// 启动心跳循环
 	go a.heartbeatLoop()
 
-	slog.Info("[WeCom] 已连接", "url", a.wsURL)
-	return nil
+	slog.Info("[WeCom] connected", "url", a.wsURL)
+	return a.msgCh, nil
 }
 
 // Disconnect 断开连接。
-func (a *WeComAdapter) Disconnect() error {
+func (a *WeComAdapter) Disconnect(ctx context.Context) error {
 	a.mu.Lock()
 	a.running = false
 	a.connected = false
@@ -185,7 +185,7 @@ func (a *WeComAdapter) Disconnect() error {
 		a.conn = nil
 	}
 
-	slog.Info("[WeCom] 已断开")
+	slog.Info("[WeCom] disconnected")
 	return nil
 }
 
@@ -264,7 +264,7 @@ func (a *WeComAdapter) listenLoop() {
 			cancel()
 
 			if err != nil {
-				slog.Warn("[WeCom] 重连失败", "err", err)
+				slog.Warn("[WeCom] reconnect failed", "err", err)
 				continue
 			}
 
@@ -274,13 +274,13 @@ func (a *WeComAdapter) listenLoop() {
 			a.mu.Unlock()
 
 			backoffIdx = 0
-			slog.Info("[WeCom] 已重连")
+			slog.Info("[WeCom] reconnected")
 			continue
 		}
 
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			slog.Warn("[WeCom] 读取消息失败", "err", err)
+			slog.Warn("[WeCom] failed to read message", "err", err)
 			a.mu.Lock()
 			a.connected = false
 			if a.conn != nil {
@@ -329,7 +329,7 @@ func (a *WeComAdapter) dispatchPayload(payload map[string]any) {
 		return
 	}
 
-	slog.Debug("[WeCom] 忽略未知消息", "cmd", cmd)
+	slog.Debug("[WeCom] ignoring unknown message", "cmd", cmd)
 }
 
 // ───────────────────────────── 心跳循环 ─────────────────────────────
@@ -357,8 +357,12 @@ func (a *WeComAdapter) heartbeatLoop() {
 				"body": map[string]any{},
 			}
 
+			a.mu.Lock()
 			if err := conn.WriteJSON(pingReq); err != nil {
-				slog.Debug("[WeCom] 心跳发送失败", "err", err)
+				a.mu.Unlock()
+				slog.Debug("[WeCom] heartbeat send failed", "err", err)
+			} else {
+				a.mu.Unlock()
 			}
 		}
 	}
@@ -380,7 +384,7 @@ func (a *WeComAdapter) onMessage(payload map[string]any) {
 
 	// 去重检查
 	if a.dedup.isDuplicate(msgID) {
-		slog.Debug("[WeCom] 重复消息已忽略", "msg_id", msgID)
+		slog.Debug("[WeCom] duplicate message ignored", "msg_id", msgID)
 		return
 	}
 
@@ -444,8 +448,10 @@ func (a *WeComAdapter) onMessage(payload map[string]any) {
 	}
 
 	// 回调处理
-	if a.messageHandler != nil {
-		a.messageHandler(event)
+	select {
+	case a.msgCh <- event:
+	default:
+		slog.Warn("[WeCom] message channel full, dropping message", "msg_id", msgID)
 	}
 }
 
@@ -480,9 +486,9 @@ func (a *WeComAdapter) extractText(body map[string]any) string {
 // ───────────────────────────── 发送消息 ─────────────────────────────
 
 // Send 发送 Markdown 消息。
-func (a *WeComAdapter) Send(ctx context.Context, chatID, content string) error {
+func (a *WeComAdapter) Send(ctx context.Context, chatID string, content string, opts *SendOptions) (*SendResult, error) {
 	if chatID == "" {
-		return fmt.Errorf("chat_id 是必填项")
+		return nil, fmt.Errorf("chat_id 是必填项")
 	}
 
 	// 检查是否有缓存的回复 req_id
@@ -493,7 +499,7 @@ func (a *WeComAdapter) Send(ctx context.Context, chatID, content string) error {
 	a.mu.Unlock()
 
 	if conn == nil {
-		return fmt.Errorf("WebSocket 未连接")
+		return nil, fmt.Errorf("WebSocket 未连接")
 	}
 
 	reqID := a.newReqID("send")
@@ -515,40 +521,72 @@ func (a *WeComAdapter) Send(ctx context.Context, chatID, content string) error {
 		req["headers"] = map[string]any{"req_id": replyReqID}
 	}
 
-	// 发送请求并等待响应
+	// 注册响应通道
 	respCh := make(chan map[string]any, 1)
 	a.mu.Lock()
 	a.pendingResps[reqID] = respCh
 	a.mu.Unlock()
 
+	// 发送请求
+	a.mu.Lock()
 	if err := conn.WriteJSON(req); err != nil {
+		a.mu.Unlock()
 		a.mu.Lock()
 		delete(a.pendingResps, reqID)
 		a.mu.Unlock()
-		return fmt.Errorf("发送失败: %w", err)
+		return nil, fmt.Errorf("发送失败: %w", err)
 	}
+	a.mu.Unlock()
 
+	// 等待响应
 	select {
 	case resp := <-respCh:
 		errcode := getInt(resp, "errcode", 0)
 		if errcode != 0 {
 			errmsg := getString(resp, "errmsg", "发送失败")
-			return fmt.Errorf("发送失败: %s (errcode=%d)", errmsg, errcode)
+			return nil, fmt.Errorf("发送失败: %s (errcode=%d)", errmsg, errcode)
 		}
-		return nil
+		return &SendResult{Success: true}, nil
 
 	case <-time.After(wecomRequestTimeout):
 		a.mu.Lock()
 		delete(a.pendingResps, reqID)
 		a.mu.Unlock()
-		return fmt.Errorf("发送超时")
+		return nil, fmt.Errorf("发送超时")
 	}
 }
 
 // SendImage 发送图片。
-func (a *WeComAdapter) SendImage(ctx context.Context, chatID, imageURL string) error {
+func (a *WeComAdapter) SendImage(ctx context.Context, chatID string, imageURL string, caption string, opts *SendOptions) (*SendResult, error) {
 	// 企业微信需要先上传媒体，简化为发送 URL 文本
-	return a.Send(ctx, chatID, imageURL)
+	result, err := a.Send(ctx, chatID, imageURL, opts)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (a *WeComAdapter) Name() string            { return "WeCom" }
+func (a *WeComAdapter) PlatformType() Platform   { return PlatformWeChat }
+func (a *WeComAdapter) MaxMessageLength() int     { return wecomMaxMessageLength }
+func (a *WeComAdapter) SupportsStreaming() bool   { return false }
+func (a *WeComAdapter) EditMessage(ctx context.Context, chatID string, messageID string, content string) (*SendResult, error) {
+	return a.Send(ctx, chatID, content, nil)
+}
+func (a *WeComAdapter) DeleteMessage(ctx context.Context, chatID string, messageID string) error {
+	return nil
+}
+func (a *WeComAdapter) SendTyping(ctx context.Context, chatID string) error {
+	return nil
+}
+func (a *WeComAdapter) SendVoice(ctx context.Context, chatID string, audioPath string, opts *SendOptions) (*SendResult, error) {
+	return nil, fmt.Errorf("企业微信暂不支持语音消息")
+}
+func (a *WeComAdapter) SendVideo(ctx context.Context, chatID string, videoPath string, caption string, opts *SendOptions) (*SendResult, error) {
+	return nil, fmt.Errorf("企业微信暂不支持视频消息")
+}
+func (a *WeComAdapter) SendDocument(ctx context.Context, chatID string, filePath string, caption string, opts *SendOptions) (*SendResult, error) {
+	return nil, fmt.Errorf("企业微信暂不支持文件消息")
 }
 
 // ───────────────────────────── 权限检查 ─────────────────────────────

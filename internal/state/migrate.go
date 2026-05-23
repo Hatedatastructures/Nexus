@@ -60,7 +60,7 @@ func RunMigrations(ctx context.Context, db *sql.DB) error {
 	}
 
 	if dbVersion < currentSchemaVersion {
-		slog.Info("开始版本门控迁移",
+		slog.Info("starting version-gated migration",
 			"from_version", dbVersion,
 			"to_version", currentSchemaVersion,
 		)
@@ -76,7 +76,7 @@ func RunMigrations(ctx context.Context, db *sql.DB) error {
 
 	// 步骤 5: 确保唯一标题索引存在
 	if err := ensureTitleIndex(ctx, db); err != nil {
-		slog.Warn("创建标题唯一索引失败", "error", err)
+		slog.Warn("failed to create unique title index", "error", err)
 	}
 
 	// 步骤 6: 更新版本号
@@ -84,7 +84,7 @@ func RunMigrations(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("更新模式版本失败: %w", err)
 	}
 
-	slog.Info("数据库迁移完成", "version", currentSchemaVersion)
+	slog.Info("database migration completed", "version", currentSchemaVersion)
 	return nil
 }
 
@@ -111,7 +111,7 @@ func runVersionMigrations(ctx context.Context, db *sql.DB, fromVersion int) erro
 
 // migrateV10 创建 trigram FTS5 表用于 CJK 搜索
 func migrateV10(ctx context.Context, db *sql.DB) error {
-	slog.Info("运行 v10 迁移: 创建 trigram FTS5 表")
+	slog.Info("running v10 migration: creating trigram FTS5 table")
 
 	// 检查 trigram 表是否已存在
 	var exists int
@@ -123,7 +123,7 @@ func migrateV10(ctx context.Context, db *sql.DB) error {
 	}
 
 	if exists > 0 {
-		slog.Debug("v10: trigram FTS5 表已存在，跳过")
+		slog.Debug("v10: trigram FTS5 table already exists, skipping")
 		return nil
 	}
 
@@ -161,7 +161,7 @@ func migrateV10(ctx context.Context, db *sql.DB) error {
 		 SELECT id, COALESCE(content, '') FROM messages WHERE content IS NOT NULL`,
 	)
 	if err != nil {
-		slog.Warn("v10 trigram 回填失败（可能无数据）", "error", err)
+		slog.Warn("v10 trigram backfill failed (possibly no data)", "error", err)
 	}
 
 	return nil
@@ -169,7 +169,7 @@ func migrateV10(ctx context.Context, db *sql.DB) error {
 
 // migrateV11 重建 FTS5 表以使用内联内容模式，索引 content || tool_name || tool_calls
 func migrateV11(ctx context.Context, db *sql.DB) error {
-	slog.Info("运行 v11 迁移: 重建 FTS5 索引覆盖 tool_name + tool_calls")
+	slog.Info("running v11 migration: rebuilding FTS5 index to cover tool_name + tool_calls")
 
 	// 删除旧的 FTS 触发器和表
 	for _, trig := range []string{
@@ -250,14 +250,14 @@ func migrateV11(ctx context.Context, db *sql.DB) error {
 		"INSERT INTO messages_fts(rowid, content) SELECT id, "+backfillSQL+" FROM messages",
 	)
 	if err != nil {
-		slog.Warn("v11 messages_fts 回填失败", "error", err)
+		slog.Warn("v11 messages_fts backfill failed", "error", err)
 	}
 
 	_, err = db.ExecContext(ctx,
 		"INSERT INTO messages_fts_trigram(rowid, content) SELECT id, "+backfillSQL+" FROM messages",
 	)
 	if err != nil {
-		slog.Warn("v11 messages_fts_trigram 回填失败", "error", err)
+		slog.Warn("v11 messages_fts_trigram backfill failed", "error", err)
 	}
 
 	return nil
@@ -285,7 +285,7 @@ func parseSchemaColumns(schema string) (map[string]map[string]string, error) {
 			continue
 		}
 		if _, err := ref.Exec(stmt); err != nil {
-			slog.Debug("解析Schema定义时跳过语句", "stmt", stmt[:min(60, len(stmt))], "error", err)
+			slog.Debug("skipped statement while parsing schema definition", "stmt", stmt[:min(60, len(stmt))], "error", err)
 		}
 	}
 
@@ -359,7 +359,7 @@ func reconcileColumns(ctx context.Context, db *sql.DB) error {
 		// 获取实際表中存在的列
 		rows, err := db.QueryContext(ctx, "PRAGMA table_info(\""+tableName+"\")")
 		if err != nil {
-			slog.Debug("读取表信息失败（表可能不存在）", "table", tableName, "error", err)
+			slog.Debug("failed to read table info (table may not exist)", "table", tableName, "error", err)
 			continue
 		}
 
@@ -389,13 +389,13 @@ func reconcileColumns(ctx context.Context, db *sql.DB) error {
 				tableName, safeName, colType,
 			)
 			if _, err := db.ExecContext(ctx, alterSQL); err != nil {
-				slog.Debug("声明式添加列失败",
+				slog.Debug("declarative column add failed",
 					"table", tableName,
 					"column", colName,
 					"error", err,
 				)
 			} else {
-				slog.Info("声明式添加列", "table", tableName, "column", colName)
+				slog.Info("declarative column added", "table", tableName, "column", colName)
 			}
 		}
 	}
@@ -412,7 +412,7 @@ func ensureFTS(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if !ftsExists {
-		slog.Info("创建 messages_fts 虚拟表和触发器")
+		slog.Info("creating messages_fts virtual table and triggers")
 		if err := createFTSDefault(ctx, db); err != nil {
 			return err
 		}
@@ -422,7 +422,7 @@ func ensureFTS(ctx context.Context, db *sql.DB) error {
 			 SELECT id, COALESCE(content, '') || ' ' || COALESCE(tool_name, '') || ' ' || COALESCE(tool_calls, '')
 			 FROM messages`,
 		); err != nil {
-			slog.Debug("FTS 回填跳过（可能无消息）", "error", err)
+			slog.Debug("FTS backfill skipped (possibly no messages)", "error", err)
 		}
 	}
 
@@ -432,7 +432,7 @@ func ensureFTS(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if !trigramExists {
-		slog.Info("创建 messages_fts_trigram 虚拟表和触发器")
+		slog.Info("creating messages_fts_trigram virtual table and triggers")
 		if err := createFTSTrigram(ctx, db); err != nil {
 			return err
 		}
@@ -442,7 +442,7 @@ func ensureFTS(ctx context.Context, db *sql.DB) error {
 			 SELECT id, COALESCE(content, '') || ' ' || COALESCE(tool_name, '') || ' ' || COALESCE(tool_calls, '')
 			 FROM messages`,
 		); err != nil {
-			slog.Debug("Trigram FTS 回填跳过（可能无消息）", "error", err)
+			slog.Debug("trigram FTS backfill skipped (possibly no messages)", "error", err)
 		}
 	}
 
@@ -523,7 +523,7 @@ func execSchemaStatements(ctx context.Context, db *sql.DB, sqlText string) error
 	var firstErr error
 	for _, stmt := range splitSQLStatements(sqlText) {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			slog.Debug("Schema语句执行失败", "stmt", stmt[:min(80, len(stmt))], "error", err)
+			slog.Debug("schema statement execution failed", "stmt", stmt[:min(80, len(stmt))], "error", err)
 			// CREATE TABLE 语句失败通常意味着严重的 schema 问题，应向上报告
 			if strings.Contains(strings.ToUpper(stmt), "CREATE TABLE") {
 				if firstErr == nil {

@@ -161,7 +161,7 @@ func (t *OpenAITransport) ParseStream(ctx context.Context, body io.ReadCloser) <
 
 			var chunk openAIStreamChunk
 			if err := json.Unmarshal([]byte(event.Data), &chunk); err != nil {
-				slog.Debug("解析 SSE 数据失败", "data", event.Data[:min(len(event.Data), 200)], "error", err)
+				slog.Debug("failed to parse SSE data", "data", event.Data[:min(len(event.Data), 200)], "error", err)
 				continue
 			}
 
@@ -267,7 +267,9 @@ func (p *OpenAIProvider) Name() string {
 func (p *OpenAIProvider) CreateChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	// 确保模型已设置
 	if req.Model == "" {
-		req.Model = p.model
+		reqCopy := *req
+		reqCopy.Model = p.model
+		req = &reqCopy
 	}
 
 	httpReq, err := p.transport.BuildRequest(ctx, req, p.apiKey)
@@ -304,7 +306,9 @@ func (p *OpenAIProvider) CreateChatCompletion(ctx context.Context, req *ChatRequ
 func (p *OpenAIProvider) CreateChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan *StreamDelta, error) {
 	// 确保模型已设置且启用流式
 	if req.Model == "" {
-		req.Model = p.model
+		reqCopy := *req
+		reqCopy.Model = p.model
+		req = &reqCopy
 	}
 
 	// 通过 Metadata 传递 stream 参数
@@ -656,7 +660,7 @@ func convertOpenAIUsage(usage *openAIUsage) *TokenUsage {
 func init() {
 	// 注册到全局 Transport 注册表
 	RegisterTransport("chat_completions", &OpenAITransport{baseURL: "https://api.openai.com"})
-	slog.Debug("OpenAI 传输层已注册", "apiMode", "chat_completions", "time", time.Now())
+	slog.Debug("OpenAI transport registered", "apiMode", "chat_completions", "time", time.Now())
 }
 
 // buildAPIURL 智能构建 API 端点 URL。

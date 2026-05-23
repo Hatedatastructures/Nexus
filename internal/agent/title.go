@@ -54,7 +54,7 @@ func GenerateTitle(ctx context.Context, provider llm.Provider, messages []llm.Me
 		return "", nil
 	}
 
-	slog.Debug("标题已生成", "title", title)
+	slog.Debug("title generated", "title", title)
 	return title, nil
 }
 
@@ -88,19 +88,23 @@ func MaybeAutoTitle(ctx context.Context, provider llm.Provider, store *state.Sto
 
 	// 异步生成（不传递 session 指针，避免跨 goroutine 数据竞争）
 	go func() {
-		bgCtx := context.Background()
-		title, err := GenerateTitle(bgCtx, provider, messages)
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Warn("auto title generation panic", "session_id", sessionID, "panic", r)
+			}
+		}()
+		title, err := GenerateTitle(ctx, provider, messages)
 		if err != nil {
-			slog.Warn("自动标题生成失败", "session_id", sessionID, "err", err)
+			slog.Warn("auto title generation failed", "session_id", sessionID, "err", err)
 			return
 		}
 		if title != "" {
 			// 重新获取 session 避免跨 goroutine 指针竞争
-			sess, err := store.GetSession(bgCtx, sessionID)
+			sess, err := store.GetSession(ctx, sessionID)
 			if err == nil && sess != nil {
 				sess.Title = title
-				if err := store.UpdateSession(bgCtx, sess); err != nil {
-					slog.Warn("保存标题失败", "session_id", sessionID, "err", err)
+				if err := store.UpdateSession(ctx, sess); err != nil {
+					slog.Warn("save title failed", "session_id", sessionID, "err", err)
 				}
 			}
 		}
@@ -132,8 +136,8 @@ func extractSnippets(messages []llm.Message, maxTurns int) string {
 		}
 
 		content := msg.Content
-		if len(content) > titleSnippetLen {
-			content = content[:titleSnippetLen] + "..."
+		if len([]rune(content)) > titleSnippetLen {
+			content = string([]rune(content)[:titleSnippetLen]) + "..."
 		}
 
 		b.WriteString(fmt.Sprintf("%s: %s\n", role, content))
@@ -164,8 +168,9 @@ func cleanTitle(title string) string {
 	title = strings.TrimPrefix(title, "标题：")
 
 	// 截断
-	if len(title) > titleMaxLen {
-		title = title[:titleMaxLen]
+	runes := []rune(title)
+	if len(runes) > titleMaxLen {
+		title = string(runes[:titleMaxLen])
 	}
 
 	return strings.TrimSpace(title)

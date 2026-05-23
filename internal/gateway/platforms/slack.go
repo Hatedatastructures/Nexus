@@ -308,7 +308,7 @@ func (s *SlackAdapter) handleEventsAPI(envelope *struct {
 			Platform: PlatformSlack,
 			ChatID:   event.Channel,
 			UserID:   event.User,
-			ChatType: "dm",
+			ChatType: s.chatTypeFromChannel(event.Channel),
 		},
 	}
 
@@ -326,6 +326,20 @@ func (s *SlackAdapter) closeSocket() {
 	if s.ws != nil {
 		_ = s.ws.Close()
 		s.ws = nil
+	}
+}
+
+// chatTypeFromChannel 根据频道 ID 判断聊天类型。
+// Slack DM 频道 ID 以 'D' 开头，群组频道以 'C' 开头。
+func (s *SlackAdapter) chatTypeFromChannel(channelID string) string {
+	if len(channelID) == 0 {
+		return "dm"
+	}
+	switch channelID[0] {
+	case 'D':
+		return "dm"
+	default:
+		return "group"
 	}
 }
 

@@ -39,11 +39,11 @@ func ensureBrowser() error {
 		return nil
 	}
 
-	slog.Info("启动浏览器实例")
+	slog.Info("launching browser instance")
 
 	// 优先使用 Browserbase 云浏览器（如果配置了环境变量）
 	if cfg, ok := loadBrowserbaseConfig(); ok {
-		slog.Info("检测到 Browserbase 配置，使用云浏览器")
+		slog.Info("Browserbase config detected, using cloud browser")
 		sess, err := NewBrowserbaseSession(context.Background(), cfg)
 		if err != nil {
 			return fmt.Errorf("创建 Browserbase 会话失败: %w", err)
@@ -53,7 +53,7 @@ func ensureBrowser() error {
 		browserControlURL = cdpURL
 		browserInstance = rod.New().ControlURL(cdpURL).MustConnect()
 		browserReady = true
-		slog.Info("Browserbase 云浏览器连接成功", "session_id", sess.SessionID())
+			slog.Info("Browserbase cloud browser connected", "session_id", sess.SessionID())
 		return nil
 	}
 
@@ -96,7 +96,7 @@ func ensureBrowser() error {
 	browserInstance = rod.New().ControlURL(url).MustConnect()
 	browserReady = true
 
-	slog.Info("浏览器启动成功")
+	slog.Info("browser launched successfully")
 	return nil
 }
 
@@ -190,14 +190,14 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]any) 
 
 	// URL 安全检查: 拦截 SSRF 风险地址
 	if safe, reason := CheckURLSafety(url); !safe {
-		slog.Warn("browser_navigate: URL 安全检查未通过", "url", url, "reason", reason)
+		slog.Warn("browser_navigate: URL safety check failed", "url", url, "reason", reason)
 		return ToolError(fmt.Sprintf("URL 安全检查未通过: %s", reason)), nil
 	}
 
-	slog.Info("浏览器导航", "url", url)
+	slog.Info("browser navigate", "url", url)
 
 	if err := page.Timeout(30 * time.Second).Navigate(url); err != nil {
-		slog.Error("浏览器导航失败", "url", url, "err", err)
+		slog.Error("browser navigation failed", "url", url, "err", err)
 		return ToolError(fmt.Sprintf("导航失败: %v", err)), nil
 	}
 
@@ -289,7 +289,7 @@ func (t *BrowserScreenshotTool) Execute(ctx context.Context, args map[string]any
 	}
 
 	if err != nil {
-		slog.Error("截图失败", "err", err)
+		slog.Error("screenshot failed", "err", err)
 		return ToolError(fmt.Sprintf("截图失败: %v", err)), nil
 	}
 
@@ -365,7 +365,7 @@ func (t *BrowserClickTool) Execute(ctx context.Context, args map[string]any) (st
 	}
 
 	if err := el.Timeout(5 * time.Second).Click(proto.InputMouseButtonLeft, 1); err != nil {
-		slog.Error("点击元素失败", "selector", selector, "err", err)
+		slog.Error("click element failed", "selector", selector, "err", err)
 		return ToolError(fmt.Sprintf("点击失败: %v", err)), nil
 	}
 
@@ -452,7 +452,7 @@ func (t *BrowserTypeTool) Execute(ctx context.Context, args map[string]any) (str
 
 	// 清空输入框并输入新文本
 	if err := el.Timeout(5 * time.Second).Input(text); err != nil {
-		slog.Error("输入文本失败", "selector", selector, "err", err)
+		slog.Error("input text failed", "selector", selector, "err", err)
 		return ToolError(fmt.Sprintf("输入失败: %v", err)), nil
 	}
 

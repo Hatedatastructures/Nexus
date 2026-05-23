@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -16,7 +17,10 @@ import (
 
 	"nexus-agent/internal/agent"
 	"nexus-agent/internal/config"
+	ctxbuilder "nexus-agent/internal/context"
 	"nexus-agent/internal/llm"
+	"nexus-agent/internal/memory"
+	"nexus-agent/internal/skill"
 	"nexus-agent/internal/tool"
 	"nexus-agent/pkg/logutil"
 )
@@ -42,9 +46,28 @@ func (c *ChatCommand) Run(args []string) {
 	logutil.InitLogger(cfg.Logging.Level, cfg.Logging.Format, "")
 	tool.DiscoverBuiltin()
 
+	// 构建记忆管理器 (如果配置了)
+	var memMgr *memory.Manager
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		builtinProvider := memory.NewBuiltinProvider(filepath.Join(homeDir, ".nexus"))
+		memMgr = memory.NewManager(builtinProvider)
+	}
+
+	// 构建技能管理器 (如果配置了)
+	var skillMgr *skill.Manager
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		skillsDir := filepath.Join(homeDir, ".nexus", "skills")
+		skillMgr = skill.NewManager(skillsDir, cfg.Skills.Disabled)
+	}
+
+	// 构建系统提示词构建器 (接入完整系统提示词管线)
+	ctxBuilder := ctxbuilder.NewBuilder("", "cli", memMgr, skillMgr)
+
 	sessionAgent := agent.NewAgent(
 		agent.WithConfigProvider(cfg),
 		agent.WithToolRegistry(tool.GetRegistry()),
+		agent.WithContextBuilder(ctxBuilder),
+		agent.WithMemoryManager(memMgr),
 	)
 	if sessionAgent.Provider() == nil {
 		PrintError("LLM 提供者未初始化")

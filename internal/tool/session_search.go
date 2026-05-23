@@ -102,7 +102,7 @@ func (t *SessionSearchTool) Execute(ctx context.Context, args map[string]any) (s
 	// 检查状态存储
 	store := getStateStore()
 	if store == nil {
-		slog.Warn("会话搜索失败: 状态存储未初始化")
+		slog.Warn("session search failed: state store not initialized")
 		return ToolError("状态存储未初始化。请先调用 SetStateStore 配置状态存储。"), nil
 	}
 
@@ -127,12 +127,12 @@ func (t *SessionSearchTool) Execute(ctx context.Context, args map[string]any) (s
 		recentDays = int(v)
 	}
 
-	slog.Info("执行会话搜索", "query", query, "limit", limit, "recent_days", recentDays)
+	slog.Info("executing session search", "query", query, "limit", limit, "recent_days", recentDays)
 
 	// 执行 FTS5 搜索
 	results, err := store.SearchMessages(ctx, query, limit)
 	if err != nil {
-		slog.Error("会话搜索失败", "query", query, "err", err)
+		slog.Error("session search failed", "query", query, "err", err)
 		return ToolError(fmt.Sprintf("搜索失败: %v", err)), nil
 	}
 

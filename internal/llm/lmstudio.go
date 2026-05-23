@@ -126,7 +126,7 @@ func (t *LMStudioTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 	// 检测推理内容（LM Studio 推理模型使用 reasoning_content 字段）
 	if msg.ReasoningContent != "" {
 		response.Reasoning = msg.ReasoningContent
-		slog.Debug("LM Studio 推理内容已提取",
+		slog.Debug("LM Studio reasoning content extracted",
 			"model", oaiResp.Model,
 			"reasoningLength", len(msg.ReasoningContent),
 		)
@@ -179,7 +179,7 @@ func (t *LMStudioTransport) ParseStream(ctx context.Context, body io.ReadCloser)
 
 			var chunk openAIStreamChunk
 			if err := json.Unmarshal([]byte(event.Data), &chunk); err != nil {
-				slog.Debug("解析 LM Studio SSE 数据失败",
+				slog.Debug("failed to parse LM Studio SSE data",
 					"data", event.Data[:min(len(event.Data), 200)],
 					"error", err,
 				)
@@ -288,7 +288,9 @@ func (p *LMStudioProvider) Name() string {
 func (p *LMStudioProvider) CreateChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	// 确保模型已设置
 	if req.Model == "" {
-		req.Model = p.model
+		reqCopy := *req
+		reqCopy.Model = p.model
+		req = &reqCopy
 	}
 
 	httpReq, err := p.transport.BuildRequest(ctx, req, p.apiKey)
@@ -325,7 +327,9 @@ func (p *LMStudioProvider) CreateChatCompletion(ctx context.Context, req *ChatRe
 func (p *LMStudioProvider) CreateChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan *StreamDelta, error) {
 	// 确保模型已设置且启用流式
 	if req.Model == "" {
-		req.Model = p.model
+		reqCopy := *req
+		reqCopy.Model = p.model
+		req = &reqCopy
 	}
 
 	// 通过 Metadata 传递 stream 参数
@@ -416,5 +420,5 @@ func (p *LMStudioProvider) ListModels(ctx context.Context) ([]ModelInfo, error) 
 func init() {
 	// 注册 LM Studio 传输层到全局注册表
 	RegisterTransport(lmStudioTransportID, &LMStudioTransport{baseURL: lmStudioDefaultBaseURL})
-	slog.Debug("LM Studio 传输层已注册", "apiMode", lmStudioTransportID, "baseURL", lmStudioDefaultBaseURL, "time", time.Now())
+	slog.Debug("LM Studio transport registered", "apiMode", lmStudioTransportID, "baseURL", lmStudioDefaultBaseURL, "time", time.Now())
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"nexus-agent/internal/agent"
@@ -47,13 +48,14 @@ func (e *Executor) Execute(ctx context.Context, job *Job) error {
 		return fmt.Errorf("作业不能为 nil")
 	}
 
-	slog.Info("Cron: 开始执行作业",
+	slog.Info("Cron: starting job execution",
 		"id", job.ID,
 		"name", job.Name,
 	)
 
-	// 确保输出目录存在
-	jobOutputDir := filepath.Join(e.outputDir, job.ID)
+	// 确保输出目录存在 (对 job.ID 进行清理防止路径遍历)
+	safeID := sanitizeJobID(job.ID)
+	jobOutputDir := filepath.Join(e.outputDir, safeID)
 	if err := os.MkdirAll(jobOutputDir, 0700); err != nil {
 		return fmt.Errorf("创建输出目录失败: %w", err)
 	}
@@ -67,7 +69,7 @@ func (e *Executor) Execute(ctx context.Context, job *Job) error {
 
 	// 记录开始时间
 	startTime := time.Now()
-	slog.Info("Cron: 作业提示词", "id", job.ID, "prompt_preview", truncate(prompt, 100))
+	slog.Info("Cron: job prompt", "id", job.ID, "prompt_preview", truncate(prompt, 100))
 
 	// 创建 AIAgent 实例并执行对话
 	sessionAgent := agent.DefaultAgentFromConfig(e.agentConfig)
@@ -78,7 +80,7 @@ func (e *Executor) Execute(ctx context.Context, job *Job) error {
 
 	// 检查是否为静默输出
 	if result.FinalResponse == "[SILENT]" {
-		slog.Info("Cron: 作业静默输出，跳过投递", "id", job.ID)
+		slog.Info("Cron: job silent output, skipping delivery", "id", job.ID)
 		job.LastRunAt = startTime
 		job.LastStatus = "silent"
 		return nil
@@ -93,7 +95,7 @@ func (e *Executor) Execute(ctx context.Context, job *Job) error {
 	job.LastRunAt = startTime
 	job.LastStatus = "ok"
 
-	slog.Info("Cron: 作业执行完成",
+	slog.Info("Cron: job execution completed",
 		"id", job.ID,
 		"name", job.Name,
 		"duration_ms", time.Since(startTime).Milliseconds(),
@@ -115,7 +117,8 @@ func (e *Executor) buildPrompt(job *Job) string {
 
 // saveOutput 将作业输出保存到磁盘。
 func (e *Executor) saveOutput(job *Job, output string, timestamp time.Time) error {
-	jobOutputDir := filepath.Join(e.outputDir, job.ID)
+	safeID := sanitizeJobID(job.ID)
+	jobOutputDir := filepath.Join(e.outputDir, safeID)
 	if err := os.MkdirAll(jobOutputDir, 0700); err != nil {
 		return err
 	}
@@ -151,10 +154,26 @@ func (e *Executor) saveOutput(job *Job, output string, timestamp time.Time) erro
 	return nil
 }
 
+// sanitizeJobID 清理作业 ID，防止路径遍历攻击。
+// 只保留字母、数字、连字符和下划线。
+func sanitizeJobID(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "unknown"
+	}
+	return b.String()
+}
+
 // truncate 如果字符串长度超过 limit，则截断并附加 "..."
 func truncate(s string, limit int) string {
-	if len(s) <= limit {
+	runes := []rune(s)
+	if len(runes) <= limit {
 		return s
 	}
-	return s[:limit] + "..."
+	return string(runes[:limit]) + "..."
 }

@@ -33,11 +33,11 @@ func (r *Registry) Register(name string, plugin Plugin) {
 	defer r.mu.Unlock()
 
 	if _, exists := r.plugins[name]; exists {
-		slog.Warn("插件名称冲突，覆盖注册", "name", name)
+		slog.Warn("plugin name conflict, overwriting registration", "name", name)
 	}
 
 	r.plugins[name] = plugin
-	slog.Debug("插件已注册", "name", name, "version", plugin.Version())
+	slog.Debug("plugin registered", "name", name, "version", plugin.Version())
 }
 
 // Unregister 从注册中心移除指定名称的插件。
@@ -52,7 +52,7 @@ func (r *Registry) Unregister(name string) Plugin {
 	}
 
 	delete(r.plugins, name)
-	slog.Debug("插件已注销", "name", name)
+	slog.Debug("plugin unregistered", "name", name)
 	return p
 }
 

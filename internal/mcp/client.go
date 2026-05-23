@@ -110,7 +110,7 @@ func (c *MCPClient) Connect(ctx context.Context, command string, args []string, 
 		}
 	}
 
-	slog.Info("MCP 客户端已连接",
+	slog.Info("MCP client connected",
 		"server", c.serverInfo.Name,
 		"version", c.serverInfo.Version,
 	)
@@ -126,7 +126,7 @@ func (c *MCPClient) startReader(ctx context.Context, stdout io.Reader) {
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				if err != io.EOF {
-					slog.Error("读取 MCP 服务器响应失败", "err", err)
+					slog.Error("failed to read MCP server response", "err", err)
 				}
 				return
 			}
@@ -159,7 +159,7 @@ func (c *MCPClient) startReader(ctx context.Context, stdout io.Reader) {
 					}
 				}
 			} else {
-				slog.Debug("收到 MCP 服务器消息", "data", line)
+				slog.Debug("received MCP server message", "data", line)
 			}
 		}
 	}()
@@ -229,7 +229,7 @@ func (c *MCPClient) Disconnect() error {
 		c.cmd.Process.Kill()
 	}
 
-	slog.Info("MCP 客户端已断开连接")
+	slog.Info("MCP client disconnected")
 	return nil
 }
 
@@ -275,7 +275,7 @@ func (c *MCPClient) doRequest(ctx context.Context, method string, params map[str
 		return nil, fmt.Errorf("写入请求失败: %w", err)
 	}
 
-	slog.Debug("发送 MCP 请求", "method", method, "id", id)
+	slog.Debug("sending MCP request", "method", method, "id", id)
 
 	// 等待响应
 	select {

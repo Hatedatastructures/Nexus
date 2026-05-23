@@ -399,7 +399,7 @@ func (d *DiscordAdapter) handleMessageCreate(raw json.RawMessage) {
 			ChatID:   msg.ChannelID,
 			UserID:   msg.Author.ID,
 			UserName: msg.Author.Username,
-			ChatType: "dm",
+			ChatType: d.chatTypeFromChannelID(msg.ChannelID),
 		},
 	}
 
@@ -471,6 +471,40 @@ func (d *DiscordAdapter) closeWS() {
 	if d.ws != nil {
 		_ = d.ws.Close()
 		d.ws = nil
+	}
+}
+
+// chatTypeFromChannelID 根据频道 ID 判断聊天类型。
+// Discord DM 频道 ID 格式与普通频道不同，通过 API 查询判断。
+func (d *DiscordAdapter) chatTypeFromChannelID(channelID string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.baseURL+"/channels/"+channelID, nil)
+	if err != nil {
+		return "dm"
+	}
+	req.Header.Set("Authorization", "Bot "+d.token)
+
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return "dm"
+	}
+	defer resp.Body.Close()
+
+	var ch struct {
+		Type int `json:"type"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&ch); err != nil {
+		return "dm"
+	}
+
+	// Discord channel types: 1=DM, 3=GroupDM, 0=GuildText, 2=GuildVoice, etc.
+	switch ch.Type {
+	case 1, 3:
+		return "dm"
+	default:
+		return "group"
 	}
 }
 

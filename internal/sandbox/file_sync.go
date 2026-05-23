@@ -114,7 +114,7 @@ func (m *FileSyncManager) SyncBack(downloadFn func(remotePath string) (io.ReadCl
 
 		// 路径穿越防护
 		if strings.Contains(header.Name, "..") {
-			slog.Warn("跳过包含路径穿越的文件", "name", header.Name)
+			slog.Warn("skipping file with path traversal", "name", header.Name)
 			continue
 		}
 
@@ -123,12 +123,12 @@ func (m *FileSyncManager) SyncBack(downloadFn func(remotePath string) (io.ReadCl
 		// 确保路径在 localRoot 内
 		absLocal, err := filepath.Abs(localPath)
 			if err != nil {
-				slog.Warn("无法解析绝对路径", "name", header.Name, "err", err)
+				slog.Warn("unable to resolve absolute path", "name", header.Name, "err", err)
 				continue
 			}
 		absRoot, _ := filepath.Abs(m.localRoot)
 		if !strings.HasPrefix(absLocal, absRoot) {
-			slog.Warn("跳过超出根目录的文件", "name", header.Name)
+			slog.Warn("skipping file outside root directory", "name", header.Name)
 			continue
 		}
 
@@ -157,7 +157,7 @@ func (m *FileSyncManager) SyncBack(downloadFn func(remotePath string) (io.ReadCl
 			continue
 		}
 
-		slog.Debug("文件已同步", "path", header.Name)
+		slog.Debug("file synced", "path", header.Name)
 	}
 
 	return nil

@@ -46,18 +46,14 @@ func (h *OSProcessHandle) Poll() (*int, error) {
 		return nil, fmt.Errorf("进程句柄无效")
 	}
 
-	// 通过发送信号 0 检查进程是否存在 (跨平台方式)
-	// 在 Unix 上 kill(pid, 0) 不发送信号只检查权限
-	// 在 Windows 上使用 Signal 同样有效
-	err := h.process.Signal(os.Kill)
-	if err != nil {
-		// 进程已退出
-		if h.cmd.ProcessState != nil {
-			code := h.cmd.ProcessState.ExitCode()
-			h.exitCode = &code
-			return h.exitCode, nil
-		}
+	// 通过等待进程状态检查进程是否已退出 (跨平台)
+	// 不能使用 Signal(os.Kill)，因为它会实际发送 SIGKILL 杀死进程
+	if h.cmd.ProcessState != nil {
+		code := h.cmd.ProcessState.ExitCode()
+		h.exitCode = &code
+		return h.exitCode, nil
 	}
+
 	// 进程仍在运行
 	return nil, nil
 }
@@ -77,7 +73,7 @@ func (h *OSProcessHandle) Kill() error {
 	// 使用 os.Process.Kill() (跨平台: Unix=SIGKILL, Windows=TerminateProcess)
 	if err := h.process.Kill(); err != nil {
 		// 进程可能已经退出
-		slog.Debug("进程终止失败", "pid", pid, "err", err)
+		slog.Debug("process kill failed", "pid", pid, "err", err)
 		return fmt.Errorf("终止进程失败: %w", err)
 	}
 
@@ -85,7 +81,7 @@ func (h *OSProcessHandle) Kill() error {
 	time.Sleep(100 * time.Millisecond)
 
 	h.killed = true
-	slog.Info("进程已终止", "pid", pid)
+	slog.Info("process killed", "pid", pid)
 	return nil
 }
 

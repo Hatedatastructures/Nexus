@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -172,21 +173,21 @@ func (t *FileReadTool) Execute(ctx context.Context, args map[string]any) (string
 	// 路径安全检查: 遍历组件拒绝 + 净化 + 目录边界验证
 	safePath, secErr := checkPathSecurity(path, true)
 	if secErr != nil {
-		slog.Warn("文件读取被阻止 (路径安全)", "path", path, "err", secErr)
+		slog.Warn("file read blocked (path security)", "path", path, "err", secErr)
 		return ToolError(fmt.Sprintf("安全限制: %v", secErr)), nil
 	}
 	path = safePath
 
 	// 安全敏感路径检查
 	if isPathSensitive(path) {
-		slog.Warn("文件读取被阻止 (敏感路径)", "path", path)
+		slog.Warn("file read blocked (sensitive path)", "path", path)
 		return ToolError(fmt.Sprintf("安全限制: 不允许读取敏感路径 %s", path)), nil
 	}
 
 	// 如果是目录，列出目录内容
 	info, err := os.Stat(path)
 	if err != nil {
-		slog.Warn("文件读取失败", "path", path, "err", err)
+		slog.Warn("file read failed", "path", path, "err", err)
 		return ToolError(fmt.Sprintf("读取失败: %v", err)), nil
 	}
 	if info.IsDir() {
@@ -208,10 +209,16 @@ func (t *FileReadTool) Execute(ctx context.Context, args map[string]any) (string
 		return ToolResult(map[string]any{"output": buf.String(), "path": path}), nil
 	}
 
+	// 文件大小检查: 超过 10MB 拒绝读取
+	if info.Size() > 10*1024*1024 {
+		slog.Warn("file too large, refusing to read", "path", path, "size_mb", info.Size()/(1024*1024))
+		return ToolError(fmt.Sprintf("文件过大 (%d MB)，上限 10 MB", info.Size()/(1024*1024))), nil
+	}
+
 	// 读取文件
 	data, err := os.ReadFile(path)
 	if err != nil {
-		slog.Warn("文件读取失败", "path", path, "err", err)
+		slog.Warn("file read failed", "path", path, "err", err)
 		return ToolError(fmt.Sprintf("读取文件失败: %v", err)), nil
 	}
 
@@ -314,30 +321,30 @@ func (t *FileWriteTool) Execute(ctx context.Context, args map[string]any) (strin
 
 	// 路径安全检查: 遍历组件拒绝 + 目录边界验证 (写入不净化路径)
 	if _, secErr := checkPathSecurity(path, false); secErr != nil {
-		slog.Warn("文件写入被阻止 (路径安全)", "path", path, "err", secErr)
+		slog.Warn("file write blocked (path security)", "path", path, "err", secErr)
 		return ToolError(fmt.Sprintf("安全限制: %v", secErr)), nil
 	}
 
 	// 安全敏感路径检查
 	if isPathSensitive(path) {
-		slog.Warn("文件写入被阻止 (敏感路径)", "path", path)
+		slog.Warn("file write blocked (sensitive path)", "path", path)
 		return ToolError(fmt.Sprintf("安全限制: 不允许写入敏感路径 %s", path)), nil
 	}
 
 	// 确保父目录存在
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		slog.Error("创建目录失败", "dir", dir, "err", err)
+		slog.Error("failed to create directory", "dir", dir, "err", err)
 		return ToolError(fmt.Sprintf("创建目录失败: %v", err)), nil
 	}
 
 	// 写入文件
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		slog.Error("文件写入失败", "path", path, "err", err)
+		slog.Error("file write failed", "path", path, "err", err)
 		return ToolError(fmt.Sprintf("写入文件失败: %v", err)), nil
 	}
 
-	slog.Info("文件写入成功", "path", path, "size", len(content))
+	slog.Info("file written successfully", "path", path, "size", len(content))
 	result, _ := json.Marshal(map[string]any{
 		"output":  fmt.Sprintf("文件写入成功: %s (%d 字节)", path, len(content)),
 		"path":    path,
@@ -413,20 +420,20 @@ func (t *FileEditTool) Execute(ctx context.Context, args map[string]any) (string
 
 	// 路径安全检查: 遍历组件拒绝 + 目录边界验证 (编辑不净化路径)
 	if _, secErr := checkPathSecurity(path, false); secErr != nil {
-		slog.Warn("文件编辑被阻止 (路径安全)", "path", path, "err", secErr)
+		slog.Warn("file edit blocked (path security)", "path", path, "err", secErr)
 		return ToolError(fmt.Sprintf("安全限制: %v", secErr)), nil
 	}
 
 	// 安全敏感路径检查
 	if isPathSensitive(path) {
-		slog.Warn("文件编辑被阻止 (敏感路径)", "path", path)
+		slog.Warn("file edit blocked (sensitive path)", "path", path)
 		return ToolError(fmt.Sprintf("安全限制: 不允许编辑敏感路径 %s", path)), nil
 	}
 
 	// 读取文件
 	data, err := os.ReadFile(path)
 	if err != nil {
-		slog.Warn("文件读取失败", "path", path, "err", err)
+		slog.Warn("file read failed", "path", path, "err", err)
 		return ToolError(fmt.Sprintf("读取文件失败: %v", err)), nil
 	}
 
@@ -445,14 +452,17 @@ func (t *FileEditTool) Execute(ctx context.Context, args map[string]any) (string
 
 	// 写回文件
 	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
-		slog.Error("文件编辑写回失败", "path", path, "err", err)
+		slog.Error("file edit write-back failed", "path", path, "err", err)
 		return ToolError(fmt.Sprintf("写回文件失败: %v", err)), nil
 	}
 
-	slog.Info("文件编辑成功", "path", path)
+	slog.Info("file edit succeeded", "path", path)
 	result, _ := json.Marshal(map[string]any{
 		"output": fmt.Sprintf("文件编辑成功: %s (替换了 %d 处)", path, 1),
 		"path":   path,
+		"old_text": oldText,
+		"new_text": newText,
+		"diff":   generateUnifiedDiff(content, newContent, path),
 	})
 
 	return string(result), nil
@@ -535,20 +545,20 @@ func (t *PatchTool) Execute(ctx context.Context, args map[string]any) (string, e
 
 	// 路径安全检查: 遍历组件拒绝 + 目录边界验证 (patch 不净化路径)
 	if _, secErr := checkPathSecurity(path, false); secErr != nil {
-		slog.Warn("文件 patch 被阻止 (路径安全)", "path", path, "err", secErr)
+		slog.Warn("file patch blocked (path security)", "path", path, "err", secErr)
 		return ToolError(fmt.Sprintf("安全限制: %v", secErr)), nil
 	}
 
 	// 安全敏感路径检查
 	if isPathSensitive(path) {
-		slog.Warn("文件 patch 被阻止 (敏感路径)", "path", path)
+		slog.Warn("file patch blocked (sensitive path)", "path", path)
 		return ToolError(fmt.Sprintf("安全限制: 不允许编辑敏感路径 %s", path)), nil
 	}
 
 	// 读取文件
 	data, err := os.ReadFile(path)
 	if err != nil {
-		slog.Warn("文件读取失败", "path", path, "err", err)
+		slog.Warn("file read failed", "path", path, "err", err)
 		return ToolError(fmt.Sprintf("读取文件失败: %v", err)), nil
 	}
 
@@ -568,11 +578,11 @@ func (t *PatchTool) Execute(ctx context.Context, args map[string]any) (string, e
 
 	// 写回文件
 	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
-		slog.Error("文件 patch 写回失败", "path", path, "err", err)
+		slog.Error("file patch write-back failed", "path", path, "err", err)
 		return ToolError(fmt.Sprintf("写回文件失败: %v", err)), nil
 	}
 
-	slog.Info("文件 patch 成功", "path", path, "replacements", expectedReplacements)
+	slog.Info("file patch succeeded", "path", path, "replacements", expectedReplacements)
 	result, _ := json.Marshal(map[string]any{
 		"output":       fmt.Sprintf("文件 patch 成功: %s (替换了 %d 处)", path, expectedReplacements),
 		"path":         path,
@@ -627,6 +637,31 @@ func (t *FileSearchTool) Schema() *ToolSchema {
 					"type":        "string",
 					"description": "文件过滤 glob 模式 (如 *.go, **/*.md)",
 				},
+				"regex": map[string]any{
+					"type":        "boolean",
+					"description": "是否使用正则表达式匹配，默认 true",
+				},
+				"case_sensitive": map[string]any{
+					"type":        "boolean",
+					"description": "是否区分大小写，默认 false",
+				},
+				"context_lines": map[string]any{
+					"type":        "integer",
+					"description": "匹配行上下文行数，默认 0",
+				},
+				"output_mode": map[string]any{
+					"type":        "string",
+					"description": "输出模式，默认 content",
+					"enum":        []string{"content", "files_with_matches"},
+				},
+				"head_limit": map[string]any{
+					"type":        "integer",
+					"description": "最大结果数，默认 250",
+				},
+				"type": map[string]any{
+					"type":        "string",
+					"description": "文件扩展名过滤，如 go, py, js",
+				},
 			},
 			"required": []string{"pattern"},
 		},
@@ -635,6 +670,7 @@ func (t *FileSearchTool) Schema() *ToolSchema {
 
 // Execute 执行文件搜索。
 // 在指定目录下搜索匹配模式的文件内容。
+// 支持正则/子串匹配、大小写选项、上下文行、输出模式等。
 func (t *FileSearchTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	pattern, ok := args["pattern"].(string)
 	if !ok || pattern == "" {
@@ -650,23 +686,85 @@ func (t *FileSearchTool) Execute(ctx context.Context, args map[string]any) (stri
 		globPattern = g
 	}
 
+	// 新参数提取
+	useRegex := true
+	if v, ok := args["regex"].(bool); ok {
+		useRegex = v
+	}
+	caseSensitive := false
+	if v, ok := args["case_sensitive"].(bool); ok {
+		caseSensitive = v
+	}
+	contextLines := 0
+	if v, ok := args["context_lines"].(float64); ok && v >= 0 {
+		contextLines = int(v)
+	}
+	outputMode := "content"
+	if v, ok := args["output_mode"].(string); ok && (v == "content" || v == "files_with_matches") {
+		outputMode = v
+	}
+	headLimit := 250
+	if v, ok := args["head_limit"].(float64); ok && v > 0 {
+		headLimit = int(v)
+	}
+	typeFilter := ""
+	if v, ok := args["type"].(string); ok && v != "" {
+		typeFilter = v
+	}
+
 	// 路径安全检查: 遍历组件拒绝 + 净化 + 目录边界验证
 	safeSearchPath, secErr := checkPathSecurity(searchPath, true)
 	if secErr != nil {
-		slog.Warn("文件搜索被阻止 (路径安全)", "path", searchPath, "err", secErr)
+		slog.Warn("file search blocked (path security)", "path", searchPath, "err", secErr)
 		return ToolError(fmt.Sprintf("安全限制: %v", secErr)), nil
 	}
 	searchPath = safeSearchPath
 
 	// 安全敏感路径检查
 	if isPathSensitive(searchPath) {
-		slog.Warn("文件搜索被阻止 (敏感路径)", "path", searchPath)
+		slog.Warn("file search blocked (sensitive path)", "path", searchPath)
 		return ToolError(fmt.Sprintf("安全限制: 不允许搜索敏感路径 %s", searchPath)), nil
+	}
+
+	// 构建匹配函数
+	var re *regexp.Regexp
+	var matchFunc func(string) bool
+
+	if useRegex {
+		flags := ""
+		if !caseSensitive {
+			flags = "(?i)"
+		}
+		compiled, err := regexp.Compile(flags + pattern)
+		if err != nil {
+			return ToolError(fmt.Sprintf("正则表达式编译失败: %v", err)), nil
+		}
+		re = compiled
+		matchFunc = func(s string) bool { return re.MatchString(s) }
+	} else {
+		pat := pattern
+		if !caseSensitive {
+			pat = strings.ToLower(pat)
+		}
+		matchFunc = func(s string) bool {
+			if caseSensitive {
+				return strings.Contains(s, pat)
+			}
+			return strings.Contains(strings.ToLower(s), pat)
+		}
+	}
+
+	// 辅助: 根据文件名判断是否通过 type 过滤
+	typeExt := "." + typeFilter
+	passTypeFilter := func(name string) bool {
+		if typeFilter == "" {
+			return true
+		}
+		return strings.EqualFold(filepath.Ext(name), typeExt)
 	}
 
 	// 收集匹配的文件
 	var results []map[string]any
-	maxResults := 50 // 限制最大结果数
 
 	err := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -684,14 +782,21 @@ func (t *FileSearchTool) Execute(ctx context.Context, args map[string]any) (stri
 			return nil
 		}
 
-		// glob 过滤
-		matched, _ := filepath.Match(globPattern, info.Name())
-		if !matched && globPattern != "*" {
+		// type 扩展名过滤
+		if !passTypeFilter(info.Name()) {
 			return nil
 		}
 
-		// 检查是否达到最大结果
-		if len(results) >= maxResults {
+		// glob 过滤
+		if globPattern != "*" {
+			matched, _ := filepath.Match(globPattern, info.Name())
+			if !matched {
+				return nil
+			}
+		}
+
+		// 检查是否达到最大结果数
+		if len(results) >= headLimit {
 			return filepath.SkipAll
 		}
 
@@ -702,33 +807,68 @@ func (t *FileSearchTool) Execute(ctx context.Context, args map[string]any) (stri
 		}
 
 		content := string(data)
-		if strings.Contains(content, pattern) {
-			// 查找匹配行
-			var matchingLines []map[string]any
-			lines := strings.Split(content, "\n")
-			for i, line := range lines {
-				if strings.Contains(line, pattern) {
-					matchingLines = append(matchingLines, map[string]any{
-						"line_number": i + 1,
-						"content":     strings.TrimSpace(line),
+		if !matchFunc(content) {
+			return nil
+		}
+
+		// files_with_matches 模式只记录文件名
+		if outputMode == "files_with_matches" {
+			results = append(results, map[string]any{
+				"file": path,
+			})
+			return nil
+		}
+
+		// content 模式: 查找匹配行（含上下文）
+		var matchingLines []map[string]any
+		lines := strings.Split(content, "\n")
+		matchCount := 0
+		maxMatchesPerFile := 50
+
+		for i, line := range lines {
+			if matchFunc(line) {
+				// 确定上下文范围
+				start := i - contextLines
+				if start < 0 {
+					start = 0
+				}
+				end := i + contextLines
+				if end >= len(lines) {
+					end = len(lines) - 1
+				}
+
+				// 构建含上下文的行集合
+				var contextLinesResult []map[string]any
+				for j := start; j <= end; j++ {
+					contextLinesResult = append(contextLinesResult, map[string]any{
+						"line_number": j + 1,
+						"content":     lines[j],
+						"is_match":    j == i,
 					})
-					if len(matchingLines) >= 5 { // 每个文件最多 5 个匹配行
-						break
-					}
+				}
+
+				matchingLines = append(matchingLines, map[string]any{
+					"line_number":    i + 1,
+					"content":        lines[i],
+					"context_before": contextLinesResult,
+				})
+				matchCount++
+				if matchCount >= maxMatchesPerFile {
+					break
 				}
 			}
-
-			results = append(results, map[string]any{
-				"file":    path,
-				"matches": len(matchingLines),
-				"lines":   matchingLines,
-			})
 		}
+
+		results = append(results, map[string]any{
+			"file":    path,
+			"matches": matchCount,
+			"lines":   matchingLines,
+		})
 		return nil
 	})
 
 	if err != nil {
-		slog.Warn("文件搜索遍历失败", "path", searchPath, "err", err)
+		slog.Warn("file search traversal failed", "path", searchPath, "err", err)
 	}
 
 	if len(results) == 0 {
@@ -749,6 +889,44 @@ func (t *FileSearchTool) Execute(ctx context.Context, args map[string]any) (stri
 	})
 
 	return string(resultJSON), nil
+}
+
+// ───────────────────────────── diff 生成 ─────────────────────────────
+
+// generateUnifiedDiff 生成简易的 unified diff 格式输出。
+func generateUnifiedDiff(old, newContent, path string) string {
+	oldLines := strings.Split(old, "\n")
+	newLines := strings.Split(newContent, "\n")
+
+	var sb strings.Builder
+	sb.WriteString("--- " + path + "\n")
+	sb.WriteString("+++ " + path + "\n")
+
+	// 找到不同的行范围
+	maxLen := len(oldLines)
+	if len(newLines) > maxLen {
+		maxLen = len(newLines)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var oldLine, newLine string
+		if i < len(oldLines) {
+			oldLine = oldLines[i]
+		}
+		if i < len(newLines) {
+			newLine = newLines[i]
+		}
+		if oldLine != newLine {
+			if oldLine != "" {
+				sb.WriteString(fmt.Sprintf("-%d: %s\n", i+1, oldLine))
+			}
+			if newLine != "" {
+				sb.WriteString(fmt.Sprintf("+%d: %s\n", i+1, newLine))
+			}
+		}
+	}
+
+	return sb.String()
 }
 
 // ───────────────────────────── init 注册 ─────────────────────────────

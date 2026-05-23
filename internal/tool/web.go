@@ -124,7 +124,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (strin
 	}
 
 	if err != nil {
-		slog.Error("网页搜索失败", "query", query, "err", err)
+		slog.Error("web search failed", "query", query, "err", err)
 		return ToolError(fmt.Sprintf("搜索失败: %v", err)), nil
 	}
 
@@ -419,7 +419,7 @@ func (t *WebCrawlTool) Execute(ctx context.Context, args map[string]any) (string
 
 	// URL 安全检查: 拦截 SSRF 风险地址
 	if safe, reason := CheckURLSafety(targetURL); !safe {
-		slog.Warn("web_crawl: URL 安全检查未通过", "url", targetURL, "reason", reason)
+		slog.Warn("web_crawl: URL safety check failed", "url", targetURL, "reason", reason)
 		return ToolError(fmt.Sprintf("URL 安全检查未通过: %s", reason)), nil
 	}
 
@@ -595,7 +595,7 @@ func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (stri
 
 		// URL 安全检查: 拦截 SSRF 风险地址
 		if safe, reason := CheckURLSafety(targetURL); !safe {
-			slog.Warn("web_extract: URL 安全检查未通过", "url", targetURL, "reason", reason)
+			slog.Warn("web_extract: URL safety check failed", "url", targetURL, "reason", reason)
 			results = append(results, map[string]any{
 				"url":   targetURL,
 				"error": fmt.Sprintf("URL 安全检查未通过: %s", reason),
@@ -605,7 +605,7 @@ func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (stri
 
 		content, extractErr := t.extractURL(ctx, targetURL)
 		if extractErr != nil {
-			slog.Warn("网页提取失败", "url", targetURL, "err", extractErr)
+			slog.Warn("web page extraction failed", "url", targetURL, "err", extractErr)
 			results = append(results, map[string]any{
 				"url":   targetURL,
 				"error": extractErr.Error(),

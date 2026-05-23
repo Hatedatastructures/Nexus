@@ -49,7 +49,7 @@ func NewFallbackChain(entries []*FallbackEntry, providerMap map[string]llm.Provi
 	for _, e := range entries {
 		p, ok := providerMap[e.Provider]
 		if !ok {
-			slog.Warn("回退链: 提供者未找到，跳过",
+			slog.Warn("fallback chain: provider not found, skipping",
 				"provider", e.Provider,
 				"model", e.Model,
 			)
@@ -67,7 +67,7 @@ func NewFallbackChain(entries []*FallbackEntry, providerMap map[string]llm.Provi
 		return runtime[i].priority < runtime[j].priority
 	})
 
-	slog.Info("回退链已初始化", "entry_count", len(runtime))
+	slog.Info("fallback chain initialized", "entry_count", len(runtime))
 	return &FallbackChain{entries: runtime}
 }
 
@@ -106,7 +106,7 @@ func (a *AIAgent) tryFallbackChain(ctx context.Context, err error, req *llm.Chat
 
 	// 优先使用 ProviderRouter (如果已配置)
 	if a.router != nil {
-		slog.Warn("主提供者失败，委托 ProviderRouter 进行回退",
+		slog.Warn("primary provider failed, delegating to ProviderRouter for fallback",
 			"session_id", a.sessionID,
 			"original_err", err.Error(),
 		)
@@ -114,7 +114,7 @@ func (a *AIAgent) tryFallbackChain(ctx context.Context, err error, req *llm.Chat
 		if routerErr == nil {
 			return resp, nil
 		}
-		slog.Warn("ProviderRouter 回退也失败，尝试回退链",
+		slog.Warn("ProviderRouter fallback also failed, trying fallback chain",
 			"session_id", a.sessionID,
 			"router_err", routerErr.Error(),
 		)
@@ -126,7 +126,7 @@ func (a *AIAgent) tryFallbackChain(ctx context.Context, err error, req *llm.Chat
 	}
 
 	classified := llm.ClassifyFromError(err)
-	slog.Warn("启动回退链",
+	slog.Warn("starting fallback chain",
 		"session_id", a.sessionID,
 		"reason", classified.Reason,
 		"entry_count", len(a.fallbackChain.entries),
@@ -140,7 +140,7 @@ func (a *AIAgent) tryFallbackChain(ctx context.Context, err error, req *llm.Chat
 		default:
 		}
 
-		slog.Warn("回退链: 尝试提供者",
+		slog.Warn("fallback chain: trying provider",
 			"provider", entry.provider.Name(),
 			"model", entry.model,
 		)
@@ -155,7 +155,7 @@ func (a *AIAgent) tryFallbackChain(ctx context.Context, err error, req *llm.Chat
 		req.Model = originalModel
 
 		if tryErr == nil {
-			slog.Info("回退链: 提供者成功",
+			slog.Info("fallback chain: provider succeeded",
 				"provider", entry.provider.Name(),
 				"model", entry.model,
 			)
@@ -163,7 +163,7 @@ func (a *AIAgent) tryFallbackChain(ctx context.Context, err error, req *llm.Chat
 		}
 
 		lastErr = tryErr
-		slog.Warn("回退链: 提供者失败",
+		slog.Warn("fallback chain: provider failed",
 			"provider", entry.provider.Name(),
 			"model", entry.model,
 			"error", tryErr.Error(),
@@ -185,7 +185,7 @@ func (a *AIAgent) tryFallback(ctx context.Context, req *llm.ChatRequest) (*llm.C
 		return nil, nil
 	}
 
-	slog.Warn("切换到备选 Provider (旧版)",
+	slog.Warn("switching to fallback provider (legacy)",
 		"from_model", a.model,
 		"to_model", a.fallbackModel,
 	)
@@ -209,8 +209,16 @@ func (a *AIAgent) recoverUnhealthyProviders(ctx context.Context) {
 		}
 
 		// 距离上次错误超过 5 分钟才尝试恢复
-		if time.Since(entry.LastErr.Load().(time.Time)) < 5*time.Minute {
-			continue
+			v := entry.LastErr.Load()
+			if v == nil {
+				continue
+			}
+			lastErr, ok := v.(time.Time)
+			if !ok {
+				continue
+			}
+				if time.Since(lastErr) < 5*time.Minute {
+				continue
 		}
 
 		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -219,7 +227,7 @@ func (a *AIAgent) recoverUnhealthyProviders(ctx context.Context) {
 
 		if err == nil {
 			a.router.MarkHealthy(entry.Provider.Name(), true)
-			slog.Info("回退恢复: 提供者已恢复",
+			slog.Info("fallback recovery: provider restored",
 				"provider", entry.Provider.Name(),
 			)
 		}

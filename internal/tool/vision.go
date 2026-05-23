@@ -94,14 +94,14 @@ func (t *VisionAnalyzeTool) Execute(ctx context.Context, args map[string]any) (s
 
 	// 安全敏感路径检查
 	if isPathSensitive(imagePath) {
-		slog.Warn("视觉分析被阻止 (敏感路径)", "path", imagePath)
+		slog.Warn("vision analysis blocked (sensitive path)", "path", imagePath)
 		return ToolError(fmt.Sprintf("安全限制: 不允许访问敏感路径 %s", imagePath)), nil
 	}
 
 	// 读取图片文件
 	imageData, mimeType, err := t.readImage(imagePath)
 	if err != nil {
-		slog.Warn("图片读取失败", "path", imagePath, "err", err)
+		slog.Warn("image read failed", "path", imagePath, "err", err)
 		return ToolError(fmt.Sprintf("读取图片失败: %v", err)), nil
 	}
 
@@ -111,11 +111,11 @@ func (t *VisionAnalyzeTool) Execute(ctx context.Context, args map[string]any) (s
 	// 调用多模态 LLM
 	result, apiErr := t.analyzeImage(ctx, model, prompt, base64Data, mimeType)
 	if apiErr != nil {
-		slog.Error("视觉分析 API 调用失败", "model", model, "err", apiErr)
+		slog.Error("vision analysis API call failed", "model", model, "err", apiErr)
 		return ToolError(fmt.Sprintf("视觉分析失败: %v", apiErr)), nil
 	}
 
-	slog.Info("视觉分析成功", "path", imagePath, "model", model)
+	slog.Info("vision analysis succeeded", "path", imagePath, "model", model)
 	return ToolResult(map[string]any{
 		"output":  result,
 		"image":   imagePath,
@@ -216,7 +216,7 @@ func (t *VisionAnalyzeTool) analyzeImage(ctx context.Context, model, prompt, bas
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return "", fmt.Errorf("读取响应失败: %w", err)
 	}

@@ -74,7 +74,7 @@ func cdpCall(ws *websocket.Conn, method string, params map[string]any, sessionID
 
 		var msg map[string]any
 		if err := json.Unmarshal(raw, &msg); err != nil {
-			slog.Debug("CDP 响应非 JSON，跳过", "raw", string(raw))
+			slog.Debug("CDP response not JSON, skipping", "raw", string(raw))
 			continue
 		}
 
@@ -220,7 +220,7 @@ func (t *BrowserCDPTool) Execute(ctx context.Context, args map[string]any) (stri
 		return ToolError("浏览器控制 URL 不可用"), nil
 	}
 
-	slog.Info("CDP 命令", "method", method, "target_id", targetID)
+	slog.Info("CDP command", "method", method, "target_id", targetID)
 
 	// 建立 WebSocket 连接
 	dialer := websocket.Dialer{
@@ -228,7 +228,7 @@ func (t *BrowserCDPTool) Execute(ctx context.Context, args map[string]any) (stri
 	}
 	ws, _, err := dialer.DialContext(ctx, ctrlURL, nil)
 	if err != nil {
-		slog.Error("CDP WebSocket 连接失败", "url", ctrlURL, "err", err)
+		slog.Error("CDP WebSocket connection failed", "url", ctrlURL, "err", err)
 		return ToolError(fmt.Sprintf("CDP 连接失败: %v", err)), nil
 	}
 	defer ws.Close()
@@ -236,7 +236,7 @@ func (t *BrowserCDPTool) Execute(ctx context.Context, args map[string]any) (stri
 	// 发送 CDP 命令
 	result, err := cdpCallWithTarget(ws, method, params, targetID, timeout)
 	if err != nil {
-		slog.Error("CDP 命令执行失败", "method", method, "err", err)
+		slog.Error("CDP command execution failed", "method", method, "err", err)
 		return ToolError(fmt.Sprintf("CDP 命令失败: %v", err)), nil
 	}
 

@@ -110,7 +110,7 @@ func (t *BrowserSuperviseTool) Execute(ctx context.Context, args map[string]any)
 	}
 	selector, _ := args["selector"].(string)
 
-	slog.Info("启动浏览器监控",
+	slog.Info("starting browser supervision",
 		"interval", intervalSec,
 		"max_checks", maxChecks,
 		"selector", selector,
@@ -133,7 +133,7 @@ func (t *BrowserSuperviseTool) Execute(ctx context.Context, args map[string]any)
 		// 检查 context 是否已取消
 		select {
 		case <-ctx.Done():
-			slog.Info("监控被 context 取消", "completed_checks", len(checks))
+			slog.Info("supervision cancelled by context", "completed_checks", len(checks))
 			break
 		default:
 		}
@@ -142,7 +142,7 @@ func (t *BrowserSuperviseTool) Execute(ctx context.Context, args map[string]any)
 		check := t.runSingleCheck(ctx, page, selector)
 		checks = append(checks, check)
 
-		slog.Info("监控检查完成",
+		slog.Info("supervision check completed",
 			"check", i+1,
 			"title", check.PageTitle,
 			"loading", check.Loading,
@@ -153,7 +153,7 @@ func (t *BrowserSuperviseTool) Execute(ctx context.Context, args map[string]any)
 		if i < maxChecks-1 {
 			select {
 			case <-ctx.Done():
-				slog.Info("监控被 context 取消", "completed_checks", len(checks))
+				slog.Info("supervision cancelled by context", "completed_checks", len(checks))
 				goto done
 			case <-time.After(interval):
 				// 继续下一轮
@@ -196,7 +196,7 @@ func (t *BrowserSuperviseTool) runSingleCheck(_ context.Context, page *rod.Page,
 	// 截图
 	screenshot, err := page.Screenshot(true, nil)
 	if err != nil {
-		slog.Warn("监控截图失败", "err", err)
+		slog.Warn("supervision screenshot failed", "err", err)
 		check.ScreenshotB64 = ""
 	} else {
 		check.ScreenshotB64 = base64.StdEncoding.EncodeToString(screenshot)

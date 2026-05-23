@@ -44,13 +44,16 @@ func NewChecker(policy *Policy, approvalChecker *approval.Checker) *Checker {
 // 返回权限决策结果，包含级别、原因和匹配到的规则。
 // 这是权限系统的主要入口点。
 func (c *Checker) Check(toolName string, args map[string]any) Decision {
-	// 1. 策略引擎评估
-	decision := c.policy.Evaluate(toolName, args)
+	// 1. 策略引擎评估 (读锁保护 policy 读取)
+	c.mu.RLock()
+	policy := c.policy
+	c.mu.RUnlock()
+	decision := policy.Evaluate(toolName, args)
 
 	// 2. 会话记忆检查 (ask_once 级别)
 	if decision.Level == LevelAskOnce {
 		if remembered := c.checkSessionMemory(toolName, args); remembered != nil {
-			slog.Debug("权限命中会话记忆",
+			slog.Debug("permission matched session memory",
 				"tool", toolName,
 				"remembered_level", *remembered,
 			)
@@ -86,7 +89,7 @@ func (c *Checker) RememberDecision(toolName string, args map[string]any, level L
 	c.sessionDecisions[key] = level
 	c.mu.Unlock()
 
-	slog.Info("已记住权限决策",
+	slog.Info("permission decision remembered",
 		"tool", toolName,
 		"level", level,
 		"key", key,
@@ -171,7 +174,7 @@ func (c *Checker) SetPolicy(policy *Policy) {
 	c.mu.Lock()
 	c.policy = policy
 	c.mu.Unlock()
-	slog.Info("权限策略已切换", "name", policy.Name)
+	slog.Info("permission policy switched", "name", policy.Name)
 }
 
 // Policy 返回当前生效的策略。

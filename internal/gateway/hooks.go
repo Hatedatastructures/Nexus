@@ -5,9 +5,11 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"nexus-agent/internal/gateway/platforms"
 )
@@ -46,6 +48,19 @@ type HookResult struct {
 	Error    error
 }
 
+// ───────────────────────────── 钩子配置 ─────────────────────────────
+
+// HookConfig 配置钩子的执行行为。
+type HookConfig struct {
+	Timeout time.Duration // 单个钩子超时。0 表示不超时。
+}
+
+// hookEntry 包装一个钩子函数及其配置。
+type hookEntry struct {
+	fn     Hook
+	config HookConfig
+}
+
 // ───────────────────────────── 钩子注册表 ─────────────────────────────
 
 // HookRegistry 管理和执行消息钩子。
@@ -53,13 +68,13 @@ type HookResult struct {
 // 支持通配符匹配: "command:*" 匹配所有 "command:xxx" 事件。
 type HookRegistry struct {
 	mu    sync.RWMutex
-	hooks map[HookType][]Hook
+	hooks map[HookType][]hookEntry
 }
 
 // NewHookRegistry 创建空的钩子注册表。
 func NewHookRegistry() *HookRegistry {
 	return &HookRegistry{
-		hooks: make(map[HookType][]Hook),
+		hooks: make(map[HookType][]hookEntry),
 	}
 }
 
@@ -68,8 +83,16 @@ func NewHookRegistry() *HookRegistry {
 func (r *HookRegistry) Register(hookType HookType, hook Hook) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.hooks[hookType] = append(r.hooks[hookType], hook)
+	r.hooks[hookType] = append(r.hooks[hookType], hookEntry{fn: hook})
 	slog.Debug("registered hook", "type", string(hookType))
+}
+
+// RegisterWithConfig 注册一个带配置的钩子函数。
+func (r *HookRegistry) RegisterWithConfig(hookType HookType, hook Hook, config HookConfig) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.hooks[hookType] = append(r.hooks[hookType], hookEntry{fn: hook, config: config})
+	slog.Debug("registered hook with config", "type", string(hookType), "timeout", config.Timeout)
 }
 
 // Run 执行指定类型的所有钩子。
@@ -86,9 +109,13 @@ func (r *HookRegistry) Run(ctx context.Context, hookType HookType, event *platfo
 	}
 
 	current := event
-	for i, hook := range hooks {
+	for i, he := range hooks {
 		var err error
-		current, err = hook(ctx, current)
+		if he.config.Timeout > 0 {
+			current, err = r.runWithTimeout(ctx, he.fn, current, he.config.Timeout)
+		} else {
+			current, err = he.fn(ctx, current)
+		}
 		if err != nil {
 			slog.Warn("hook execution failed",
 				"type", string(hookType),
@@ -120,8 +147,14 @@ func (r *HookRegistry) EmitCollect(ctx context.Context, hookType HookType, event
 	results := make([]HookResult, 0, len(hooks))
 	current := event
 
-	for i, hook := range hooks {
-		result, err := hook(ctx, current)
+	for i, he := range hooks {
+		var result *platforms.MessageEvent
+		var err error
+		if he.config.Timeout > 0 {
+			result, err = r.runWithTimeout(ctx, he.fn, current, he.config.Timeout)
+		} else {
+			result, err = he.fn(ctx, current)
+		}
 		results = append(results, HookResult{
 			HookType: hookType,
 			Index:    i,
@@ -137,8 +170,8 @@ func (r *HookRegistry) EmitCollect(ctx context.Context, hookType HookType, event
 }
 
 // getMatchingHooks 获取所有匹配的钩子（包括通配符匹配）。
-func (r *HookRegistry) getMatchingHooks(hookType HookType) []Hook {
-	var matched []Hook
+func (r *HookRegistry) getMatchingHooks(hookType HookType) []hookEntry {
+	var matched []hookEntry
 
 	// 精确匹配
 	if hooks, ok := r.hooks[hookType]; ok {
@@ -155,6 +188,30 @@ func (r *HookRegistry) getMatchingHooks(hookType HookType) []Hook {
 	}
 
 	return matched
+}
+
+// runWithTimeout 在指定超时内执行钩子函数。
+func (r *HookRegistry) runWithTimeout(ctx context.Context, hook Hook, event *platforms.MessageEvent, timeout time.Duration) (*platforms.MessageEvent, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	type hookResult struct {
+		event *platforms.MessageEvent
+		err   error
+	}
+	done := make(chan hookResult, 1)
+
+	go func() {
+		ev, err := hook(ctx, event)
+		done <- hookResult{event: ev, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return event, fmt.Errorf("hook timed out after %v", timeout)
+	case res := <-done:
+		return res.event, res.err
+	}
 }
 
 // isWildcardMatch 检查事件类型是否匹配通配符模式。
@@ -187,21 +244,4 @@ func (r *HookRegistry) ListTypes() []HookType {
 		types = append(types, t)
 	}
 	return types
-}
-
-// HasType 检查是否有指定类型的钩子注册。
-func (r *HookRegistry) HasType(hookType HookType) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	_, ok := r.hooks[hookType]
-	if ok {
-		return true
-	}
-	hookTypeStr := string(hookType)
-	for pattern := range r.hooks {
-		if isWildcardMatch(string(pattern), hookTypeStr) {
-			return true
-		}
-	}
-	return false
 }

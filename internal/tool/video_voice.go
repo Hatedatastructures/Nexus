@@ -89,11 +89,11 @@ func (t *VideoGenerateTool) Execute(ctx context.Context, args map[string]any) (s
 
 	result, err := t.generate(ctx, prompt, duration, resolution, style)
 	if err != nil {
-		slog.Error("视频生成失败", "prompt", prompt[:min(50, len(prompt))], "err", err)
+		slog.Error("video generation failed", "prompt", prompt[:min(50, len(prompt))], "err", err)
 		return ToolError(fmt.Sprintf("视频生成失败: %v", err)), nil
 	}
 
-	slog.Info("视频生成成功", "prompt", prompt[:min(50, len(prompt))])
+	slog.Info("video generation succeeded", "prompt", prompt[:min(50, len(prompt))])
 	return ToolResult(result), nil
 }
 
@@ -264,7 +264,7 @@ func (t *VoiceRecordTool) Execute(ctx context.Context, args map[string]any) (str
 		return ToolError(fmt.Sprintf("录音文件不存在: %v", err)), nil
 	}
 
-	slog.Info("录音完成", "path", outPath, "duration", duration, "size", info.Size())
+	slog.Info("recording completed", "path", outPath, "duration", duration, "size", info.Size())
 	return ToolResult(map[string]any{
 		"output":    fmt.Sprintf("录音完成: %s (%s)", outPath, formatFileSize(int(info.Size()))),
 		"path":      outPath,
@@ -321,7 +321,7 @@ func (t *VoicePlayTool) Execute(ctx context.Context, args map[string]any) (strin
 
 	// 安全敏感路径检查
 	if isPathSensitive(filePath) {
-		slog.Warn("音频播放被阻止 (敏感路径)", "path", filePath)
+		slog.Warn("audio playback blocked (sensitive path)", "path", filePath)
 		return ToolError(fmt.Sprintf("安全限制: 不允许访问敏感路径 %s", filePath)), nil
 	}
 
@@ -337,7 +337,7 @@ func (t *VoicePlayTool) Execute(ctx context.Context, args map[string]any) (strin
 		return ToolError(fmt.Sprintf("播放失败: %v", err)), nil
 	}
 
-	slog.Info("音频播放完成", "path", filePath)
+	slog.Info("audio playback completed", "path", filePath)
 	return ToolResult(map[string]any{
 		"output":   fmt.Sprintf("播放完成: %s", filePath),
 		"file_path": filePath,

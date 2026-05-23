@@ -122,7 +122,7 @@ func (a *EmailAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error
 	// 启动轮询循环
 	go a.pollLoop(ctx, a.msgCh)
 
-	slog.Info("[Email] 已连接", "address", a.emailAddress)
+	slog.Info("[Email] connected", "address", a.emailAddress)
 	return a.msgCh, nil
 }
 
@@ -139,7 +139,7 @@ func (a *EmailAdapter) Disconnect(ctx context.Context) error {
 	}
 
 	a.closeOnce.Do(func() { close(a.msgCh) })
-	slog.Info("[Email] 已断开")
+	slog.Info("[Email] disconnected")
 	return nil
 }
 
@@ -164,7 +164,7 @@ func (a *EmailAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) {
 
 			messages, err := a.fetchUnseen(ctx)
 			if err != nil {
-				slog.Warn("[Email] 获取邮件失败", "err", err)
+				slog.Warn("[Email] failed to fetch emails", "err", err)
 				continue
 			}
 
@@ -242,7 +242,7 @@ func (a *EmailAdapter) fetchUnseen(ctx context.Context) ([]emailMessage, error) 
 
 		msg, err := a.fetchMessage(conn, uid)
 		if err != nil {
-			slog.Warn("[Email] 获取邮件失败", "uid", uid, "err", err)
+			slog.Warn("[Email] failed to fetch email", "uid", uid, "err", err)
 			continue
 		}
 

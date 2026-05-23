@@ -112,7 +112,7 @@ func NewBrowserbaseSession(ctx context.Context, cfg BrowserbaseConfig) (*Browser
 		return nil, fmt.Errorf("Browserbase 未返回 CDP 连接 URL")
 	}
 
-	slog.Info("Browserbase 云浏览器会话已创建",
+	slog.Info("Browserbase cloud browser session created",
 		"session_id", result.ID,
 		"region", cfg.Region,
 	)
@@ -156,7 +156,7 @@ func (s *BrowserbaseSession) Close(ctx context.Context) error {
 			resp.StatusCode, string(body))
 	}
 
-	slog.Info("Browserbase 云浏览器会话已关闭", "session_id", s.sessionID)
+	slog.Info("Browserbase cloud browser session closed", "session_id", s.sessionID)
 	return nil
 }
 

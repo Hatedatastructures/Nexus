@@ -26,7 +26,7 @@ func DiscoverBuiltin() error {
 	registry := GetRegistry()
 	toolNames := registry.ListTools()
 
-	slog.Info("内置工具发现完成",
+	slog.Info("built-in tool discovery complete",
 		"count", len(toolNames),
 		"tools", toolNames,
 	)

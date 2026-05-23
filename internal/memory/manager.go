@@ -50,7 +50,7 @@ func (m *Manager) SetExternal(p Provider) {
 			if _, exists := m.toolProviders[schema.Name]; !exists {
 				m.toolProviders[schema.Name] = p
 			} else {
-				slog.Warn("记忆工具名称冲突",
+				slog.Warn("memory tool name conflict",
 					"tool", schema.Name,
 					"existing", m.toolProviders[schema.Name].Name(),
 					"rejected", p.Name(),
@@ -87,7 +87,7 @@ func (m *Manager) PrefetchAll(ctx context.Context, query string) (string, error)
 	for _, p := range providers {
 		result, err := p.Prefetch(ctx, query)
 		if err != nil {
-			slog.Debug("记忆预取失败 (非致命)",
+			slog.Debug("memory prefetch failed (non-fatal)",
 				"provider", p.Name(),
 				"error", err,
 			)
@@ -108,7 +108,7 @@ func (m *Manager) SyncAll(ctx context.Context, userContent, assistantContent str
 
 	for _, p := range providers {
 		if err := p.SyncTurn(ctx, userContent, assistantContent); err != nil {
-			slog.Warn("记忆同步失败",
+			slog.Warn("memory sync failed",
 				"provider", p.Name(),
 				"error", err,
 			)
@@ -168,7 +168,7 @@ func (m *Manager) HandleToolCall(ctx context.Context, toolName string, args map[
 
 	result, err := provider.HandleToolCall(ctx, toolName, args)
 	if err != nil {
-		slog.Error("记忆工具调用失败",
+		slog.Error("memory tool call failed",
 			"provider", provider.Name(),
 			"tool", toolName,
 			"error", err,
@@ -188,7 +188,7 @@ func (m *Manager) InitializeAll(ctx context.Context, sessionID string) error {
 	providers := m.allProviders()
 	for _, p := range providers {
 		if err := p.Initialize(ctx, sessionID); err != nil {
-			slog.Warn("记忆提供者初始化失败",
+			slog.Warn("memory provider initialization failed",
 				"provider", p.Name(),
 				"error", err,
 			)
@@ -205,7 +205,7 @@ func (m *Manager) ShutdownAll(ctx context.Context) error {
 	for i := len(providers) - 1; i >= 0; i-- {
 		p := providers[i]
 		if err := p.Shutdown(ctx); err != nil {
-			slog.Warn("记忆提供者关闭失败",
+			slog.Warn("memory provider shutdown failed",
 				"provider", p.Name(),
 				"error", err,
 			)

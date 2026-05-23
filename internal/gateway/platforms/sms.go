@@ -77,19 +77,19 @@ func (a *SMSAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error) 
 
 	go func() {
 		addr := fmt.Sprintf(":%d", a.webhookPort)
-		slog.Info("[SMS] 启动 webhook 服务器", "addr", addr)
+		slog.Info("[SMS] webhook server started", "addr", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
-			slog.Error("[SMS] webhook 服务器失败", "err", err)
+			slog.Error("[SMS] webhook server failed", "err", err)
 		}
 	}()
 
-	slog.Info("[SMS] 已连接", "from", a.fromNumber)
+	slog.Info("[SMS] connected", "from", a.fromNumber)
 	return a.msgCh, nil
 }
 
 func (a *SMSAdapter) Disconnect(ctx context.Context) error {
 	a.running = false
-	slog.Info("[SMS] 已断开")
+	slog.Info("[SMS] disconnected")
 	return nil
 }
 

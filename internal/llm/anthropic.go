@@ -27,6 +27,10 @@ const (
 
 	// AnthropicCacheCount 为 Anthropic 最大缓存断点数。
 	AnthropicCacheCount = 4
+
+	// prompt caching 文本标记 — 由 caching.go 和 prompt_cache.go 写入 Content
+	cacheMarkerHTML    = "<!-- cache_control: ephemeral -->"
+	cacheMarkerBracket = "[cache_control:ephemeral]"
 )
 
 // ── Anthropic 传输层 ──────────────────────────────────────────────────────
@@ -200,7 +204,7 @@ func (t *AnthropicTransport) ParseStream(ctx context.Context, body io.ReadCloser
 
 			var sseEvent anthropicSSEEvent
 			if err := json.Unmarshal([]byte(event.Data), &sseEvent); err != nil {
-				slog.Debug("解析 Anthropic SSE 事件失败", "error", err)
+				slog.Debug("failed to parse Anthropic SSE event", "error", err)
 				continue
 			}
 
@@ -289,7 +293,9 @@ func (p *AnthropicProvider) Name() string {
 // CreateChatCompletion 发送非流式聊天补全请求。
 func (p *AnthropicProvider) CreateChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	if req.Model == "" {
-		req.Model = p.model
+		reqCopy := *req
+		reqCopy.Model = p.model
+		req = &reqCopy
 	}
 
 	httpReq, err := p.transport.BuildRequest(ctx, req, p.apiKey)
@@ -325,7 +331,9 @@ func (p *AnthropicProvider) CreateChatCompletion(ctx context.Context, req *ChatR
 // CreateChatCompletionStream 发送流式聊天补全请求。
 func (p *AnthropicProvider) CreateChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan *StreamDelta, error) {
 	if req.Model == "" {
-		req.Model = p.model
+		reqCopy := *req
+		reqCopy.Model = p.model
+		req = &reqCopy
 	}
 
 	if req.Metadata == nil {
@@ -499,12 +507,15 @@ func buildAnthropicRequestBody(req *ChatRequest) *anthropicRequestBody {
 	// 分离 system 消息
 	systemContent := extractAnthropicSystemMessages(req.Messages)
 	if systemContent != "" {
-		body.System = []anthropicSystemBlock{
-			{
-				Type: "text",
-				Text: systemContent,
-			},
+		cleanText, shouldCache := extractCacheControl(systemContent)
+		block := anthropicSystemBlock{
+			Type: "text",
+			Text: cleanText,
 		}
+		if shouldCache {
+			block.CacheControl = &cacheControl{Type: "ephemeral"}
+		}
+		body.System = []anthropicSystemBlock{block}
 	}
 
 	// 转换非 system 消息
@@ -560,6 +571,20 @@ func buildAnthropicRequestBody(req *ChatRequest) *anthropicRequestBody {
 	return body
 }
 
+// extractCacheControl 检测 content 中的缓存标记字符串，移除它们并返回清理后的文本和是否需要设置 cache_control。
+// 支持两种标记格式: HTML 注释和方括号格式。
+func extractCacheControl(content string) (cleaned string, shouldCache bool) {
+	if strings.Contains(content, cacheMarkerHTML) {
+		content = strings.ReplaceAll(content, cacheMarkerHTML, "")
+		shouldCache = true
+	}
+	if strings.Contains(content, cacheMarkerBracket) {
+		content = strings.ReplaceAll(content, cacheMarkerBracket, "")
+		shouldCache = true
+	}
+	return strings.TrimSpace(content), shouldCache
+}
+
 // extractAnthropicSystemMessages 从消息列表中提取所有 system 消息，合并为单个字符串。
 func extractAnthropicSystemMessages(messages []Message) string {
 	var parts []string
@@ -575,6 +600,24 @@ func extractAnthropicSystemMessages(messages []Message) string {
 func convertMessageToAnthropic(msg *Message) anthropicMessage {
 	switch msg.Role {
 	case RoleUser:
+		// 检查 Content 是否包含缓存标记
+		cleanText, shouldCache := extractCacheControl(msg.Content)
+		if shouldCache || msg.Content != cleanText {
+			// 含缓存标记或文本被修改，使用 content block 格式
+			return anthropicMessage{
+				Role: "user",
+				Content: []anthropicContentBlock{{
+					Type:         "text",
+					Text:         cleanText,
+					CacheControl: func() *cacheControl {
+						if shouldCache {
+							return &cacheControl{Type: "ephemeral"}
+						}
+						return nil
+					}(),
+				}},
+			}
+		}
 		return anthropicMessage{
 			Role:    "user",
 			Content: msg.Content,
@@ -584,24 +627,36 @@ func convertMessageToAnthropic(msg *Message) anthropicMessage {
 
 		// 文本内容
 		if msg.Content != "" {
-			blocks = append(blocks, anthropicContentBlock{
+			cleanText, shouldCache := extractCacheControl(msg.Content)
+			block := anthropicContentBlock{
 				Type: "text",
-				Text: msg.Content,
-			})
+				Text: cleanText,
+			}
+			if shouldCache {
+				block.CacheControl = &cacheControl{Type: "ephemeral"}
+			}
+			blocks = append(blocks, block)
 		}
 
 		// 工具调用转换为 tool_use 块
-		for _, tc := range msg.ToolCalls {
+		for i, tc := range msg.ToolCalls {
 			var input map[string]any
 			if err := json.Unmarshal([]byte(tc.Arguments), &input); err != nil {
 				input = map[string]any{"_raw": tc.Arguments}
 			}
-			blocks = append(blocks, anthropicContentBlock{
+			block := anthropicContentBlock{
 				Type:  "tool_use",
 				ID:    sanitizeAnthropicID(tc.ID),
 				Name:  tc.Name,
 				Input: input,
-			})
+			}
+			// 最后一个 ToolCall 上可能有来自 prompt_cache.go 的 cache_control Extra
+			if i == len(msg.ToolCalls)-1 && tc.Extra != nil {
+				if _, ok := tc.Extra["cache_control"]; ok {
+					block.CacheControl = &cacheControl{Type: "ephemeral"}
+				}
+			}
+			blocks = append(blocks, block)
 		}
 
 		// 确保不为空（Anthropic 拒绝空 assistant 内容）
@@ -621,13 +676,18 @@ func convertMessageToAnthropic(msg *Message) anthropicMessage {
 		if content == "" {
 			content = "(no output)"
 		}
+		cleanContent, shouldCache := extractCacheControl(content)
+		block := anthropicContentBlock{
+			Type:      "tool_result",
+			ToolUseID: sanitizeAnthropicID(msg.ToolCallID),
+			Content:   cleanContent,
+		}
+		if shouldCache {
+			block.CacheControl = &cacheControl{Type: "ephemeral"}
+		}
 		return anthropicMessage{
-			Role: "user",
-			Content: []anthropicContentBlock{{
-				Type:        "tool_result",
-				ToolUseID:   sanitizeAnthropicID(msg.ToolCallID),
-				Content:     content,
-			}},
+			Role:    "user",
+			Content: []anthropicContentBlock{block},
 		}
 	default:
 		return anthropicMessage{
@@ -754,7 +814,7 @@ func sanitizeAnthropicID(id string) string {
 
 func init() {
 	RegisterTransport("anthropic_messages", &AnthropicTransport{baseURL: DefaultAnthropicBaseURL})
-	slog.Debug("Anthropic 传输层已注册", "apiMode", "anthropic_messages", "time", time.Now())
+	slog.Debug("Anthropic transport registered", "apiMode", "anthropic_messages", "time", time.Now())
 }
 
 // ── tool_result 相关 ──────────────────────────────────────────────────────

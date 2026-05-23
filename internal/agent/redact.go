@@ -183,17 +183,21 @@ func (h *RedactingHandler) Enabled(ctx context.Context, level slog.Level) bool {
 // Handle 对日志记录执行脱敏后委托给内部 handler。
 func (h *RedactingHandler) Handle(ctx context.Context, r slog.Record) error {
 	// 脱敏消息
-	r.Message = RedactSensitiveText(r.Message)
+	newMsg := RedactSensitiveText(r.Message)
 
-	// 脱敏属性
+	// 脱敏属性 — 构建新属性切片，因为 r.Attrs 按值传递
+	var attrs []slog.Attr
 	r.Attrs(func(a slog.Attr) bool {
 		if a.Value.Kind() == slog.KindString {
 			a.Value = slog.StringValue(RedactSensitiveText(a.Value.String()))
 		}
+		attrs = append(attrs, a)
 		return true
 	})
 
-	return h.inner.Handle(ctx, r)
+	newRecord := slog.NewRecord(r.Time, r.Level, newMsg, r.PC)
+	newRecord.AddAttrs(attrs...)
+	return h.inner.Handle(ctx, newRecord)
 }
 
 // WithAttrs 委托给内部 handler。

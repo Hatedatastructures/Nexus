@@ -77,19 +77,19 @@ func parseBucket(h http.Header, limitKey, remainingKey, resetKey string) RateLim
 	if v := getHeader(h, limitKey); v != "" {
 		// 检查 Sscanf 的解析结果，确保成功扫描了预期的字段数
 		if n, err := fmt.Sscanf(v, "%d", &bucket.Limit); err != nil || n != 1 {
-			slog.Debug("解析速率限制 limit 失败", "key", limitKey, "value", v, "error", err)
+			slog.Debug("parse rate limit limit failed", "key", limitKey, "value", v, "error", err)
 		}
 	}
 	if v := getHeader(h, remainingKey); v != "" {
 		// 检查 Sscanf 的解析结果，确保成功扫描了预期的字段数
 		if n, err := fmt.Sscanf(v, "%d", &bucket.Remaining); err != nil || n != 1 {
-			slog.Debug("解析速率限制 remaining 失败", "key", remainingKey, "value", v, "error", err)
+			slog.Debug("parse rate limit remaining failed", "key", remainingKey, "value", v, "error", err)
 		}
 	}
 	if v := getHeader(h, resetKey); v != "" {
 		// 检查 Sscanf 的解析结果，确保成功扫描了预期的字段数
 		if n, err := fmt.Sscanf(v, "%f", &bucket.ResetSecs); err != nil || n != 1 {
-			slog.Debug("解析速率限制 reset 失败", "key", resetKey, "value", v, "error", err)
+			slog.Debug("parse rate limit reset failed", "key", resetKey, "value", v, "error", err)
 		} else {
 			// 某些 API 返回的是 Unix 时间戳而非秒数差
 			if bucket.ResetSecs > 1e10 {

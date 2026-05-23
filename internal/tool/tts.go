@@ -122,24 +122,24 @@ func (t *TTSTool) Execute(ctx context.Context, args map[string]any) (string, err
 
 	// 安全敏感路径检查
 	if isPathSensitive(outputPath) {
-		slog.Warn("TTS 保存被阻止 (敏感路径)", "path", outputPath)
+		slog.Warn("TTS save blocked (sensitive path)", "path", outputPath)
 		return ToolError(fmt.Sprintf("安全限制: 不允许写入敏感路径 %s", outputPath)), nil
 	}
 
 	// 调用 TTS API
 	audioData, err := t.convertToSpeech(ctx, model, text, voice, language, speed)
 	if err != nil {
-		slog.Error("TTS 转换失败", "err", err)
+		slog.Error("TTS conversion failed", "err", err)
 		return ToolError(fmt.Sprintf("语音转换失败: %v", err)), nil
 	}
 
 	// 保存音频文件
 	if err := t.saveAudio(outputPath, audioData); err != nil {
-		slog.Error("保存音频失败", "path", outputPath, "err", err)
+		slog.Error("failed to save audio", "path", outputPath, "err", err)
 		return ToolError(fmt.Sprintf("保存音频失败: %v", err)), nil
 	}
 
-	slog.Info("文本转语音成功", "output", outputPath, "size", len(audioData))
+	slog.Info("text-to-speech succeeded", "output", outputPath, "size", len(audioData))
 	return ToolResult(map[string]any{
 		"output":     fmt.Sprintf("语音生成成功，已保存到: %s (%s)", outputPath, formatFileSize(len(audioData))),
 		"path":       outputPath,

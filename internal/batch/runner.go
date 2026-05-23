@@ -82,7 +82,7 @@ func (br *BatchRunner) Run(ctx context.Context, prompts []Prompt) (*BatchResult,
 	// 内容级恢复: 加载已有结果
 	existingResults, err := br.loadExistingResults()
 	if err != nil {
-		slog.Warn("加载已有结果失败", "err", err)
+		slog.Warn("failed to load existing results", "err", err)
 		existingResults = make(map[string]bool)
 	}
 
@@ -101,7 +101,7 @@ func (br *BatchRunner) Run(ctx context.Context, prompts []Prompt) (*BatchResult,
 		Skipped: len(prompts) - len(pending),
 	}
 
-	slog.Info("批处理开始",
+	slog.Info("batch started",
 		"total", result.Total,
 		"pending", len(pending),
 		"skipped", result.Skipped,
@@ -130,7 +130,7 @@ func (br *BatchRunner) Run(ctx context.Context, prompts []Prompt) (*BatchResult,
 				default:
 				}
 
-				slog.Debug("worker 处理 prompt", "worker", id, "text", truncateStr(prompt.Text, 50))
+				slog.Debug("worker processing prompt", "worker", id, "text", truncateStr(prompt.Text, 50))
 				traj, err := br.workerFn(ctx, prompt)
 				if err != nil {
 					traj = Trajectory{
@@ -195,7 +195,7 @@ func (br *BatchRunner) Run(ctx context.Context, prompts []Prompt) (*BatchResult,
 	result.Duration = time.Since(startTime)
 	result.OutputFile = outputPath
 
-	slog.Info("批处理完成",
+	slog.Info("batch completed",
 		"completed", result.Completed,
 		"failed", result.Failed,
 		"skipped", result.Skipped,

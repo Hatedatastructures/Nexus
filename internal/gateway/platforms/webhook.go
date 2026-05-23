@@ -5,6 +5,7 @@ package platforms
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -99,12 +100,12 @@ func (a *WebhookAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, err
 	// 启动服务器
 	go func() {
 		if err := a.server.ListenAndServe(); err != http.ErrServerClosed {
-			slog.Error("[Webhook] 服务器错误", "err", err)
+			slog.Error("[Webhook] server error", "err", err)
 		}
 	}()
 
 	a.connected = true
-	slog.Info("[Webhook] 服务器已启动", "port", a.port, "path", a.path)
+	slog.Info("[Webhook] server started", "port", a.port, "path", a.path)
 
 	return msgCh, nil
 }
@@ -119,12 +120,12 @@ func (a *WebhookAdapter) Disconnect(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		if err := a.server.Shutdown(shutdownCtx); err != nil {
-			slog.Warn("[Webhook] 服务器关闭失败", "err", err)
+			slog.Warn("[Webhook] server shutdown failed", "err", err)
 		}
 	}
 
 	a.connected = false
-	slog.Info("[Webhook] 服务器已关闭")
+	slog.Info("[Webhook] server stopped")
 	return nil
 }
 
@@ -142,7 +143,8 @@ func (a *WebhookAdapter) handleWebhook(msgCh chan *MessageEvent) http.HandlerFun
 		// 验证 secret
 		if a.secret != "" {
 			authHeader := r.Header.Get("Authorization")
-			if authHeader != "Bearer "+a.secret && authHeader != a.secret {
+			if subtle.ConstantTimeCompare([]byte(authHeader), []byte("Bearer "+a.secret)) != 1 &&
+				subtle.ConstantTimeCompare([]byte(authHeader), []byte(a.secret)) != 1 {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}

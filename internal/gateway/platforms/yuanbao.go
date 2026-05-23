@@ -182,7 +182,7 @@ func (a *YuanbaoAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, err
 	// 启动心跳循环
 	go a.heartbeatLoop()
 
-	slog.Info("[Yuanbao] 已连接", "bot_id", a.botID)
+	slog.Info("[Yuanbao] connected", "bot_id", a.botID)
 	return msgCh, nil
 }
 
@@ -198,7 +198,7 @@ func (a *YuanbaoAdapter) Disconnect(ctx context.Context) error {
 		a.conn = nil
 	}
 
-	slog.Info("[Yuanbao] 已断开")
+	slog.Info("[Yuanbao] disconnected")
 	return nil
 }
 
@@ -300,13 +300,13 @@ func (a *YuanbaoAdapter) listenLoop(msgCh chan *MessageEvent) {
 			cancel()
 
 			if err != nil {
-				slog.Warn("[Yuanbao] 获取 token 失败", "err", err)
+				slog.Warn("[Yuanbao] failed to get token", "err", err)
 				continue
 			}
 
 			newConn, err := a.openConnection(context.Background(), token)
 			if err != nil {
-				slog.Warn("[Yuanbao] 重连失败", "err", err)
+				slog.Warn("[Yuanbao] reconnect failed", "err", err)
 				continue
 			}
 
@@ -315,13 +315,13 @@ func (a *YuanbaoAdapter) listenLoop(msgCh chan *MessageEvent) {
 			a.connected = true
 			a.mu.Unlock()
 
-			slog.Info("[Yuanbao] 已重连")
+			slog.Info("[Yuanbao] reconnected")
 			continue
 		}
 
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			slog.Warn("[Yuanbao] 读取消息失败", "err", err)
+			slog.Warn("[Yuanbao] failed to read message", "err", err)
 			a.mu.Lock()
 			a.connected = false
 			if a.conn != nil {
@@ -450,7 +450,7 @@ func (a *YuanbaoAdapter) heartbeatLoop() {
 			}
 
 			if err := conn.WriteJSON(pingReq); err != nil {
-				slog.Debug("[Yuanbao] 心跳发送失败", "err", err)
+				slog.Debug("[Yuanbao] heartbeat send failed", "err", err)
 			}
 		}
 	}
@@ -666,7 +666,7 @@ func (a *YuanbaoAdapter) callAPI(ctx context.Context, endpoint string, body map[
 func (a *YuanbaoAdapter) Name() string { return "Yuanbao" }
 
 // PlatformType 返回平台类型。
-func (a *YuanbaoAdapter) PlatformType() Platform { return PlatformWeChat }
+func (a *YuanbaoAdapter) PlatformType() Platform { return PlatformYuanbao }
 
 // EditMessage 编辑消息（元宝不支持）。
 func (a *YuanbaoAdapter) EditMessage(ctx context.Context, chatID string, messageID string, content string) (*SendResult, error) {

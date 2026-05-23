@@ -38,7 +38,7 @@ func NewOAuthManager(config *OAuthConfig, storePath string) (*OAuthManager, erro
 
 	// 尝试从磁盘加载已缓存的令牌
 	if err := mgr.loadFromDisk(); err != nil {
-		slog.Debug("从磁盘加载令牌失败（首次使用或令牌已删除）", "err", err)
+		slog.Debug("failed to load token from disk (first use or token deleted)", "err", err)
 	}
 
 	return mgr, nil
@@ -56,9 +56,9 @@ func (m *OAuthManager) loadFromDisk() error {
 	m.mu.Unlock()
 
 	if token.IsExpired() {
-		slog.Info("已加载的 OAuth 令牌已过期，将尝试刷新")
+		slog.Info("loaded OAuth token is expired, will attempt refresh")
 	} else {
-		slog.Debug("已从磁盘加载有效的 OAuth 令牌",
+		slog.Debug("loaded valid OAuth token from disk",
 			"expires_at", token.ExpiresAt,
 		)
 	}
@@ -83,7 +83,7 @@ func (m *OAuthManager) GetValidToken() (string, error) {
 	// 检查令牌是否过期（含 30 秒缓冲）
 	if m.isTokenExpiringSoon(token) {
 		// 需要刷新
-		slog.Info("OAuth 令牌即将过期，自动刷新中...")
+		slog.Info("OAuth token expiring soon, auto-refreshing...")
 
 		if token.RefreshToken == "" {
 			return "", fmt.Errorf("令牌已过期且没有刷新令牌，请重新授权")
@@ -124,11 +124,11 @@ func (m *OAuthManager) refreshToken() (*OAuthToken, error) {
 		return nil, fmt.Errorf("没有可用的刷新令牌")
 	}
 
-	slog.Info("正在刷新 OAuth 访问令牌...")
+	slog.Info("refreshing OAuth access token...")
 
 	newToken, err := RefreshToken(m.cfg, currentToken.RefreshToken)
 	if err != nil {
-		slog.Error("OAuth 令牌刷新失败", "err", err)
+		slog.Error("OAuth token refresh failed", "err", err)
 		return nil, err
 	}
 
@@ -144,10 +144,10 @@ func (m *OAuthManager) refreshToken() (*OAuthToken, error) {
 
 	// 持久化到磁盘
 	if err := m.store.SaveToken(newToken); err != nil {
-		slog.Warn("持久化刷新后的令牌失败", "err", err)
+		slog.Warn("failed to persist refreshed token", "err", err)
 	}
 
-	slog.Info("OAuth 令牌刷新成功",
+	slog.Info("OAuth token refreshed successfully",
 		"expires_at", newToken.ExpiresAt,
 	)
 
@@ -174,7 +174,7 @@ func (m *OAuthManager) SetToken(token *OAuthToken) error {
 		return fmt.Errorf("保存令牌失败: %w", err)
 	}
 
-	slog.Info("OAuth 令牌已设置并持久化",
+	slog.Info("OAuth token set and persisted",
 		"expires_at", token.ExpiresAt,
 	)
 	return nil
@@ -187,10 +187,10 @@ func (m *OAuthManager) ClearToken() error {
 	m.mu.Unlock()
 
 	if err := m.store.DeleteToken(); err != nil {
-		slog.Warn("删除磁盘令牌失败", "err", err)
+		slog.Warn("failed to delete disk token", "err", err)
 	}
 
-	slog.Info("OAuth 令牌已清除")
+	slog.Info("OAuth token cleared")
 	return nil
 }
 

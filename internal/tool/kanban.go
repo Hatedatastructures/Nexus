@@ -982,7 +982,7 @@ func getKanbanStringFromArgs(args map[string]any, key string) string {
 // ───────────────────────────── init 注册 ─────────────────────────────
 
 func init() {
-	slog.Debug("注册看板工具")
+	slog.Debug("registering kanban tool")
 	GetRegistry().Register(&KanbanListTool{})
 	GetRegistry().Register(&KanbanShowTool{})
 	GetRegistry().Register(&KanbanCreateTool{})

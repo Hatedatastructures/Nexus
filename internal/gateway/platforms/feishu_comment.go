@@ -21,6 +21,7 @@ import (
 const (
 	feishuCommentRequestTimeout = 15 * time.Second
 	feishuCommentMaxMessageLen  = 4000
+	feishuCommentMaxBodySize    = 1 << 20 // 1MB
 )
 
 // ───────────────────────────── FeishuCommentAdapter ─────────────────────────────
@@ -92,13 +93,13 @@ func (a *FeishuCommentAdapter) Connect(ctx context.Context) (<-chan *MessageEven
 		return nil, fmt.Errorf("获取 access_token 失败: %w", err)
 	}
 
-	slog.Info("[Feishu Comment] 已连接", "app_id", a.appID)
+	slog.Info("[Feishu Comment] connected", "app_id", a.appID)
 	return a.msgCh, nil
 }
 
 func (a *FeishuCommentAdapter) Disconnect(ctx context.Context) error {
 	a.running = false
-	slog.Info("[Feishu Comment] 已断开")
+	slog.Info("[Feishu Comment] disconnected")
 	return nil
 }
 
@@ -156,7 +157,7 @@ func (a *FeishuCommentAdapter) SendDocument(ctx context.Context, chatID string, 
 
 // HandleEvent 处理飞书事件回调。
 func (a *FeishuCommentAdapter) HandleEvent(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, feishuCommentMaxBodySize))
 	if err != nil {
 		http.Error(w, "读取请求失败", http.StatusBadRequest)
 		return
@@ -299,5 +300,9 @@ func (a *FeishuCommentAdapter) replyComment(ctx context.Context, fileToken, comm
 }
 
 func init() {
-	// Feishu Comment 适配器需要手动注册
+	GetRegistry().Register(&AdapterEntry{
+		Platform: PlatformFeishu,
+		Name:     "Feishu Comment",
+		Factory:  func() PlatformAdapter { return &FeishuCommentAdapter{} },
+	})
 }

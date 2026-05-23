@@ -3,6 +3,8 @@
 package gateway
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"sync"
 	"time"
 
@@ -55,7 +57,7 @@ func (m *SessionManager) GetOrCreate(source *platforms.SessionSource) *Session {
 	session := &Session{
 		Key:        key,
 		Source:     source,
-		AgentID:    newSessionID(now),
+		AgentID:    newSessionID(),
 		CreatedAt:  now,
 		LastActive: now,
 		ResetCount: 0,
@@ -84,7 +86,7 @@ func (m *SessionManager) Reset(key string) *Session {
 	session := &Session{
 		Key:        key,
 		Source:     nil, // 由调用方设置
-		AgentID:    newSessionID(now),
+		AgentID:    newSessionID(),
 		CreatedAt:  now,
 		LastActive: now,
 		ResetCount: 0,
@@ -138,21 +140,10 @@ func (m *SessionManager) Size() int {
 
 // ───────────────────────────── 内部辅助 ─────────────────────────────
 
-// newSessionID 基于时间戳生成简单的会话 ID。
-// 格式: "sess_" + 纳秒时间戳的十六进制表示。
-func newSessionID(t time.Time) string {
-	// 使用纳秒时间戳和秒数组合生成唯一 ID
-	const hexDigits = "0123456789abcdef"
-	n := t.UnixNano()
-	buf := make([]byte, 20)
-	buf[0] = 's'
-	buf[1] = 'e'
-	buf[2] = 's'
-	buf[3] = 's'
-	buf[4] = '_'
-	for i := 19; i >= 5; i-- {
-		buf[i] = hexDigits[n&0xf]
-		n >>= 4
-	}
-	return string(buf)
+// newSessionID 使用 crypto/rand 生成安全的会话 ID。
+// 格式: "sess_" + 16 字节随机数据的十六进制表示。
+func newSessionID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return "sess_" + hex.EncodeToString(b)
 }

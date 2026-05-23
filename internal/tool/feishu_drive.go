@@ -511,7 +511,7 @@ func (t *FeishuDriveReplyCommentTool) Execute(ctx context.Context, args map[stri
 		return ToolError(fmt.Sprintf("飞书 API 错误: code=%d msg=%s", apiResp.Code, apiResp.Msg)), nil
 	}
 
-	slog.Info("飞书评论回复成功", "file_token", fileToken, "comment_id", commentID)
+	slog.Info("feishu comment reply succeeded", "file_token", fileToken, "comment_id", commentID)
 	return ToolResult(map[string]any{
 		"success": true,
 		"data":    apiResp.Data,
@@ -613,7 +613,7 @@ func (t *FeishuDriveAddCommentTool) Execute(ctx context.Context, args map[string
 		return ToolError(fmt.Sprintf("飞书 API 错误: code=%d msg=%s", apiResp.Code, apiResp.Msg)), nil
 	}
 
-	slog.Info("飞书评论添加成功", "file_token", fileToken)
+	slog.Info("feishu comment added successfully", "file_token", fileToken)
 	return ToolResult(map[string]any{
 		"success": true,
 		"data":    apiResp.Data,

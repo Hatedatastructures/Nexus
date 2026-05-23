@@ -60,14 +60,14 @@ func (r *AdapterRegistry) Register(entry *AdapterEntry) {
 	defer r.mu.Unlock()
 
 	if _, exists := r.entries[entry.Platform]; exists {
-		slog.Warn("平台类型冲突，覆盖注册",
+		slog.Warn("platform type conflict, overwriting registration",
 			"platform", string(entry.Platform),
 			"name", entry.Name,
 		)
 	}
 
 	r.entries[entry.Platform] = entry
-	slog.Debug("平台适配器已注册",
+	slog.Debug("platform adapter registered",
 		"platform", string(entry.Platform),
 		"name", entry.Name,
 	)
@@ -109,7 +109,7 @@ func (r *AdapterRegistry) CreateAll() []PlatformAdapter {
 		if adapter != nil {
 			adapters = append(adapters, adapter)
 		} else {
-			slog.Warn("平台适配器工厂返回 nil，跳过",
+			slog.Warn("platform adapter factory returned nil, skipping",
 				"platform", string(entry.Platform),
 				"name", entry.Name,
 			)
@@ -164,7 +164,7 @@ func DiscoverAdapters() {
 		}
 	}
 
-	slog.Info("内置平台适配器发现完成",
+	slog.Info("built-in platform adapter discovery complete",
 		"count", len(platforms),
 		"platforms", names,
 	)

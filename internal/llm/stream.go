@@ -129,7 +129,7 @@ func ParseSSEStream(ctx context.Context, body io.ReadCloser) <-chan *SSEEvent {
 
 		// 扫描错误
 		if err := scanner.Err(); err != nil && err != io.EOF {
-			slog.Error("SSE 流读取错误", "error", err)
+			slog.Error("SSE stream read error", "error", err)
 		}
 	}()
 

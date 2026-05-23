@@ -2,7 +2,6 @@
 package llm
 
 import (
-	"fmt"
 	"sync"
 )
 
@@ -35,16 +34,6 @@ func (r *TransportRegistry) Get(apiMode string) (Transport, bool) {
 	defer r.mu.RUnlock()
 	t, ok := r.transports[apiMode]
 	return t, ok
-}
-
-// MustGet 根据 apiMode 获取已注册的 Transport 实现。
-// 如果未注册则 panic。
-func (r *TransportRegistry) MustGet(apiMode string) Transport {
-	t, ok := r.Get(apiMode)
-	if !ok {
-		panic(fmt.Sprintf("llm: 未注册的 API 模式: %s", apiMode))
-	}
-	return t
 }
 
 // List 返回所有已注册的 API 模式名称。

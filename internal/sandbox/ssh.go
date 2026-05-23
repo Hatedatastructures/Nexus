@@ -114,7 +114,7 @@ func (e *SSHEnvironment) Execute(ctx context.Context, command string, opts *Exec
 		result.CWD = e.cwd
 	}
 
-	slog.Debug("SSH 命令执行完成",
+	slog.Debug("SSH command execution completed",
 		"host", e.host,
 		"exitCode", result.ExitCode,
 		"duration", duration.String(),
@@ -146,7 +146,7 @@ func (e *SSHEnvironment) ExecuteBackground(ctx context.Context, command string, 
 		process: cmd.Process,
 	}
 
-	slog.Info("SSH 后台进程已启动", "host", e.host)
+	slog.Info("SSH background process started", "host", e.host)
 	return handle, nil
 }
 

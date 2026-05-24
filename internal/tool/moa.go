@@ -54,8 +54,9 @@ const moaAggregatorSystemPrompt = `你是一个响应聚合器。你的任务是
 
 // MoATool MoA 混合代理工具。
 type MoATool struct {
-	llmProvider LLMProvider
+	llmProvider   LLMProvider
 	openRouterKey string
+	initOnce      sync.Once
 }
 
 // MoAToolResult MoA 工具结果。
@@ -109,7 +110,7 @@ func (p *OpenRouterProvider) Call(ctx context.Context, model string, systemPromp
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return "", err
 	}
@@ -201,11 +202,13 @@ func (t *MoATool) Execute(ctx context.Context, args map[string]any) (string, err
 	}
 
 	// 初始化 LLM 提供者
-	if t.llmProvider == nil {
-		if t.openRouterKey == "" {
-			return "", fmt.Errorf("OPENROUTER_API_KEY 未配置")
+	t.initOnce.Do(func() {
+		if t.llmProvider == nil && t.openRouterKey != "" {
+			t.llmProvider = &OpenRouterProvider{apiKey: t.openRouterKey}
 		}
-		t.llmProvider = &OpenRouterProvider{apiKey: t.openRouterKey}
+	})
+	if t.llmProvider == nil {
+		return "", fmt.Errorf("OPENROUTER_API_KEY 未配置")
 	}
 
 	// Layer 1: 并行调用参考模型
@@ -270,7 +273,11 @@ func (t *MoATool) callWithRetry(ctx context.Context, model, systemPrompt, userPr
 		slog.Debug("[MoA] model call failed, retrying", "model", model, "attempt", i+1, "err", err)
 
 		if i < len(backoff) {
-			time.Sleep(backoff[i])
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(backoff[i]):
+			}
 		}
 	}
 

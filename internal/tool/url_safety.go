@@ -48,7 +48,8 @@ func SetURLSafetyConfig(checker *URLSafetyChecker) {
 // 供 web/browser 等工具在执行 HTTP 请求前调用。
 func CheckURLSafety(rawURL string) (bool, string) {
 	if globalURLSafety == nil {
-		return true, "URL 安全检查器未初始化，跳过检查"
+		slog.Warn("[URL Safety] 检查器未初始化，拒绝所有 URL")
+		return false, "URL 安全检查器未初始化"
 	}
 	return globalURLSafety.IsSafeURL(rawURL)
 }

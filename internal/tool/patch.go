@@ -12,6 +12,23 @@ import (
 	"nexus-agent/internal/sandbox"
 )
 
+// ───────────────────────────── 路径验证 ─────────────────────────────
+
+// validatePatchPath 验证补丁操作中的路径安全性。
+// 拒绝包含 ".." 的路径和绝对路径。
+func validatePatchPath(path string) error {
+	if path == "" {
+		return fmt.Errorf("路径不能为空")
+	}
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("路径不允许包含 \"..\": %s", path)
+	}
+	if filepath.IsAbs(path) {
+		return fmt.Errorf("不允许使用绝对路径: %s", path)
+	}
+	return nil
+}
+
 // ───────────────────────────── 数据结构 ─────────────────────────────
 
 // OperationType 补丁操作类型
@@ -126,6 +143,15 @@ func parseSinglePatch(content string) (PatchOperation, error) {
 // env 非 nil 时通过沙箱执行，否则直接操作本地文件系统。
 func ApplyOperations(ops []PatchOperation, env sandbox.Environment) error {
 	for _, op := range ops {
+		// 验证路径安全性
+		if err := validatePatchPath(op.FilePath); err != nil {
+			return fmt.Errorf("路径验证失败: %w", err)
+		}
+		if op.Type == OpMove {
+			if err := validatePatchPath(op.TargetPath); err != nil {
+				return fmt.Errorf("目标路径验证失败: %w", err)
+			}
+		}
 		if err := applyOperation(op, env); err != nil {
 			return fmt.Errorf("应用操作 %s %s 失败: %w", op.Type, op.FilePath, err)
 		}

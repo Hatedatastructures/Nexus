@@ -86,7 +86,7 @@ func NewBrowserbaseSession(ctx context.Context, cfg BrowserbaseConfig) (*Browser
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("读取 Browserbase 响应失败: %w", err)
 	}
@@ -151,7 +151,7 @@ func (s *BrowserbaseSession) Close(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 		return fmt.Errorf("Browserbase 关闭会话失败 (HTTP %d): %s",
 			resp.StatusCode, string(body))
 	}

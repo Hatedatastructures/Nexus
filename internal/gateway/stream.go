@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,6 +39,7 @@ type StreamConsumer struct {
 	done         chan struct{}              // 完成信号
 	runDone      chan struct{}              // Run goroutine 退出信号
 	finished     atomic.Bool               // 是否已完成
+	closeOnce    sync.Once                 // 确保 Finish 只关闭一次
 }
 
 // NewStreamConsumer 创建流式消费者。
@@ -143,8 +145,10 @@ func (s *StreamConsumer) Run(ctx context.Context) {
 // Finish 发送最终内容。
 // 关闭增量通道，发送完整的累积文本，返回最终消息 ID。
 func (s *StreamConsumer) Finish(ctx context.Context) string {
-	s.finished.Store(true)
-	close(s.done)
+	s.closeOnce.Do(func() {
+		s.finished.Store(true)
+		close(s.done)
+	})
 
 	// 等待 Run goroutine 退出后再读取共享状态 (buffer, currentMsgID)
 	select {

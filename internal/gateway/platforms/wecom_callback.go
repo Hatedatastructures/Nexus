@@ -250,6 +250,20 @@ func (a *WeComCallbackAdapter) handleMessage(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// 验证 POST 回调签名 — 必须提供签名参数
+	msgSignature := r.URL.Query().Get("msg_signature")
+	timestamp := r.URL.Query().Get("timestamp")
+	nonce := r.URL.Query().Get("nonce")
+	if msgSignature == "" || timestamp == "" || nonce == "" {
+		http.Error(w, "缺少签名参数", http.StatusBadRequest)
+		return
+	}
+	expected := a.generateSignature(timestamp, nonce, string(body))
+	if subtle.ConstantTimeCompare([]byte(msgSignature), []byte(expected)) != 1 {
+		http.Error(w, "签名验证失败", http.StatusForbidden)
+		return
+	}
+
 	var msg WeComXMLMessage
 	if err := xml.Unmarshal(body, &msg); err != nil {
 		http.Error(w, "解析 XML 失败", http.StatusBadRequest)
@@ -276,7 +290,11 @@ func (a *WeComCallbackAdapter) handleMessage(w http.ResponseWriter, r *http.Requ
 		},
 	}
 
-	a.msgCh <- msgEvent
+	select {
+		case a.msgCh <- msgEvent:
+		default:
+			slog.Warn("[WeComCallback] message channel full, dropping message")
+		}
 
 	// 返回空响应（使用主动发送 API 回复）
 	w.Header().Set("Content-Type", "text/xml")

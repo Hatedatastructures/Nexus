@@ -39,6 +39,7 @@ type ModelsDevClient struct {
 	cacheTime time.Time                // 缓存写入时间
 	cacheTTL  time.Duration            // 缓存过期时间
 	mu        sync.RWMutex             // 保护 cache 的读写锁
+	refreshMu sync.Mutex               // 防止并发刷新
 	http      *http.Client             // HTTP 客户端
 }
 
@@ -72,6 +73,10 @@ func (c *ModelsDevClient) GetModel(modelID string) *ModelDevInfo {
 
 	// 缓存未命中，尝试刷新（异步，不阻塞调用者）
 	go func() {
+		if !c.refreshMu.TryLock() {
+			return // another refresh already in progress
+		}
+		defer c.refreshMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := c.Refresh(ctx); err != nil {

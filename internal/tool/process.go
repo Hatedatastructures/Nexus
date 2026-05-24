@@ -13,11 +13,26 @@ import (
 
 // ManagedProcess 表示一个被管理的后台进程。
 type ManagedProcess struct {
-	PID     int    `json:"pid"`
-	Name    string `json:"name"`
-	Command string `json:"command"`
-	Status  string `json:"status"` // running, stopped, error
-	Started int64  `json:"started"`
+	mu     sync.Mutex `json:"-"`
+	PID    int        `json:"pid"`
+	Name   string     `json:"name"`
+	Command string    `json:"command"`
+	Status string     `json:"status"` // running, stopped, error
+	Started int64     `json:"started"`
+}
+
+// SetStatus 安全更新进程状态。
+func (p *ManagedProcess) SetStatus(status string) {
+	p.mu.Lock()
+	p.Status = status
+	p.mu.Unlock()
+}
+
+// GetStatus 安全读取进程状态。
+func (p *ManagedProcess) GetStatus() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.Status
 }
 
 var (
@@ -143,11 +158,11 @@ func (t *ProcessTool) processStatus(pid int) (string, error) {
 	}
 
 	// 检查进程是否仍在运行
+	status := "stopped"
 	if isProcessRunning(pid) {
-		proc.Status = "running"
-	} else {
-		proc.Status = "stopped"
+		status = "running"
 	}
+	proc.SetStatus(status)
 
 	return ToolResult(map[string]any{
 		"success": true,
@@ -172,7 +187,7 @@ func (t *ProcessTool) killProcess(pid int) (string, error) {
 	}
 
 	// 更新状态
-	proc.Status = "stopped"
+	proc.SetStatus("stopped")
 	UnregisterProcess(pid)
 
 	return ToolResult(map[string]any{

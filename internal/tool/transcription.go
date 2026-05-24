@@ -212,7 +212,7 @@ func (t *TranscriptionTool) transcribe(ctx context.Context, model, audioPath, la
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return "", fmt.Errorf("读取响应失败: %w", err)
 	}

@@ -369,7 +369,7 @@ func (t *TypeTextTool) Execute(_ context.Context, args map[string]any) (string, 
 		esc := strings.ReplaceAll(strings.ReplaceAll(text, `\`, `\\`), `"`, `\"`)
 		_, err = cuRun("osascript", "-e", fmt.Sprintf(`tell application "System Events" to keystroke "%s"`, esc))
 	case "linux":
-		_, err = cuRun("xdotool", "type", "--clearmodifiers", text)
+		_, err = cuRun("xdotool", "type", "--clearmodifiers", cuEsc(text))
 	default:
 		return ToolError(fmt.Sprintf("不支持的操作系统: %s", cuOS())), nil
 	}

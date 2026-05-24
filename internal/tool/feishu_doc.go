@@ -94,7 +94,7 @@ func (c *DefaultFeishuClient) GetTenantAccessToken(ctx context.Context) (string,
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return "", err
 	}

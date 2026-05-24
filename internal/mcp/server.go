@@ -115,7 +115,7 @@ func (s *MCPServer) HandleRequest(ctx context.Context, req *JSONRPCRequest) *JSO
 
 // handleInitialize 处理 initialize 请求。
 func (s *MCPServer) handleInitialize(_ context.Context, params map[string]any) map[string]any {
-	s.initialized = true
+	s.initialized.Store(true)
 
 	slog.Info("MCP initialize request",
 		"client_info", params,
@@ -135,7 +135,7 @@ func (s *MCPServer) handleInitialize(_ context.Context, params map[string]any) m
 
 // handleToolsList 返回已注册的工具列表。
 func (s *MCPServer) handleToolsList(_ context.Context, _ map[string]any) (map[string]any, error) {
-	if !s.initialized {
+	if !s.initialized.Load() {
 		return nil, fmt.Errorf("服务器未初始化")
 	}
 
@@ -153,7 +153,7 @@ func (s *MCPServer) handleToolsList(_ context.Context, _ map[string]any) (map[st
 
 // handleToolCall 执行指定的工具。
 func (s *MCPServer) handleToolCall(ctx context.Context, params map[string]any) (map[string]any, error) {
-	if !s.initialized {
+	if !s.initialized.Load() {
 		return nil, fmt.Errorf("服务器未初始化")
 	}
 

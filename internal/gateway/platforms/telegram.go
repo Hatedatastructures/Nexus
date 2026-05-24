@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"sync"
 	"time"
@@ -232,10 +233,11 @@ func (t *TelegramAdapter) pollLoop(ctx context.Context) {
 			if retryDelay < 30*time.Second {
 				retryDelay = retryDelay * 2
 			}
+			jitter := time.Duration(rand.Int63n(500)) * time.Millisecond
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(retryDelay):
+			case <-time.After(retryDelay + jitter):
 			}
 			continue
 		}
@@ -374,7 +376,7 @@ func (t *TelegramAdapter) doRequest(ctx context.Context, method string, path str
 	}
 	defer resp.Body.Close()
 
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 }
 
 // parseSendResponse 解析发送/编辑响应。

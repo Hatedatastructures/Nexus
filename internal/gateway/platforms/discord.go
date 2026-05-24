@@ -35,6 +35,8 @@ type DiscordAdapter struct {
 	heartbeatInterval time.Duration // 心跳间隔
 	ws         *websocket.Conn  // 当前 WebSocket 连接
 	wsMu       sync.Mutex       // WebSocket 连接锁
+	stateMu    sync.RWMutex     // 网关状态锁 (保护 lastSeq, sessionID, heartbeatInterval)
+	closeOnce  sync.Once        // 确保 msgCh 只关闭一次
 }
 
 // NewDiscordAdapter 创建 Discord 适配器。
@@ -71,7 +73,9 @@ func (d *DiscordAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, err
 
 // Disconnect 关闭消息通道。
 func (d *DiscordAdapter) Disconnect(ctx context.Context) error {
-	close(d.msgCh)
+	d.closeOnce.Do(func() {
+		close(d.msgCh)
+	})
 	slog.Info("discord adapter disconnected")
 	return nil
 }
@@ -242,7 +246,9 @@ func (d *DiscordAdapter) gatewayEventLoop(ctx context.Context, conn *websocket.C
 
 		// 跟踪序列号
 		if event.S != nil {
+			d.stateMu.Lock()
 			d.lastSeq = *event.S
+			d.stateMu.Unlock()
 		}
 
 		switch event.Op {
@@ -254,11 +260,16 @@ func (d *DiscordAdapter) gatewayEventLoop(ctx context.Context, conn *websocket.C
 				slog.Warn("discord hello parse error", "err", err)
 				continue
 			}
+			d.stateMu.Lock()
 			d.heartbeatInterval = time.Duration(hello.HeartbeatInterval) * time.Millisecond
+			d.stateMu.Unlock()
 			slog.Debug("discord gateway hello received", "interval", d.heartbeatInterval)
 
 			// 发送 Identify 或 Resume
-			if d.sessionID != "" {
+			d.stateMu.RLock()
+				sid := d.sessionID
+				d.stateMu.RUnlock()
+				if sid != "" {
 				d.sendResume(conn)
 			} else {
 				d.sendIdentify(conn)
@@ -281,7 +292,9 @@ func (d *DiscordAdapter) gatewayEventLoop(ctx context.Context, conn *websocket.C
 					} `json:"user"`
 				}
 				if err := json.Unmarshal(event.D, &ready); err == nil {
+					d.stateMu.Lock()
 					d.sessionID = ready.SessionID
+					d.stateMu.Unlock()
 					slog.Info("discord gateway ready",
 						"bot_id", ready.User.ID,
 						"username", ready.User.Username,
@@ -301,14 +314,18 @@ func (d *DiscordAdapter) gatewayEventLoop(ctx context.Context, conn *websocket.C
 // heartbeatLoop 定期发送心跳。
 func (d *DiscordAdapter) heartbeatLoop(ctx context.Context, conn *websocket.Conn) {
 	// 初始延迟: 随机 0~heartbeatInterval
+	d.stateMu.RLock()
 	initialDelay := time.Duration(int64(d.heartbeatInterval) * int64(rand.Intn(1000)) / 1000)
+	d.stateMu.RUnlock()
 	select {
 	case <-ctx.Done():
 		return
 	case <-time.After(initialDelay):
 	}
 
+	d.stateMu.RLock()
 	ticker := time.NewTicker(d.heartbeatInterval)
+	d.stateMu.RUnlock()
 	defer ticker.Stop()
 
 	for {
@@ -323,9 +340,12 @@ func (d *DiscordAdapter) heartbeatLoop(ctx context.Context, conn *websocket.Conn
 			}
 			d.wsMu.Unlock()
 
+			d.stateMu.RLock()
+			seq := d.lastSeq
+			d.stateMu.RUnlock()
 			heartbeat := map[string]any{
 				"op": 1,
-				"d":  d.lastSeq,
+				"d":  seq,
 			}
 			data, _ := json.Marshal(heartbeat)
 			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
@@ -356,12 +376,16 @@ func (d *DiscordAdapter) sendIdentify(conn *websocket.Conn) {
 
 // sendResume 发送 Resume 消息。
 func (d *DiscordAdapter) sendResume(conn *websocket.Conn) {
+	d.stateMu.RLock()
+	sid := d.sessionID
+	seq := d.lastSeq
+	d.stateMu.RUnlock()
 	payload := map[string]any{
 		"op": 6,
 		"d": map[string]string{
 			"token":     d.token,
-			"session_id": d.sessionID,
-			"seq":       fmt.Sprintf("%d", d.lastSeq),
+			"session_id": sid,
+			"seq":       fmt.Sprintf("%d", seq),
 		},
 	}
 	data, _ := json.Marshal(payload)
@@ -421,7 +445,7 @@ func (d *DiscordAdapter) getGatewayURL() (string, error) {
 	}
 	defer resp.Body.Close()
 
-	raw, _ := io.ReadAll(resp.Body)
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	var result struct {
 		URL string `json:"url"`
 	}
@@ -532,7 +556,7 @@ func (d *DiscordAdapter) doAPI(ctx context.Context, method string, path string, 
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return &SendResult{Success: false, Error: err.Error()}, err
 	}

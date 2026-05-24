@@ -229,7 +229,11 @@ func (a *APIServerAdapter) handleChatCompletions(w http.ResponseWriter, r *http.
 		},
 	}
 
-	a.msgCh <- msgEvent
+	select {
+		case a.msgCh <- msgEvent:
+		default:
+			slog.Warn("[API] message channel full, dropping message")
+		}
 
 	// 等待响应
 	select {

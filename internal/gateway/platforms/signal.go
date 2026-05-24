@@ -44,9 +44,11 @@ type SignalAdapter struct {
 	conn      *websocket.Conn
 	running   bool
 	connected bool
+	msgCh     chan *MessageEvent
 
 	// 并发控制
 	mu          sync.Mutex
+	closeOnce   sync.Once
 	dedup       *signalDeduplicator
 	sentTimestamps map[int64]bool
 
@@ -132,6 +134,7 @@ func (a *SignalAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, erro
 
 	// 创建消息通道
 	msgCh := make(chan *MessageEvent, 100)
+	a.msgCh = msgCh
 
 	// 启动 SSE 监听
 	go a.sseListener(ctx, msgCh)
@@ -147,6 +150,8 @@ func (a *SignalAdapter) Disconnect(ctx context.Context) error {
 	a.connected = false
 	a.mu.Unlock()
 
+	a.closeOnce.Do(func() { close(a.msgCh) })
+
 	slog.Info("[Signal] disconnected")
 	return nil
 }
@@ -161,7 +166,7 @@ func (a *SignalAdapter) sseListener(ctx context.Context, msgCh chan *MessageEven
 		a.mu.Unlock()
 
 		if !running {
-			close(msgCh)
+			a.closeOnce.Do(func() { close(a.msgCh) })
 			return
 		}
 
@@ -217,7 +222,11 @@ func (a *SignalAdapter) parseSSEStream(body io.ReadCloser, msgCh chan *MessageEv
 		// 处理信封
 		event := a.handleEnvelope(envelope)
 		if event != nil {
-			msgCh <- event
+			select {
+			case msgCh <- event:
+			default:
+				slog.Warn("[Signal] message channel full, dropping message")
+			}
 		}
 	}
 }

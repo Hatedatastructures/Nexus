@@ -319,7 +319,13 @@ if err := a.persister.RecordPromptHistory(userMessage); err != nil {
 					)
 				}
 			}()
-			a.memoryManager.SystemPromptBlock()
+			memCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			select {
+			case <-memCtx.Done():
+			default:
+				a.memoryManager.SystemPromptBlock()
+			}
 		}()
 	}
 
@@ -638,8 +644,11 @@ func (a *AIAgent) handleStreamCall(ctx context.Context, req *llm.ChatRequest) (*
 
 		if delta.Content != "" {
 			contentBuilder.WriteString(delta.Content)
-			if a.streamCallback != nil {
-				a.streamCallback(delta.Content)
+			a.mu.Lock()
+			streamCb := a.streamCallback
+			a.mu.Unlock()
+			if streamCb != nil {
+				streamCb(delta.Content)
 			}
 		}
 
@@ -696,7 +705,9 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 func (a *AIAgent) executeParallel(ctx context.Context, calls []toolCall) []toolResult {
 	results := make([]toolResult, len(calls))
 	var wg sync.WaitGroup
+	a.mu.Lock()
 	toolCb := a.toolCallback
+	a.mu.Unlock()
 
 	for i, pc := range calls {
 		wg.Add(1)
@@ -766,8 +777,11 @@ func (a *AIAgent) executeSequential(ctx context.Context, calls []toolCall) []too
 					Result: result,
 					Error:  fmt.Errorf("审批未通过: %s", reason),
 				}
-				if a.toolCallback != nil {
-					a.toolCallback(pc.call.Name, pc.args)
+				a.mu.Lock()
+				toolCb := a.toolCallback
+				a.mu.Unlock()
+				if toolCb != nil {
+					toolCb(pc.call.Name, pc.args)
 				}
 				continue
 			}
@@ -796,8 +810,11 @@ func (a *AIAgent) executeSequential(ctx context.Context, calls []toolCall) []too
 				Error:  err,
 			}
 	
-			if a.toolCallback != nil {
-				a.toolCallback(pc.call.Name, pc.args)
+			a.mu.Lock()
+			toolCb2 := a.toolCallback
+			a.mu.Unlock()
+			if toolCb2 != nil {
+				toolCb2(pc.call.Name, pc.args)
 			}
 		}()
 	}

@@ -300,7 +300,11 @@ func (a *MattermostAdapter) dispatchPayload(payload map[string]any, msgCh chan *
 		// 解析消息
 		event := a.parsePost(post, data)
 		if event != nil {
-			msgCh <- event
+			select {
+			case msgCh <- event:
+			default:
+				slog.Warn("[Mattermost] message channel full, dropping message")
+			}
 		}
 	}
 }

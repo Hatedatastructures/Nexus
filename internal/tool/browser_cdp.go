@@ -215,7 +215,7 @@ func (t *BrowserCDPTool) Execute(ctx context.Context, args map[string]any) (stri
 	}
 
 	// 获取控制 URL（CDP WebSocket 地址）
-	ctrlURL := browserControlURL
+	ctrlURL := getBrowserControlURL()
 	if ctrlURL == "" {
 		return ToolError("浏览器控制 URL 不可用"), nil
 	}

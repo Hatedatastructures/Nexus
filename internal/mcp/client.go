@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 )
 
@@ -49,6 +50,11 @@ func (c *MCPClient) Connect(ctx context.Context, command string, args []string, 
 	}
 	c.mu.Unlock()
 
+	// 验证命令路径
+	if err := validateMCPCommand(command); err != nil {
+		return err
+	}
+
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Env = env
 
@@ -69,7 +75,7 @@ func (c *MCPClient) Connect(ctx context.Context, command string, args []string, 
 		return fmt.Errorf("启动 MCP 服务器 %s 失败: %w", command, err)
 	}
 
-	readerCtx, cancel := context.WithCancel(context.Background())
+	readerCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
 	c.mu.Lock()
@@ -77,9 +83,10 @@ func (c *MCPClient) Connect(ctx context.Context, command string, args []string, 
 	c.stdin = stdin
 	c.stdout = stdout
 	c.cmd = cmd
-	c.mu.Unlock()
 
 	// 启动后台读取协程
+	c.mu.Unlock()
+
 	c.startReader(readerCtx, stdout)
 
 	// 发送 initialize 请求
@@ -102,12 +109,14 @@ func (c *MCPClient) Connect(ctx context.Context, command string, args []string, 
 
 	// 解析服务器信息
 	if srvInfo, ok := result["serverInfo"].(map[string]any); ok {
+		c.mu.Lock()
 		if name, ok := srvInfo["name"].(string); ok {
 			c.serverInfo.Name = name
 		}
 		if ver, ok := srvInfo["version"].(string); ok {
 			c.serverInfo.Version = ver
 		}
+		c.mu.Unlock()
 	}
 
 	slog.Info("MCP client connected",
@@ -230,6 +239,24 @@ func (c *MCPClient) Disconnect() error {
 	}
 
 	slog.Info("MCP client disconnected")
+	return nil
+}
+
+// validateMCPCommand 验证 MCP 服务器命令路径。
+func validateMCPCommand(command string) error {
+	if command == "" {
+		return fmt.Errorf("命令不能为空")
+	}
+	if !filepath.IsAbs(command) {
+		return fmt.Errorf("MCP 服务器命令必须是绝对路径: %s", command)
+	}
+	info, err := os.Stat(command)
+	if err != nil {
+		return fmt.Errorf("MCP 服务器命令不存在: %s", command)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("MCP 服务器命令不能是目录: %s", command)
+	}
 	return nil
 }
 

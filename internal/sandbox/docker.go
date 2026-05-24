@@ -142,12 +142,9 @@ func (e *DockerEnvironment) Execute(ctx context.Context, command string, opts *E
 	defer cancel()
 
 	// 构建 docker exec 命令
+	// 注意: 安全加固参数 (securityOpts) 仅在 docker run 阶段生效，
+	// docker exec 不支持 --cap-drop/--pids-limit/--network 等标志。
 	dockerArgs := []string{"exec", "--workdir", cwd}
-
-	// 加入安全加固参数
-	if len(e.securityOpts) > 0 {
-		dockerArgs = append(dockerArgs, e.securityOpts...)
-	}
 
 	// 保持 stdin 打开以支持交互
 	dockerArgs = append(dockerArgs, "-i")
@@ -257,6 +254,13 @@ func (e *DockerEnvironment) UpdateCWD(cwd string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.cwd = cwd
+}
+
+// SecurityRunArgs 返回应传给 docker run/create 的安全参数。
+// docker exec 不支持 --cap-drop/--pids-limit/--network 等标志，
+// 必须在容器创建时应用。
+func (e *DockerEnvironment) SecurityRunArgs() []string {
+	return e.securityOpts
 }
 
 // Cleanup 清理 Docker 环境资源。

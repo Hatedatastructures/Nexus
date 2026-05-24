@@ -207,7 +207,7 @@ func (t *TTSTool) convertToSpeech(ctx context.Context, model, text, voice, langu
 	}
 
 	// 读取音频数据
-	audioData, err := io.ReadAll(resp.Body)
+	audioData, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("读取音频数据失败: %w", err)
 	}

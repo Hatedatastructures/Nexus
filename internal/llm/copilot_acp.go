@@ -106,7 +106,7 @@ func (p *CopilotProvider) CreateChatCompletion(ctx context.Context, req *ChatReq
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("读取 Copilot 响应体失败: %w", err)
 	}
@@ -141,7 +141,7 @@ func (p *CopilotProvider) CreateChatCompletionStream(ctx context.Context, req *C
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
 		resp.Body.Close()
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
@@ -174,7 +174,7 @@ func (p *CopilotProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
 	if err != nil {
 		return p.defaultModels(), nil
 	}

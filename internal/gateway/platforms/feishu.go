@@ -7,11 +7,16 @@ import (
 	"sync"
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -20,7 +25,9 @@ import (
 // FeishuAdapter 实现飞书开放平台适配器。
 // 使用 tenant_access_token 认证, 通过事件订阅接收消息, 通过消息 API 发送消息。
 type FeishuAdapter struct {
-	tokenMu     sync.Mutex         // token 访问锁
+	tokenMu           sync.Mutex         // token 访问锁
+	verificationToken string             // 事件订阅验证令牌
+	closeOnce         sync.Once          // 确保 msgCh 只关闭一次
 	appID       string             // 应用 App ID
 	appSecret   string             // 应用 App Secret
 	client      *http.Client       // HTTP 客户端
@@ -64,7 +71,9 @@ func (f *FeishuAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, erro
 
 // Disconnect 关闭消息通道。
 func (f *FeishuAdapter) Disconnect(ctx context.Context) error {
-	close(f.msgCh)
+	f.closeOnce.Do(func() {
+		close(f.msgCh)
+	})
 	slog.Info("feishu adapter disconnected")
 	return nil
 }
@@ -151,7 +160,29 @@ func (f *FeishuAdapter) ReplyMessage(ctx context.Context, messageID string, cont
 
 // ReceiveEvent 处理飞书事件推送。
 // 由外部 HTTP 服务器调用。
+// Deprecated: 使用 ReceiveEventWithVerification 代替，以便验证请求签名。
 func (f *FeishuAdapter) ReceiveEvent(payload []byte) error {
+	return f.receiveEventInternal(payload)
+}
+
+// ReceiveEventWithVerification 处理飞书事件推送并验证签名。
+// timestamp 和 signature 来自 HTTP 请求头。
+func (f *FeishuAdapter) ReceiveEventWithVerification(payload []byte, timestamp, signature string) error {
+	// 验证飞书事件签名
+	if f.verificationToken != "" && signature != "" && timestamp != "" {
+		h := hmac.New(sha256.New, []byte(f.verificationToken))
+		h.Write([]byte(timestamp))
+		h.Write([]byte("\n"))
+		h.Write(payload)
+		expected := base64.StdEncoding.EncodeToString(h.Sum(nil))
+		if subtle.ConstantTimeCompare([]byte(signature), []byte(expected)) != 1 {
+			return fmt.Errorf("飞书事件签名验证失败")
+		}
+	}
+	return f.receiveEventInternal(payload)
+}
+
+func (f *FeishuAdapter) receiveEventInternal(payload []byte) error {
 	var event struct {
 		Schema string `json:"schema"`
 		Header struct {
@@ -246,6 +277,7 @@ func (f *FeishuAdapter) Configure(settings map[string]any) error {
 	}
 	f.appID = appID
 	f.appSecret = appSecret
+	f.verificationToken, _ = settings["verification_token"].(string)
 	f.client = &http.Client{Timeout: 30 * time.Second}
 	f.msgCh = make(chan *MessageEvent, 128)
 	return nil
@@ -282,7 +314,7 @@ func (f *FeishuAdapter) doAPI(ctx context.Context, method string, path string, b
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return &SendResult{Success: false, Error: err.Error()}, err
 	}
@@ -339,7 +371,7 @@ func (f *FeishuAdapter) getTenantToken(ctx context.Context) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return "", err
 	}
@@ -363,23 +395,31 @@ func (f *FeishuAdapter) getTenantToken(ctx context.Context) (string, error) {
 
 // escapeJSON 转义 JSON 字符串中的特殊字符。
 func escapeJSON(s string) string {
-	// 简单转义: 双引号、反斜杠、换行符
-	result := ""
+	var sb strings.Builder
+	sb.Grow(len(s))
 	for _, c := range s {
 		switch c {
 		case '"':
-			result += `\"`
+			sb.WriteString(`\"`)
 		case '\\':
-			result += `\\`
+			sb.WriteString(`\\`)
 		case '\n':
-			result += `\n`
+			sb.WriteString(`\n`)
 		case '\r':
-			result += `\r`
+			sb.WriteString(`\r`)
 		case '\t':
-			result += `\t`
+			sb.WriteString(`\t`)
+		case '\b':
+			sb.WriteString(`\b`)
+		case '\f':
+			sb.WriteString(`\f`)
 		default:
-			result += string(c)
+			if c < 0x20 {
+				fmt.Fprintf(&sb, `\u%04x`, c)
+			} else {
+				sb.WriteRune(c)
+			}
 		}
 	}
-	return result
+	return sb.String()
 }

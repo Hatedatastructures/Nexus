@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -30,10 +31,26 @@ type TrajectoryTurn struct {
 	ToolUse string `json:"tool_use,omitempty"` // 工具名称 (仅 tool 角色)
 }
 
+func validateTrajectoryPath(path string) error {
+	if path == "" {
+		return fmt.Errorf("路径不能为空")
+	}
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("路径不允许包含 \"..\": %s", path)
+	}
+	if filepath.IsAbs(path) {
+		return fmt.Errorf("不允许使用绝对路径: %s", path)
+	}
+	return nil
+}
+
 // ───────────────────────────── 保存函数 ─────────────────────────────
 
 // SaveTrajectory 将对话消息保存为 ShareGPT 格式的 JSONL。
 func SaveTrajectory(path string, msgs []llm.Message, model string, completed bool) error {
+	if err := validateTrajectoryPath(path); err != nil {
+		return fmt.Errorf("轨迹路径验证失败: %w", err)
+	}
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("创建轨迹文件: %w", err)
@@ -58,6 +75,9 @@ func SaveTrajectory(path string, msgs []llm.Message, model string, completed boo
 
 // SaveTrajectoryBatch 将多条轨迹追加到 JSONL 文件。
 func SaveTrajectoryBatch(path string, entries []TrajectoryEntry) error {
+	if err := validateTrajectoryPath(path); err != nil {
+		return fmt.Errorf("轨迹路径验证失败: %w", err)
+	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("打开轨迹文件: %w", err)

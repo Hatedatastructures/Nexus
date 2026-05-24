@@ -66,11 +66,11 @@ func (e *SSHEnvironment) Execute(ctx context.Context, command string, opts *Exec
 	sshArgs = append(sshArgs, e.host)
 
 	// 如果指定了 CWD，先 cd 再执行
-	fullCommand := command
+	fullCommand := shellQuote(command)
 	if opts.CWD != "" {
-		fullCommand = fmt.Sprintf("cd %s && %s", shellQuote(opts.CWD), command)
+		fullCommand = fmt.Sprintf("cd %s && %s", shellQuote(opts.CWD), shellQuote(command))
 	} else if e.cwd != "" && e.cwd != "~" {
-		fullCommand = fmt.Sprintf("cd %s && %s", shellQuote(e.cwd), command)
+		fullCommand = fmt.Sprintf("cd %s && %s", shellQuote(e.cwd), shellQuote(command))
 	}
 
 	sshArgs = append(sshArgs, fullCommand)
@@ -126,7 +126,7 @@ func (e *SSHEnvironment) Execute(ctx context.Context, command string, opts *Exec
 // ExecuteBackground 在远程主机后台执行命令。
 func (e *SSHEnvironment) ExecuteBackground(ctx context.Context, command string, opts *ExecuteOptions) (ProcessHandle, error) {
 	// SSH 后台执行: 使用 nohup 并在末尾加 &
-	bgCommand := fmt.Sprintf("nohup %s > /dev/null 2>&1 &", command)
+	bgCommand := fmt.Sprintf("nohup %s > /dev/null 2>&1 &", shellQuote(command))
 
 	sshArgs := append([]string{}, e.sshArgs...)
 	sshArgs = append(sshArgs, e.host, bgCommand)

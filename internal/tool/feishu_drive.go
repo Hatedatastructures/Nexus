@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -44,6 +45,7 @@ type DefaultFeishuDriveClient struct {
 	httpClient  *http.Client
 	tokenCache  string
 	tokenExpiry time.Time
+	mu          sync.Mutex
 }
 
 // NewDefaultFeishuDriveClient 创建默认飞书云盘客户端。
@@ -59,8 +61,12 @@ func NewDefaultFeishuDriveClient(appID, appSecret string) *DefaultFeishuDriveCli
 // GetTenantAccessToken 获取 tenant_access_token。
 func (c *DefaultFeishuDriveClient) getTenantAccessToken(ctx context.Context) (string, error) {
 	// 检查缓存
-	if c.tokenCache != "" && time.Now().Before(c.tokenExpiry) {
-		return c.tokenCache, nil
+	c.mu.Lock()
+	cached := c.tokenCache
+	expiry := c.tokenExpiry
+	c.mu.Unlock()
+	if cached != "" && time.Now().Before(expiry) {
+		return cached, nil
 	}
 
 	body := map[string]any{
@@ -83,7 +89,7 @@ func (c *DefaultFeishuDriveClient) getTenantAccessToken(ctx context.Context) (st
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return "", err
 	}
@@ -101,8 +107,10 @@ func (c *DefaultFeishuDriveClient) getTenantAccessToken(ctx context.Context) (st
 		return "", fmt.Errorf("飞书 Token 错误: %s", tokenResp.Msg)
 	}
 
+	c.mu.Lock()
 	c.tokenCache = tokenResp.TenantAccessToken
 	c.tokenExpiry = time.Now().Add(time.Duration(tokenResp.Expire-300) * time.Second)
+	c.mu.Unlock()
 
 	return c.tokenCache, nil
 }

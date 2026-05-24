@@ -3,6 +3,8 @@
 // 用于 Nexus Agent 的 ACP (Agent Control Protocol) 入口。
 package mcp
 
+import "sync/atomic"
+
 // ───────────────────────────── JSON-RPC 2.0 类型 ─────────────────────────────
 
 // JSONRPCRequest 表示一个 JSON-RPC 2.0 请求。
@@ -60,7 +62,7 @@ type MCPServer struct {
 	registry     ToolRegistry            // 工具注册中心 (接口注入)
 	tools        []*ToolDefinition       // 已注册工具列表
 	capabilities map[string]any          // 服务器能力声明
-	initialized  bool                    // 是否已完成初始化
+	initialized  atomic.Bool              // 是否已完成初始化
 }
 
 // ServerInfo 描述 MCP 服务器的元信息。

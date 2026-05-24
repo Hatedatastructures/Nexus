@@ -5,6 +5,7 @@ package agent
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"nexus-agent/internal/approval"
@@ -24,8 +25,8 @@ import (
 // IterationBudget 跟踪代理主循环的工具调用迭代次数。
 // 每次工具调用消耗一次预算，防止无限循环。
 type IterationBudget struct {
-	max      int // 最大迭代次数 (默认 90)
-	consumed int // 已消耗次数
+	max      int           // 最大迭代次数 (默认 90)
+	consumed atomic.Int64  // 已消耗次数
 }
 
 // NewIterationBudget 创建迭代预算
@@ -38,16 +39,16 @@ func NewIterationBudget(max int) *IterationBudget {
 
 // Consume 消耗一次迭代。返回 true 表示还有余额。
 func (b *IterationBudget) Consume() bool {
-	if b.consumed >= b.max {
+	if int(b.consumed.Load()) >= b.max {
 		return false
 	}
-	b.consumed++
+	b.consumed.Add(1)
 	return true
 }
 
 // Remaining 返回剩余可用迭代次数
 func (b *IterationBudget) Remaining() int {
-	remaining := b.max - b.consumed
+	remaining := b.max - int(b.consumed.Load())
 	if remaining < 0 {
 		return 0
 	}
@@ -56,7 +57,7 @@ func (b *IterationBudget) Remaining() int {
 
 // Consumed 返回已消耗的迭代次数
 func (b *IterationBudget) Consumed() int {
-	return b.consumed
+	return int(b.consumed.Load())
 }
 
 // ───────────────────────────── 推理配置 ─────────────────────────────

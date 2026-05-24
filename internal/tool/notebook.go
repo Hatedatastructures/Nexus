@@ -102,6 +102,10 @@ func (t *NotebookEditTool) Execute(ctx context.Context, args map[string]any) (st
 		return ToolError("参数 notebook_path 是必填项且必须为字符串"), nil
 	}
 
+	if _, err := checkPathSecurity(notebookPath, false); err != nil {
+		return ToolError(fmt.Sprintf("路径不安全: %v", err)), nil
+	}
+
 	cellID, _ := args["cell_id"].(string)
 	cellType := "code"
 	if v, ok := args["cell_type"].(string); ok && (v == "code" || v == "markdown") {

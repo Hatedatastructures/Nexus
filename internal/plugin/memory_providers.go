@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -90,11 +91,14 @@ func (p *HonchoProvider) SyncTurn(ctx context.Context, userContent, assistantCon
 }
 
 func (p *HonchoProvider) Prefetch(ctx context.Context, query string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET",
-		fmt.Sprintf("%s/v1/conversations/%s/context?query=%s", p.baseURL, p.userID, query), nil)
+	u := fmt.Sprintf("%s/v1/conversations/%s/context", p.baseURL, url.PathEscape(p.userID))
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return "", err
 	}
+	q := req.URL.Query()
+	q.Set("query", query)
+	req.URL.RawQuery = q.Encode()
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 
 	resp, err := p.client.Do(req)

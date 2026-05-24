@@ -134,9 +134,10 @@ func (m *FileSyncManager) SyncBack(downloadFn func(remotePath string) (io.ReadCl
 
 		// 先读取全部内容到缓冲区，同时计算哈希
 		remoteHash := sha256.New()
+		const maxTarFileSize = 10 * 1024 * 1024 // 10MB
 		var buf strings.Builder
-		tee := io.TeeReader(tr, remoteHash)
-		if _, err := io.Copy(&buf, tee); err != nil {
+		limited := io.LimitReader(io.TeeReader(tr, remoteHash), maxTarFileSize)
+		if _, err := io.Copy(&buf, limited); err != nil {
 			continue
 		}
 		remoteHashHex := fmt.Sprintf("%x", remoteHash.Sum(nil))

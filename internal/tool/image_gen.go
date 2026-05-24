@@ -121,6 +121,9 @@ func (t *ImageGenTool) Execute(ctx context.Context, args map[string]any) (string
 			slog.Warn("image save blocked (sensitive path)", "path", outputPath)
 			return ToolError(fmt.Sprintf("安全限制: 不允许写入敏感路径 %s", outputPath)), nil
 		}
+		if _, err := checkPathSecurity(outputPath, false); err != nil {
+			return ToolError(fmt.Sprintf("输出路径不安全: %v", err)), nil
+		}
 
 		if err := t.saveImage(outputPath, base64Data, imageURL); err != nil {
 			slog.Error("failed to save image", "path", outputPath, "err", err)

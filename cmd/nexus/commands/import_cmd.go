@@ -159,7 +159,7 @@ func downloadSkillFileFromImport(url, targetDir string) error {
 		return fmt.Errorf("HTTP 错误: %s", resp.Status)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 	if err != nil {
 		return fmt.Errorf("读取响应失败: %v", err)
 	}

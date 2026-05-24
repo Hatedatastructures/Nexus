@@ -60,6 +60,7 @@ type YuanbaoAdapter struct {
 
 	// 并发控制
 	mu             sync.Mutex
+	writeMu        sync.Mutex
 	pendingResps   map[string]chan map[string]any
 	dedup          *yuanbaoDeduplicator
 	instanceID     string
@@ -350,7 +351,11 @@ func (a *YuanbaoAdapter) dispatchPayload(payload map[string]any, msgCh chan *Mes
 		// 接收消息
 		event := a.parseMessage(payload)
 		if event != nil && !a.dedup.isDuplicate(event.MessageID) {
-			msgCh <- event
+			select {
+			case msgCh <- event:
+			default:
+				slog.Warn("[Yuanbao] message channel full, dropping message")
+			}
 		}
 	case yuanbaoCmdPong:
 		// 心跳响应
@@ -449,9 +454,11 @@ func (a *YuanbaoAdapter) heartbeatLoop() {
 				"seq_no": a.nextSeqNo(),
 			}
 
+			a.writeMu.Lock()
 			if err := conn.WriteJSON(pingReq); err != nil {
 				slog.Debug("[Yuanbao] heartbeat send failed", "err", err)
 			}
+			a.writeMu.Unlock()
 		}
 	}
 }
@@ -496,12 +503,15 @@ func (a *YuanbaoAdapter) Send(ctx context.Context, chatID string, content string
 	a.pendingResps[fmt.Sprintf("%d", seqNo)] = respCh
 	a.mu.Unlock()
 
+	a.writeMu.Lock()
 	if err := conn.WriteJSON(req); err != nil {
+		a.writeMu.Unlock()
 		a.mu.Lock()
 		delete(a.pendingResps, fmt.Sprintf("%d", seqNo))
 		a.mu.Unlock()
 		return &SendResult{Success: false, Error: fmt.Sprintf("发送失败: %v", err)}, nil
 	}
+	a.writeMu.Unlock()
 
 	select {
 	case resp := <-respCh:

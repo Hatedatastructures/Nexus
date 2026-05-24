@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"nexus-agent/internal/approval"
@@ -17,16 +18,17 @@ import (
 
 // 终端工具的全局环境引用，用于支持运行时注入沙箱环境和审批检查器。
 // 在代理初始化时通过 SetTerminalConfig() 设置。
+// 使用 atomic.Value 保证并发安全的读写。
 var (
-	globalTerminalEnv     sandbox.Environment
-	globalTerminalChecker *approval.Checker
+	globalTerminalEnv     atomic.Value // stores sandbox.Environment
+	globalTerminalChecker atomic.Value // stores *approval.Checker
 )
 
 // SetTerminalConfig 设置终端工具的全局沙箱环境和审批检查器。
 // 应在代理启动时调用，在所有 TerminalTool 的 Execute 调用之前。
 func SetTerminalConfig(env sandbox.Environment, checker *approval.Checker) {
-	globalTerminalEnv = env
-	globalTerminalChecker = checker
+	globalTerminalEnv.Store(env)
+	globalTerminalChecker.Store(checker)
 }
 
 // ───────────────────────────── 终端工具 ─────────────────────────────
@@ -63,7 +65,7 @@ func (t *TerminalTool) Emoji() string { return "💻" }
 // IsAvailable 检查终端工具是否可用。
 // 只要有可用的沙箱环境即为可用。
 func (t *TerminalTool) IsAvailable() bool {
-	return globalTerminalEnv != nil
+	return globalTerminalEnv.Load() != nil
 }
 
 // MaxResultChars 返回结果最大字符数。
@@ -109,8 +111,9 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (string
 	}
 
 	// 审批检查
-	if globalTerminalChecker != nil {
-		result, reason := globalTerminalChecker.Check(ctx, command)
+	if v := globalTerminalChecker.Load(); v != nil {
+		checker := v.(*approval.Checker)
+		result, reason := checker.Check(ctx, command)
 		switch result {
 		case approval.Denied:
 			slog.Warn("terminal command denied by approval engine", "command", command, "reason", reason)
@@ -121,10 +124,11 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (string
 		}
 	}
 
-	env := globalTerminalEnv
-	if env == nil {
+	envVal := globalTerminalEnv.Load()
+	if envVal == nil {
 		return ToolError("终端环境未配置，请先调用 SetTerminalConfig"), nil
 	}
+	env := envVal.(sandbox.Environment)
 
 	// 构建执行选项
 	opts := &sandbox.ExecuteOptions{}

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	nurl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,14 +173,11 @@ func camofoxPost(ctx context.Context, url string, body map[string]any, timeout t
 func camofoxGet(ctx context.Context, url string, params map[string]string, timeout time.Duration) ([]byte, error) {
 	// 构建查询参数
 	if len(params) > 0 {
-		query := ""
+		vals := nurl.Values{}
 		for key, value := range params {
-			if query != "" {
-				query += "&"
-			}
-			query += fmt.Sprintf("%s=%s", key, value)
+			vals.Set(key, value)
 		}
-		url = url + "?" + query
+		url = url + "?" + vals.Encode()
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -214,14 +212,11 @@ func camofoxGet(ctx context.Context, url string, params map[string]string, timeo
 func camofoxGetRaw(ctx context.Context, url string, params map[string]string, timeout time.Duration) ([]byte, error) {
 	// 构建查询参数
 	if len(params) > 0 {
-		query := ""
+		vals := nurl.Values{}
 		for key, value := range params {
-			if query != "" {
-				query += "&"
-			}
-			query += fmt.Sprintf("%s=%s", key, value)
+			vals.Set(key, value)
 		}
-		url = url + "?" + query
+		url = url + "?" + vals.Encode()
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)

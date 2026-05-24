@@ -3,6 +3,10 @@ package platforms
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -127,7 +132,7 @@ func (a *SMSAdapter) Send(ctx context.Context, chatID string, content string, op
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 		return &SendResult{Success: false, Error: fmt.Sprintf("Twilio API 错误: %s", string(body))}, nil
 	}
 
@@ -183,6 +188,12 @@ func (a *SMSAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 验证 Twilio 签名
+	if !a.validateTwilioSignature(r) {
+		http.Error(w, "签名验证失败", http.StatusForbidden)
+		return
+	}
+
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "解析表单失败", http.StatusBadRequest)
 		return
@@ -209,11 +220,53 @@ func (a *SMSAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	a.msgCh <- msgEvent
+	select {
+		case a.msgCh <- msgEvent:
+		default:
+			slog.Warn("[SMS] message channel full, dropping message")
+		}
 
 	// 返回 TwiML 响应
 	w.Header().Set("Content-Type", "text/xml")
 	fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`)
+}
+
+// validateTwilioSignature 验证 Twilio Webhook 签名 (X-Twilio-Signature)。
+func (a *SMSAdapter) validateTwilioSignature(r *http.Request) bool {
+	signature := r.Header.Get("X-Twilio-Signature")
+	if signature == "" || a.authToken == "" {
+		return false
+	}
+
+	scheme := "https://"
+	if r.TLS == nil {
+		scheme = "http://"
+	}
+	fullURL := scheme + r.Host + r.URL.RequestURI()
+
+	if err := r.ParseForm(); err != nil {
+		return false
+	}
+	params := r.Form
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var sb strings.Builder
+	sb.WriteString(fullURL)
+	for _, k := range keys {
+		sb.WriteString(k)
+		for _, v := range params[k] {
+			sb.WriteString(v)
+		}
+	}
+
+	mac := hmac.New(sha1.New, []byte(a.authToken))
+	mac.Write([]byte(sb.String()))
+	expected := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	return subtle.ConstantTimeCompare([]byte(signature), []byte(expected)) == 1
 }
 
 // ───────────────────────────── 辅助函数 ─────────────────────────────

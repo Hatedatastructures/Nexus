@@ -5,6 +5,7 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -26,6 +27,9 @@ import (
 // ───────────────────────────── 常量 ─────────────────────────────
 
 const (
+	// maxOAuthResponseSize limits response body reads from external API calls to 10 MB.
+	maxOAuthResponseSize = 10 << 20 // 10 MB
+
 	// googleAuthEndpoint Google 授权端点。
 	googleAuthEndpoint = "https://accounts.google.com/o/oauth2/v2/auth"
 
@@ -184,7 +188,7 @@ func (g *GoogleOAuth) StartFlow(ctx context.Context) (*Token, error) {
 	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
 		// 验证 state 参数
 		returnedState := r.URL.Query().Get("state")
-		if returnedState != state {
+		if subtle.ConstantTimeCompare([]byte(returnedState), []byte(state)) != 1 {
 			http.Error(w, "state 参数不匹配，可能存在 CSRF 攻击", http.StatusBadRequest)
 			resultCh <- callbackResult{err: fmt.Errorf("state 参数不匹配")}
 			return
@@ -416,7 +420,7 @@ func (g *GoogleOAuth) doTokenRequest(ctx context.Context, data url.Values) (*Tok
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxOAuthResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("读取 token 响应失败: %w", err)
 	}

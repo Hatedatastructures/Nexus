@@ -309,7 +309,7 @@ func (p *LMStudioProvider) CreateChatCompletion(ctx context.Context, req *ChatRe
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("读取 LM Studio 响应体失败: %w", err)
 	}
@@ -357,7 +357,7 @@ func (p *LMStudioProvider) CreateChatCompletionStream(ctx context.Context, req *
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
 		resp.Body.Close()
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
@@ -390,7 +390,7 @@ func (p *LMStudioProvider) ListModels(ctx context.Context) ([]ModelInfo, error) 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("读取 LM Studio 模型列表响应失败: %w", err)
 	}

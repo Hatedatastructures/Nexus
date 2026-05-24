@@ -109,7 +109,7 @@ func (t *BedrockTransport) BuildRequest(ctx context.Context, req *ChatRequest, a
 
 	if accessKey != "" && secretKey != "" {
 		if err := signAWSRequest(httpReq, bodyBytes, accessKey, secretKey, sessionToken, t.region); err != nil {
-			slog.Warn("AWS SigV4 signing failed, sending unsigned request", "error", err)
+			return nil, fmt.Errorf("AWS SigV4 签名失败: %w", err)
 		}
 	} else {
 		slog.Debug("AWS credentials not found, sending unsigned request (assuming proxy or IAM role)")
@@ -353,7 +353,7 @@ func (p *BedrockProvider) CreateChatCompletion(ctx context.Context, req *ChatReq
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("读取响应体失败: %w", err)
 	}
@@ -398,7 +398,7 @@ func (p *BedrockProvider) CreateChatCompletionStream(ctx context.Context, req *C
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
 		resp.Body.Close()
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)

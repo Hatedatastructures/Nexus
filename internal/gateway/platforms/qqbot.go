@@ -102,6 +102,7 @@ type QQBotAdapter struct {
 
 	// 并发控制
 	mu            sync.Mutex
+	closeOnce     sync.Once
 	dedup         *qqbotDeduplicator
 	pendingResps  map[string]chan map[string]any
 	seqNo         int64
@@ -300,7 +301,7 @@ func (a *QQBotAdapter) connectWebSocket(ctx context.Context, gatewayURL string, 
 		a.mu.Unlock()
 
 		if !running {
-			close(msgCh)
+			a.closeOnce.Do(func() { close(msgCh) })
 			return
 		}
 
@@ -366,6 +367,13 @@ func (a *QQBotAdapter) connectWebSocket(ctx context.Context, gatewayURL string, 
 		a.connected = false
 		closeCode := 0
 		if a.conn != nil {
+			// 尝试从 WebSocket 关闭帧中提取 close code
+			_, _, readErr := a.conn.ReadMessage()
+			if readErr != nil {
+				if ce, ok := readErr.(*websocket.CloseError); ok {
+					closeCode = ce.Code
+				}
+			}
 			a.conn.Close()
 			a.conn = nil
 		}
@@ -456,6 +464,7 @@ func (a *QQBotAdapter) dispatchPayload(payload map[string]any, msgCh chan *Messa
 	case qqbotOpDispatch:
 		t := getString(payload, "t", "")
 		s := getInt(payload, "s", 0)
+		a.mu.Lock()
 		a.seqNo = int64(s)
 
 		d := getMap(payload, "d")
@@ -465,15 +474,21 @@ func (a *QQBotAdapter) dispatchPayload(payload map[string]any, msgCh chan *Messa
 			a.sessionID = getString(d, "session_id", "")
 			a.botOpenID = getString(d, "user", "")
 			slog.Info("[QQBot] authenticated", "session_id", a.sessionID)
+			a.mu.Unlock()
 
 		case "C2C_MESSAGE_CREATE":
+			a.mu.Unlock()
 			a.onC2CMessage(d, msgCh)
 
 		case "GROUP_AT_MESSAGE_CREATE":
+			a.mu.Unlock()
 			a.onGroupAtMessage(d, msgCh)
 
 		case "DIRECT_MESSAGE_CREATE":
+			a.mu.Unlock()
 			a.onDirectMessage(d, msgCh)
+		default:
+			a.mu.Unlock()
 		}
 
 	case qqbotOpHeartbeatAck:
@@ -551,7 +566,11 @@ func (a *QQBotAdapter) onC2CMessage(d map[string]any, msgCh chan *MessageEvent) 
 		RawMessage: d,
 	}
 
-	msgCh <- event
+	select {
+		case msgCh <- event:
+		default:
+			slog.Warn("[QQBot] message channel full, dropping message")
+		}
 }
 
 // onGroupAtMessage 处理群 @消息。
@@ -596,7 +615,11 @@ func (a *QQBotAdapter) onGroupAtMessage(d map[string]any, msgCh chan *MessageEve
 		RawMessage: d,
 	}
 
-	msgCh <- event
+	select {
+		case msgCh <- event:
+		default:
+			slog.Warn("[QQBot] message channel full, dropping message")
+		}
 }
 
 // onDirectMessage 处理频道私信。
@@ -630,7 +653,11 @@ func (a *QQBotAdapter) onDirectMessage(d map[string]any, msgCh chan *MessageEven
 		RawMessage: d,
 	}
 
-	msgCh <- event
+	select {
+		case msgCh <- event:
+		default:
+			slog.Warn("[QQBot] message channel full, dropping message")
+		}
 }
 
 // heartbeatLoop 发送心跳。
@@ -764,6 +791,9 @@ func (a *QQBotAdapter) SendImage(ctx context.Context, chatID string, imageURL st
 
 // uploadMedia 上传媒体文件。
 func (a *QQBotAdapter) uploadMedia(ctx context.Context, chatID, fileURL string, mediaType int) (string, error) {
+	if !isSafeURL(fileURL) {
+		return "", fmt.Errorf("URL 不安全: %s", fileURL)
+	}
 	// QQ Bot 媒体上传: 先下载文件，再通过 /v2/users/{openid}/files 上传
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
 	if err != nil {

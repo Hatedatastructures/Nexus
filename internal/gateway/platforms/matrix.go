@@ -27,6 +27,7 @@ type MatrixAdapter struct {
 	syncToken   string
 	shutdown    chan struct{}
 	closeOnce   sync.Once
+	stateMu     sync.RWMutex
 }
 
 // NewMatrixAdapter 创建 Matrix 适配器实例。
@@ -246,7 +247,7 @@ func (m *MatrixAdapter) doSync(ctx context.Context, since string, timeout uint) 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return nil, err
 	}
@@ -274,14 +275,20 @@ func (m *MatrixAdapter) syncLoop(ctx context.Context) {
 		default:
 		}
 
-		sr, err := m.doSync(ctx, m.syncToken, 30000)
+		m.stateMu.RLock()
+		token := m.syncToken
+		m.stateMu.RUnlock()
+
+		sr, err := m.doSync(ctx, token, 30000)
 		if err != nil {
 			slog.Warn("matrix sync failed", "err", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
+		m.stateMu.Lock()
 		m.syncToken = sr.NextBatch
+		m.stateMu.Unlock()
 
 		for roomID, roomData := range sr.Rooms.Join {
 			for _, rawEvent := range roomData.Timeline.Events {
@@ -402,7 +409,7 @@ func (m *MatrixAdapter) doAPI(ctx context.Context, method, path string, body any
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return nil, err
 	}

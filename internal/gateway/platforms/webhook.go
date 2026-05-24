@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -83,6 +85,13 @@ func (a *WebhookAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, err
 	a.mu.Lock()
 	a.running = true
 	a.mu.Unlock()
+
+	// 验证 sendURL scheme
+	if a.sendURL != "" {
+		if !isSafeURL(a.sendURL) {
+			return nil, fmt.Errorf("webhook: WEBHOOK_SEND_URL 不安全 (必须为 http/https 且不指向私有 IP)")
+		}
+	}
 
 	// 空 secret 安全检查: 非 loopback 绑定时必须设置 secret
 	if a.secret == "" {
@@ -178,7 +187,11 @@ func (a *WebhookAdapter) handleWebhook(msgCh chan *MessageEvent) http.HandlerFun
 		// 解析消息事件
 		event := a.parseWebhookPayload(payload)
 		if event != nil {
-			msgCh <- event
+			select {
+			case msgCh <- event:
+			default:
+				slog.Warn("[Webhook] message channel full, dropping message")
+			}
 		}
 
 		// 返回成功响应
@@ -382,4 +395,29 @@ func isLoopback(addr string) bool {
 		return false
 	}
 	return host == "127.0.0.1" || host == "localhost" || host == "::1"
+}
+
+// isSafeURL 检查 URL 是否安全 (拒绝私有 IP 和非 HTTP(S) scheme)。
+func isSafeURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return true
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return false
+		}
+	}
+	return true
 }

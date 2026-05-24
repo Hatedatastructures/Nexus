@@ -206,7 +206,11 @@ func (a *WeixinAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) 
 				if event.Source != nil {
 					a.setContextToken(event.Source.UserID, getString(update, "context_token", ""))
 				}
-				msgCh <- event
+				select {
+				case msgCh <- event:
+				default:
+					slog.Warn("[Weixin] message channel full, dropping message")
+				}
 			}
 		}
 	}

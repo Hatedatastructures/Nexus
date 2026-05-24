@@ -462,9 +462,9 @@ func (t *SendMessageTool) sendDingTalk(ctx context.Context, chatID, message stri
 		if err != nil {
 			return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 		}
-		defer resp.Body.Close()
-
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return nil, fmt.Errorf("钉钉 API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
 		}
@@ -479,6 +479,10 @@ func (t *SendMessageTool) sendDingTalk(ctx context.Context, chatID, message stri
 
 // sendDingTalkWebhook 通过自定义机器人 Webhook 发送钉钉消息。
 func (t *SendMessageTool) sendDingTalkWebhook(ctx context.Context, webhook, message string) (map[string]any, error) {
+	if safe, reason := CheckURLSafety(webhook); !safe {
+		return nil, fmt.Errorf("钉钉 Webhook URL 不安全: %s", reason)
+	}
+
 	body := map[string]any{
 		"msgtype": "text",
 		"text": map[string]any{
@@ -652,6 +656,10 @@ func (t *SendMessageTool) sendWhatsApp(ctx context.Context, chatID, message stri
 func (t *SendMessageTool) sendWebhook(ctx context.Context, webhookURL, message string) (map[string]any, error) {
 	if !strings.HasPrefix(webhookURL, "http://") && !strings.HasPrefix(webhookURL, "https://") {
 		return nil, fmt.Errorf("无效的 Webhook URL: %s", webhookURL)
+	}
+
+	if safe, reason := CheckURLSafety(webhookURL); !safe {
+		return nil, fmt.Errorf("Webhook URL 不安全: %s", reason)
 	}
 
 	body := map[string]any{

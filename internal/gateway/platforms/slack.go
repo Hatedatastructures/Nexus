@@ -29,8 +29,9 @@ type SlackAdapter struct {
 	msgCh    chan *MessageEvent // 入站消息通道
 
 	// Socket Mode WebSocket 状态
-	ws   *websocket.Conn
-	wsMu sync.Mutex
+	ws        *websocket.Conn
+	wsMu      sync.Mutex
+	closeOnce sync.Once // 确保 msgCh 只关闭一次
 }
 
 // NewSlackAdapter 创建 Slack 适配器。
@@ -66,7 +67,9 @@ func (s *SlackAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error
 
 // Disconnect 关闭消息通道。
 func (s *SlackAdapter) Disconnect(ctx context.Context) error {
-	close(s.msgCh)
+	s.closeOnce.Do(func() {
+		close(s.msgCh)
+	})
 	slog.Info("slack adapter disconnected")
 	return nil
 }
@@ -409,5 +412,5 @@ func (s *SlackAdapter) doSlackCall(ctx context.Context, method string, path stri
 	}
 	defer resp.Body.Close()
 
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 }

@@ -18,6 +18,9 @@ import (
 
 // ───────────────────────────── OAuth 配置 ─────────────────────────────
 
+// maxOAuthResponseSize limits response body reads from external API calls to 10 MB.
+const maxOAuthResponseSize = 10 << 20 // 10 MB
+
 // OAuthConfig 包含 MCP 服务器 OAuth 2.1 认证所需的配置项。
 type OAuthConfig struct {
 	ClientID     string   // 客户端 ID
@@ -158,7 +161,7 @@ func doTokenRequest(tokenURL string, data url.Values, clientID string) (*OAuthTo
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxOAuthResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("读取 Token 响应失败: %w", err)
 	}

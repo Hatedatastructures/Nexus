@@ -6,6 +6,10 @@ import (
 	"sync"
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,8 +32,8 @@ const (
 
 // FeishuCommentAdapter 飞书文档评论适配器。
 type FeishuCommentAdapter struct {
-ttokenMu       sync.Mutex           // token 访问锁
-	tokenMu     sync.Mutex         // token 访问锁
+	tokenMu         sync.Mutex         // token 访问锁
+	verificationToken string           // 事件订阅验证令牌
 	appID          string
 	appSecret      string
 	messageHandler func(*MessageEvent)
@@ -66,6 +70,7 @@ func NewFeishuCommentAdapter(messageHandler func(*MessageEvent)) *FeishuCommentA
 	appSecret := os.Getenv("FEISHU_APP_SECRET")
 
 	return &FeishuCommentAdapter{
+		verificationToken: os.Getenv("FEISHU_VERIFICATION_TOKEN"),
 		appID:          appID,
 		appSecret:      appSecret,
 		messageHandler: messageHandler,
@@ -163,6 +168,18 @@ func (a *FeishuCommentAdapter) HandleEvent(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// 验证飞书事件签名 (X-Lark-Signature)
+	if a.verificationToken != "" {
+		sig := r.Header.Get("X-Lark-Signature")
+		ts := r.Header.Get("X-Lark-Request-Timestamp")
+		if sig != "" && ts != "" {
+			if !verifyFeishuSignature(a.verificationToken, ts, string(body), sig) {
+				http.Error(w, "签名验证失败", http.StatusForbidden)
+				return
+			}
+		}
+	}
+
 	var event FeishuCommentEvent
 	if err := json.Unmarshal(body, &event); err != nil {
 		http.Error(w, "解析事件失败", http.StatusBadRequest)
@@ -195,7 +212,11 @@ func (a *FeishuCommentAdapter) HandleEvent(w http.ResponseWriter, r *http.Reques
 		},
 	}
 
-	a.msgCh <- msgEvent
+	select {
+		case a.msgCh <- msgEvent:
+		default:
+			slog.Warn("[FeishuComment] message channel full, dropping message")
+		}
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -247,14 +268,61 @@ func (a *FeishuCommentAdapter) refreshAccessToken(ctx context.Context) error {
 	return nil
 }
 
+// refreshAccessTokenLocked 在已持有 tokenMu 锁的情况下刷新 access_token。
+func (a *FeishuCommentAdapter) refreshAccessTokenLocked(ctx context.Context) {
+	apiURL := "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+
+	payload := map[string]string{
+		"app_id":     a.appID,
+		"app_secret": a.appSecret,
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(jsonData))
+	if err != nil {
+		slog.Warn("[Feishu Comment] refreshAccessTokenLocked: create request failed", "err", err)
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		slog.Warn("[Feishu Comment] refreshAccessTokenLocked: request failed", "err", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		slog.Warn("[Feishu Comment] refreshAccessTokenLocked: decode failed", "err", err)
+		return
+	}
+
+	if code, ok := result["code"].(float64); ok && code != 0 {
+		msg, _ := result["msg"].(string)
+		slog.Warn("[Feishu Comment] refreshAccessTokenLocked: API error", "msg", msg)
+		return
+	}
+
+	token, ok := result["tenant_access_token"].(string)
+	if !ok {
+		slog.Warn("[Feishu Comment] refreshAccessTokenLocked: no token in response")
+		return
+	}
+
+	a.accessToken = token
+	a.tokenExpiresAt = time.Now().Add(2 * time.Hour)
+}
+
 func (a *FeishuCommentAdapter) replyComment(ctx context.Context, fileToken, commentID, content string) error {
 	a.tokenMu.Lock()
 	if time.Now().After(a.tokenExpiresAt) {
-		a.tokenMu.Unlock()
-		if err := a.refreshAccessToken(ctx); err != nil {
-			return err
-		}
+		// 在同一锁内刷新 token
+		a.refreshAccessTokenLocked(ctx)
 	}
+	token := a.accessToken
+	a.tokenMu.Unlock()
 
 	apiURL := fmt.Sprintf("https://open.feishu.cn/open-apis/drive/v1/files/%s/comments/%s/replies", fileToken, commentID)
 
@@ -278,7 +346,7 @@ func (a *FeishuCommentAdapter) replyComment(ctx context.Context, fileToken, comm
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+a.accessToken)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
@@ -297,6 +365,17 @@ func (a *FeishuCommentAdapter) replyComment(ctx context.Context, fileToken, comm
 	}
 
 	return nil
+}
+
+// verifyFeishuSignature 验证飞书事件订阅签名。
+// signature = Base64(HmacSHA256(timestamp + "\n" + body))
+func verifyFeishuSignature(token, timestamp, body, signature string) bool {
+	h := hmac.New(sha256.New, []byte(token))
+	h.Write([]byte(timestamp))
+	h.Write([]byte("\n"))
+	h.Write([]byte(body))
+	expected := base64.StdEncoding.EncodeToString(h.Sum(nil))
+	return subtle.ConstantTimeCompare([]byte(signature), []byte(expected)) == 1
 }
 
 func init() {

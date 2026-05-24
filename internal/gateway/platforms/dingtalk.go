@@ -8,13 +8,14 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
+	"strings"
 	"time"
 )
 
@@ -23,7 +24,9 @@ import (
 // DingTalkAdapter 实现钉钉开放平台适配器。
 // 使用 access_token 认证, 通过消息回调接收消息, 通过机器人 API 发送消息。
 type DingTalkAdapter struct {
-	tokenMu     sync.Mutex         // token 访问锁
+	tokenMu        sync.Mutex         // token 访问锁
+	callbackSecret string             // 回调签名验证密钥
+	closeOnce      sync.Once          // 确保 msgCh 只关闭一次
 	appKey    string             // 应用 AppKey
 	appSecret string             // 应用 AppSecret
 	client    *http.Client       // HTTP 客户端
@@ -66,7 +69,9 @@ func (d *DingTalkAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, er
 
 // Disconnect 关闭消息通道。
 func (d *DingTalkAdapter) Disconnect(ctx context.Context) error {
-	close(d.msgCh)
+	d.closeOnce.Do(func() {
+		close(d.msgCh)
+	})
 	slog.Info("dingtalk adapter disconnected")
 	return nil
 }
@@ -157,9 +162,24 @@ func (d *DingTalkAdapter) ReceiveCallback(payload []byte) error {
 		return err
 	}
 
+	// 验证回调签名 (如果配置了 callbackSecret)
+	if d.callbackSecret != "" {
+		ts, _ := raw["timestamp"].(string)
+		sign, _ := raw["sign"].(string)
+		if ts != "" && sign != "" {
+			h := hmac.New(sha256.New, []byte(d.callbackSecret))
+			h.Write([]byte(ts + "\n" + d.callbackSecret))
+			expected := base64.StdEncoding.EncodeToString(h.Sum(nil))
+			if subtle.ConstantTimeCompare([]byte(sign), []byte(expected)) != 1 {
+				return fmt.Errorf("钉钉回调签名验证失败")
+			}
+		}
+	}
+
 	// 检查是否为加密回调
 	if encrypt, ok := raw["encrypt"].(string); ok && encrypt != "" {
-		// 加密回调需要解密，简化实现中直接解析明文
+		// 加密回调需要 AES 解密，当前简化实现中记录警告
+		slog.Warn("dingtalk: 收到加密回调，当前版本暂不支持解密")
 		return nil
 	}
 
@@ -238,6 +258,7 @@ func (d *DingTalkAdapter) Configure(settings map[string]any) error {
 	}
 	d.appKey = appKey
 	d.appSecret = appSecret
+	d.callbackSecret, _ = settings["callback_secret"].(string)
 	d.client = &http.Client{Timeout: 30 * time.Second}
 	d.msgCh = make(chan *MessageEvent, 128)
 	return nil
@@ -281,7 +302,7 @@ func (d *DingTalkAdapter) doAPI(ctx context.Context, method string, path string,
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return &SendResult{Success: false, Error: err.Error()}, err
 	}
@@ -315,12 +336,14 @@ func (d *DingTalkAdapter) getAccessToken(ctx context.Context) (string, error) {
 		return d.accessToken, nil
 	}
 
-	params := url.Values{}
-	params.Set("appKey", d.appKey)
-	params.Set("appSecret", d.appSecret)
+	payload := map[string]string{
+		"appKey":    d.appKey,
+		"appSecret": d.appSecret,
+	}
+	data, _ := json.Marshal(payload)
 
-	urlStr := "https://api.dingtalk.com/v1.0/oauth2/accessToken?" + params.Encode()
-	req, err := http.NewRequestWithContext(ctx, "POST", urlStr, nil)
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		"https://api.dingtalk.com/v1.0/oauth2/accessToken", bytes.NewReader(data))
 	if err != nil {
 		return "", err
 	}
@@ -332,7 +355,7 @@ func (d *DingTalkAdapter) getAccessToken(ctx context.Context) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return "", err
 	}
@@ -365,22 +388,31 @@ func (d *DingTalkAdapter) calcSign(timestamp string) string {
 
 // escapeJSONDing 为钉钉消息 JSON 转义内容。
 func escapeJSONDing(s string) string {
-	result := ""
+	var sb strings.Builder
+	sb.Grow(len(s))
 	for _, c := range s {
 		switch c {
 		case '"':
-			result += `\"`
+			sb.WriteString(`\"`)
 		case '\\':
-			result += `\\`
+			sb.WriteString(`\\`)
 		case '\n':
-			result += `\n`
+			sb.WriteString(`\n`)
 		case '\r':
-			result += `\r`
+			sb.WriteString(`\r`)
 		case '\t':
-			result += `\t`
+			sb.WriteString(`\t`)
+		case '\b':
+			sb.WriteString(`\b`)
+		case '\f':
+			sb.WriteString(`\f`)
 		default:
-			result += string(c)
+			if c < 0x20 {
+				fmt.Fprintf(&sb, `\u%04x`, c)
+			} else {
+				sb.WriteRune(c)
+			}
 		}
 	}
-	return result
+	return sb.String()
 }

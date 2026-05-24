@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,17 +28,21 @@ type DelegateTaskTool struct{}
 
 // SubAgentRunner 是注入的子代理执行函数。
 // 由 CLI/网关在启动时通过 SetSubAgentRunner 注入，避免 tool → agent 循环导入。
-var subAgentRunner func(ctx context.Context, systemPrompt, task string) (string, error)
+// 使用 atomic.Value 保证并发安全的读写。
+var subAgentRunner atomic.Value // stores func(ctx context.Context, systemPrompt, task string) (string, error)
 
 // SetSubAgentRunner 注入子代理执行函数。
 // 应在应用启动时调用，传入实际的 AIAgent 创建和执行逻辑。
 func SetSubAgentRunner(fn func(ctx context.Context, systemPrompt, task string) (string, error)) {
-	subAgentRunner = fn
+	subAgentRunner.Store(fn)
 }
 
 // GetSubAgentRunner 返回当前子代理执行函数。
 func GetSubAgentRunner() func(ctx context.Context, systemPrompt, task string) (string, error) {
-	return subAgentRunner
+	if v := subAgentRunner.Load(); v != nil {
+		return v.(func(ctx context.Context, systemPrompt, task string) (string, error))
+	}
+	return nil
 }
 
 // Name 返回工具名称。
@@ -172,6 +177,11 @@ func (t *DelegateTaskTool) executeBatchTasks(ctx context.Context, tasksJSON, con
 
 	if len(tasks) == 0 {
 		return ToolError("批量任务列表为空"), nil
+	}
+
+	const maxBatchTasks = 50
+	if len(tasks) > maxBatchTasks {
+		return ToolError(fmt.Sprintf("批量任务数量 %d 超过上限 %d", len(tasks), maxBatchTasks)), nil
 	}
 
 	slog.Info("batch subtasks started", "total", len(tasks))

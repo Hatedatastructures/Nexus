@@ -572,6 +572,11 @@ func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (stri
 		return ToolError("参数 urls 不能为空数组"), nil
 	}
 
+	const maxExtractURLs = 10
+	if len(urls) > maxExtractURLs {
+		urls = urls[:maxExtractURLs]
+	}
+
 	format := "markdown"
 	if f, ok := args["format"].(string); ok && f == "html" {
 		format = "html"

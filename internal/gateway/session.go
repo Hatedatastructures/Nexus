@@ -138,6 +138,17 @@ func (m *SessionManager) Size() int {
 	return len(m.sessions)
 }
 
+// StartAutoSweep 启动后台定期清理过期 session。
+func (m *SessionManager) StartAutoSweep(interval, maxIdle time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			m.SweepExpired(maxIdle)
+		}
+	}()
+}
+
 // ───────────────────────────── 内部辅助 ─────────────────────────────
 
 // newSessionID 使用 crypto/rand 生成安全的会话 ID。

@@ -5,11 +5,13 @@ package platforms
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -24,6 +26,7 @@ type WhatsAppAdapter struct {
 	client      *http.Client       // HTTP 客户端
 	baseURL     string             // API 基础 URL
 	msgCh       chan *MessageEvent // 入站消息通道
+	closeOnce   sync.Once          // 确保 msgCh 只关闭一次
 }
 
 // NewWhatsAppAdapter 创建 WhatsApp 适配器。
@@ -59,7 +62,9 @@ func (w *WhatsAppAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, er
 
 // Disconnect 关闭消息通道。
 func (w *WhatsAppAdapter) Disconnect(ctx context.Context) error {
-	close(w.msgCh)
+	w.closeOnce.Do(func() {
+		close(w.msgCh)
+	})
 	slog.Info("whatsapp adapter disconnected")
 	return nil
 }
@@ -182,7 +187,7 @@ func (w *WhatsAppAdapter) ReceiveWebhook(payload []byte) error {
 
 // VerifyWebhook 验证 Webhook (用于 WhatsApp 配置验证)。
 func (w *WhatsAppAdapter) VerifyWebhook(mode string, challenge string, verifyToken string) (string, bool) {
-	if mode == "subscribe" && verifyToken == w.verifyToken {
+	if mode == "subscribe" && subtle.ConstantTimeCompare([]byte(verifyToken), []byte(w.verifyToken)) == 1 {
 		return challenge, true
 	}
 	return "", false
@@ -290,7 +295,7 @@ func (w *WhatsAppAdapter) doAPI(ctx context.Context, method string, path string,
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return &SendResult{Success: false, Error: err.Error()}, err
 	}

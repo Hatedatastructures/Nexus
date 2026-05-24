@@ -24,8 +24,8 @@ import (
 // WeChatAdapter 实现微信公众号适配器。
 // 使用 XML 格式接收用户消息, 通过客服消息 API (JSON) 主动发送/回复消息。
 type WeChatAdapter struct {
-ttokenMu     sync.Mutex         // token 访问锁
 	tokenMu     sync.Mutex         // token 访问锁
+	closeOnce   sync.Once          // 确保 msgCh 只关闭一次
 	appID  string             // 公众号 AppID
 	secret string             // 公众号 AppSecret
 	token  string             // 服务器验证 Token (用于签名验证)
@@ -67,7 +67,9 @@ func (w *WeChatAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, erro
 
 // Disconnect 关闭消息通道。
 func (w *WeChatAdapter) Disconnect(ctx context.Context) error {
-	close(w.msgCh)
+	w.closeOnce.Do(func() {
+		close(w.msgCh)
+	})
 	slog.Info("wechat adapter disconnected")
 	return nil
 }
@@ -214,6 +216,11 @@ func (w *WeChatAdapter) Configure(settings map[string]any) error {
 
 // ───────────────────────────── 内部方法 ─────────────────────────────
 
+// sanitizeCDATA 防止 CDATA 注入。
+func sanitizeCDATA(s string) string {
+	return strings.ReplaceAll(s, "]]>", "]]]]><![CDATA[>")
+}
+
 // buildReplyXML 构建微信被动回复 XML。
 func (w *WeChatAdapter) buildReplyXML(toUser string, fromUser string) string {
 	return fmt.Sprintf(
@@ -222,7 +229,7 @@ func (w *WeChatAdapter) buildReplyXML(toUser string, fromUser string) string {
 			`<CreateTime>%d</CreateTime>`+
 			`<MsgType><![CDATA[text]]></MsgType>`+
 			`<Content><![CDATA[收到您的消息，正在处理中...]]></Content></xml>`,
-		toUser, fromUser, time.Now().Unix(),
+		sanitizeCDATA(toUser), sanitizeCDATA(fromUser), time.Now().Unix(),
 	)
 }
 
@@ -242,12 +249,14 @@ func (w *WeChatAdapter) doAPI(ctx context.Context, method string, path string, b
 		bodyReader = bytes.NewReader(data)
 	}
 
-	url := "https://api.weixin.qq.com" + path + "?access_token=" + token
-	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+	apiURL := "https://api.weixin.qq.com" + path + "?access_token=" + token
+	req, err := http.NewRequestWithContext(ctx, method, apiURL, bodyReader)
 	if err != nil {
 		return &SendResult{Success: false, Error: err.Error()}, err
 	}
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	slog.Debug("wechat API request", "method", method, "path", path)
 
 	resp, err := w.client.Do(req)
 	if err != nil {
@@ -255,7 +264,7 @@ func (w *WeChatAdapter) doAPI(ctx context.Context, method string, path string, b
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return &SendResult{Success: false, Error: err.Error()}, err
 	}
@@ -307,7 +316,7 @@ func (w *WeChatAdapter) getAccessToken(ctx context.Context) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
 		return "", err
 	}

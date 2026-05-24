@@ -318,7 +318,7 @@ func (h *SkillsHub) downloadFromGitHub(ctx context.Context, identifier string) (
 		return nil, "", fmt.Errorf("GitHub raw 返回 %d", resp.StatusCode)
 	}
 
-	content, err := io.ReadAll(resp.Body)
+	content, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 	if err != nil {
 		return nil, "", err
 	}

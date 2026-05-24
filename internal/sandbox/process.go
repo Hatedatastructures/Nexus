@@ -114,6 +114,8 @@ func (h *OSProcessHandle) Wait(ctx context.Context) (int, error) {
 
 	select {
 	case <-ctx.Done():
+		h.process.Kill()
+		<-done
 		return -1, ctx.Err()
 	case <-done:
 		h.mu.Lock()

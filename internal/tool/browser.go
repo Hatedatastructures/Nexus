@@ -29,12 +29,8 @@ var (
 	browserbaseSession  *BrowserbaseSession // Browserbase 云浏览器会话（nil 表示使用本地浏览器）
 )
 
-// ensureBrowser 确保浏览器实例已启动并可用。
-// 首次调用时启动浏览器，后续调用复用已有实例。
-func ensureBrowser() error {
-	browserMu.Lock()
-	defer browserMu.Unlock()
-
+// ensureBrowserLocked 确保浏览器实例已启动（调用方持有 browserMu）。
+func ensureBrowserLocked() error {
 	if browserReady && browserInstance != nil {
 		return nil
 	}
@@ -100,6 +96,13 @@ func ensureBrowser() error {
 	return nil
 }
 
+// ensureBrowser 确保浏览器实例已启动并可用。
+func ensureBrowser() error {
+	browserMu.Lock()
+	defer browserMu.Unlock()
+	return ensureBrowserLocked()
+}
+
 // getBrowser 返回浏览器实例。
 func getBrowser() (*rod.Browser, error) {
 	if err := ensureBrowser(); err != nil {
@@ -110,8 +113,10 @@ func getBrowser() (*rod.Browser, error) {
 
 // getPage 返回当前页面实例，如果不存在则创建新页面。
 func getPage() (*rod.Page, error) {
-	browser, err := getBrowser()
-	if err != nil {
+	browserMu.Lock()
+	defer browserMu.Unlock()
+
+	if err := ensureBrowserLocked(); err != nil {
 		return nil, err
 	}
 
@@ -127,7 +132,7 @@ func getPage() (*rod.Page, error) {
 		pageInstance = nil
 	}
 
-	pageInstance = browser.MustPage()
+	pageInstance = browserInstance.MustPage()
 	return pageInstance, nil
 }
 

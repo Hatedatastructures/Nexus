@@ -172,7 +172,12 @@ func (a *EmailAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) {
 				if !a.isAutoReply(msg.From) {
 					event := a.parseMessage(msg)
 					if event != nil {
-						msgCh <- event
+						select {
+						case msgCh <- event:
+						default:
+							slog.Warn("[Email] message channel full, dropping message")
+						}
+
 					}
 				}
 			}

@@ -296,9 +296,9 @@ func extractSkillNameFromIdentifier(identifier string) string {
 func isGitIdentifier(identifier string) bool {
 	return strings.HasPrefix(identifier, "git@") ||
 		strings.HasSuffix(identifier, ".git") ||
-		strings.HasPrefix(identifier, "https://github.com") ||
-		strings.HasPrefix(identifier, "https://gitlab.com") ||
-		strings.HasPrefix(identifier, "https://bitbucket.org")
+		strings.HasPrefix(identifier, "https://github.com/") ||
+		strings.HasPrefix(identifier, "https://gitlab.com/") ||
+		strings.HasPrefix(identifier, "https://bitbucket.org/")
 }
 
 func init() {

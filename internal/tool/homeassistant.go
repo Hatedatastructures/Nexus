@@ -198,6 +198,10 @@ func (t *HomeAssistantTool) getState(ctx context.Context, args map[string]any) (
 		return "", fmt.Errorf("entity_id 参数是必填项")
 	}
 
+	if err := validateHAInput(entityID); err != nil {
+		return "", fmt.Errorf("entity_id 无效: %w", err)
+	}
+
 	endpoint := "/states/" + entityID
 
 	resp, err := t.callAPI(ctx, "GET", endpoint, nil)
@@ -258,6 +262,13 @@ func (t *HomeAssistantTool) callService(ctx context.Context, args map[string]any
 
 	if domain == "" || service == "" {
 		return "", fmt.Errorf("domain 和 service 参数是必填项")
+	}
+
+	if err := validateHAInput(domain); err != nil {
+		return "", fmt.Errorf("domain 无效: %w", err)
+	}
+	if err := validateHAInput(service); err != nil {
+		return "", fmt.Errorf("service 无效: %w", err)
 	}
 
 	// 检查危险 domain
@@ -346,6 +357,14 @@ func isBlockedDomain(domain string) bool {
 		}
 	}
 	return false
+}
+
+func validateHAInput(s string) error {
+	if strings.Contains(s, "/") || strings.Contains(s, "..") ||
+		strings.Contains(s, "?") || strings.Contains(s, "#") {
+		return fmt.Errorf("值包含非法字符: %s", s)
+	}
+	return nil
 }
 
 // ───────────────────────────── 注册工具 ─────────────────────────────

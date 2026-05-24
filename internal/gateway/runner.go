@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -45,6 +46,7 @@ type GatewayRunner struct {
 	wg          sync.WaitGroup              // goroutine 计数器
 	shutdownCh  chan struct{}               // 关闭信号通道
 	stopOnce    sync.Once                   // 确保 Stop() 只执行一次，防止二次 close panic
+	msgSem      chan struct{}               // 消息处理并发信号量
 }
 
 // NewGatewayRunner 创建网关运行器。
@@ -60,6 +62,14 @@ func NewGatewayRunner(cfg *config.GatewayConfig, fullCfg *config.Config, state *
 		idleTTL = time.Hour
 	}
 
+	// 初始化消息处理并发信号量
+	maxConcurrent := 10
+	if v := os.Getenv("NEXUS_MAX_CONCURRENT_MESSAGES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxConcurrent = n
+		}
+	}
+
 	return &GatewayRunner{
 		config:      cfg,
 		agentCache:  NewAgentCache(cacheSize, idleTTL),
@@ -71,6 +81,7 @@ func NewGatewayRunner(cfg *config.GatewayConfig, fullCfg *config.Config, state *
 		state:       state,
 		cronSched:   cronSched,
 		shutdownCh:  make(chan struct{}),
+		msgSem:      make(chan struct{}, maxConcurrent),
 	}
 }
 
@@ -239,10 +250,12 @@ func (g *GatewayRunner) handlePlatform(ctx context.Context, adapter platforms.Pl
 				return
 			}
 
-			// 每个消息在独立 goroutine 中处理
+			// 每个消息在独立 goroutine 中处理 (受信号量控制并发)
+			g.msgSem <- struct{}{}
 			g.wg.Add(1)
 			go func(m *platforms.MessageEvent) {
 				defer g.wg.Done()
+				defer func() { <-g.msgSem }()
 				if err := g.processMessage(ctx, adapter, m); err != nil {
 					slog.Error("failed to process message",
 						"platform", adapter.Name(),

@@ -6,6 +6,7 @@ package tool
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 )
 
 // ───────────────────────────── 回调函数注入 ─────────────────────────────
@@ -19,11 +20,19 @@ type CronJobManager interface {
 	DeleteJob(ctx context.Context, id string) error
 }
 
-var cronJobManager CronJobManager
+var cronJobManager atomic.Value // stores CronJobManager
 
 // SetCronJobManager 注入定时任务管理器。
 func SetCronJobManager(m CronJobManager) {
-	cronJobManager = m
+	cronJobManager.Store(m)
+}
+
+// getCronJobManager 从 atomic.Value 中加载定时任务管理器。
+func getCronJobManager() CronJobManager {
+	if v := cronJobManager.Load(); v != nil {
+		return v.(CronJobManager)
+	}
+	return nil
 }
 
 // ───────────────────────────── CronJobTool ─────────────────────────────
@@ -34,7 +43,7 @@ type CronJobTool struct{}
 func (t *CronJobTool) Name() string        { return "cronjob" }
 func (t *CronJobTool) Description() string  { return "管理定时任务。支持创建、列出、暂停、恢复、删除定时任务。" }
 func (t *CronJobTool) Toolset() string      { return "cron" }
-func (t *CronJobTool) IsAvailable() bool    { return cronJobManager != nil }
+func (t *CronJobTool) IsAvailable() bool { return getCronJobManager() != nil }
 func (t *CronJobTool) Emoji() string        { return "⏰" }
 func (t *CronJobTool) MaxResultChars() int  { return 10000 }
 
@@ -73,7 +82,8 @@ func (t *CronJobTool) Schema() *ToolSchema {
 }
 
 func (t *CronJobTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	if cronJobManager == nil {
+	mgr := getCronJobManager()
+	if mgr == nil {
 		return ToolError("定时任务管理器未初始化"), nil
 	}
 
@@ -125,7 +135,8 @@ func (t *CronJobTool) createJob(ctx context.Context, args map[string]any) (strin
 		return ToolError("prompt 参数是必填项"), nil
 	}
 
-	jobID, err := cronJobManager.CreateJob(ctx, name, schedule, prompt)
+	mgr := getCronJobManager()
+	jobID, err := mgr.CreateJob(ctx, name, schedule, prompt)
 	if err != nil {
 		return ToolError(fmt.Sprintf("创建任务失败: %v", err)), nil
 	}
@@ -138,7 +149,8 @@ func (t *CronJobTool) createJob(ctx context.Context, args map[string]any) (strin
 }
 
 func (t *CronJobTool) listJobs(ctx context.Context) (string, error) {
-	jobs, err := cronJobManager.ListJobs(ctx)
+	mgr := getCronJobManager()
+	jobs, err := mgr.ListJobs(ctx)
 	if err != nil {
 		return ToolError(fmt.Sprintf("列出任务失败: %v", err)), nil
 	}
@@ -159,11 +171,12 @@ func (t *CronJobTool) listJobs(ctx context.Context) (string, error) {
 }
 
 func (t *CronJobTool) toggleJob(ctx context.Context, jobID string, enabled bool) (string, error) {
+	mgr := getCronJobManager()
 	var err error
 	if enabled {
-		err = cronJobManager.ResumeJob(ctx, jobID)
+		err = mgr.ResumeJob(ctx, jobID)
 	} else {
-		err = cronJobManager.PauseJob(ctx, jobID)
+		err = mgr.PauseJob(ctx, jobID)
 	}
 
 	if err != nil {
@@ -182,7 +195,8 @@ func (t *CronJobTool) toggleJob(ctx context.Context, jobID string, enabled bool)
 }
 
 func (t *CronJobTool) deleteJob(ctx context.Context, jobID string) (string, error) {
-	if err := cronJobManager.DeleteJob(ctx, jobID); err != nil {
+	mgr := getCronJobManager()
+	if err := mgr.DeleteJob(ctx, jobID); err != nil {
 		return ToolError(fmt.Sprintf("删除任务失败: %v", err)), nil
 	}
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 )
@@ -391,7 +392,8 @@ func (t *DiscordExtTool) searchMembers(ctx context.Context, args map[string]any)
 		return "", fmt.Errorf("query 参数是必填项")
 	}
 
-	endpoint := fmt.Sprintf("/guilds/%s/members/search?query=%s&limit=%d", guildID, query, limit)
+	endpoint := fmt.Sprintf("/guilds/%s/members/search?query=%s&limit=%d",
+		url.PathEscape(guildID), url.QueryEscape(query), limit)
 
 	resp, err := t.callAPI(ctx, "GET", endpoint, nil)
 	if err != nil {

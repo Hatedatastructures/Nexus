@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"log/slog"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -358,11 +359,13 @@ func WithConfigProvider(cfg *config.Config) AgentOption {
 
 		pc, err := cfg.ResolveProvider(providerName)
 		if err != nil {
+			slog.Warn("WithConfigProvider: failed to resolve provider", "provider", providerName, "err", err)
 			return
 		}
 
 		provider, err := buildProviderFromConfig(providerName, pc)
 		if err != nil {
+			slog.Warn("WithConfigProvider: failed to build provider", "provider", providerName, "err", err)
 			return
 		}
 

@@ -167,7 +167,7 @@ func (a *WeComAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error
 	go a.listenLoop()
 
 	// 启动心跳循环
-	go a.heartbeatLoop()
+	go a.heartbeatLoop(ctx)
 
 	slog.Info("[WeCom] connected", "url", a.wsURL)
 	return a.msgCh, nil
@@ -335,12 +335,14 @@ func (a *WeComAdapter) dispatchPayload(payload map[string]any) {
 // ───────────────────────────── 心跳循环 ─────────────────────────────
 
 // heartbeatLoop 发送心跳。
-func (a *WeComAdapter) heartbeatLoop() {
+func (a *WeComAdapter) heartbeatLoop(ctx context.Context) {
 	ticker := time.NewTicker(wecomHeartbeatInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-ticker.C:
 			a.mu.Lock()
 			running := a.running
@@ -439,7 +441,7 @@ func (a *WeComAdapter) onMessage(payload map[string]any) {
 		MessageType: MsgText,
 		MessageID:   msgID,
 		Source: &SessionSource{
-			Platform: PlatformWeChat,
+			Platform: PlatformWeCom,
 			ChatID:   chatID,
 			UserID:   senderID,
 			ChatType: chatType,
@@ -502,6 +504,11 @@ func (a *WeComAdapter) Send(ctx context.Context, chatID string, content string, 
 		return nil, fmt.Errorf("WebSocket 未连接")
 	}
 
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return nil, fmt.Errorf("消息内容为空")
+	}
+
 	reqID := a.newReqID("send")
 	req := map[string]any{
 		"cmd": wecomCmdSend,
@@ -510,7 +517,7 @@ func (a *WeComAdapter) Send(ctx context.Context, chatID string, content string, 
 			"chatid": chatID,
 			"msgtype": "markdown",
 			"markdown": map[string]any{
-				"content": strings.TrimSpace(content)[:min(len(content), wecomMaxMessageLength)],
+				"content": trimmed[:min(len(trimmed), wecomMaxMessageLength)],
 			},
 		},
 	}

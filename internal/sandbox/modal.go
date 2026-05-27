@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,7 @@ type ModalEnvironment struct {
 	appName    string // Modal App 名称
 	sandboxID  string // 当前沙箱 ID
 	cwd        string // 当前工作目录
+	mu         sync.Mutex
 }
 
 // NewModalEnvironment 创建 Modal 沙箱环境。
@@ -86,12 +88,14 @@ func (e *ModalEnvironment) Execute(ctx context.Context, command string, opts *Ex
 		Stderr   string `json:"stderr"`
 		CWD      string `json:"cwd"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result); err != nil {
 		return nil, err
 	}
 
 	if result.CWD != "" {
+		e.mu.Lock()
 		e.cwd = result.CWD
+		e.mu.Unlock()
 	}
 
 	return &ExecuteResult{
@@ -108,10 +112,18 @@ func (e *ModalEnvironment) ExecuteBackground(ctx context.Context, command string
 }
 
 // CWD 返回当前工作目录。
-func (e *ModalEnvironment) CWD() string { return e.cwd }
+func (e *ModalEnvironment) CWD() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.cwd
+}
 
 // UpdateCWD 更新当前工作目录。
-func (e *ModalEnvironment) UpdateCWD(cwd string) { e.cwd = cwd }
+func (e *ModalEnvironment) UpdateCWD(cwd string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cwd = cwd
+}
 
 // Cleanup 清理 Modal 沙箱。
 func (e *ModalEnvironment) Cleanup() error {
@@ -119,7 +131,7 @@ func (e *ModalEnvironment) Cleanup() error {
 		return nil
 	}
 
-	req, err := http.NewRequest("DELETE",
+	req, err := http.NewRequestWithContext(context.Background(), "DELETE",
 		fmt.Sprintf("%s/sandboxes/%s", e.baseURL, e.sandboxID), nil)
 	if err != nil {
 		return err
@@ -161,10 +173,15 @@ func (e *ModalEnvironment) createSandbox(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("Modal API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
 	var result struct {
 		ID string `json:"id"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result); err != nil {
 		return err
 	}
 

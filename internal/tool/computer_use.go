@@ -19,6 +19,9 @@ func cuLook(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
 }
+// cuRun 执行命令并返回输出。
+// 安全说明: 使用 exec.Command 参数分离方式传递参数，参数不会经过 shell 解释，
+// 因此 shell 注入风险已消除。不应改用 sh -c 形式调用。
 func cuRun(name string, args ...string) (string, error) {
 	out, err := exec.Command(name, args...).CombinedOutput()
 	return string(out), err

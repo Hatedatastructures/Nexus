@@ -54,6 +54,8 @@ type DefaultFeishuClient struct {
 	appSecret   string
 	baseURL     string
 	httpClient  *http.Client
+
+	tokenMu     sync.Mutex
 	tokenCache  string
 	tokenExpiry time.Time
 }
@@ -70,6 +72,9 @@ func NewDefaultFeishuClient(appID, appSecret string) *DefaultFeishuClient {
 
 // GetTenantAccessToken 获取 tenant_access_token。
 func (c *DefaultFeishuClient) GetTenantAccessToken(ctx context.Context) (string, error) {
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+
 	// 检查缓存的 token 是否有效
 	if c.tokenCache != "" && time.Now().Before(c.tokenExpiry) {
 		return c.tokenCache, nil
@@ -113,8 +118,12 @@ func (c *DefaultFeishuClient) GetTenantAccessToken(ctx context.Context) (string,
 	}
 
 	// 缓存 token（提前 5 分钟过期）
+	expire := tokenResp.Expire - 300
+	if expire < 60 {
+		expire = 60
+	}
 	c.tokenCache = tokenResp.TenantAccessToken
-	c.tokenExpiry = time.Now().Add(time.Duration(tokenResp.Expire-300) * time.Second)
+	c.tokenExpiry = time.Now().Add(time.Duration(expire) * time.Second)
 
 	return c.tokenCache, nil
 }

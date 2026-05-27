@@ -25,8 +25,9 @@ type MatrixAdapter struct {
 	client      *http.Client
 	msgCh       chan *MessageEvent
 	syncToken   string
-	shutdown    chan struct{}
-	closeOnce   sync.Once
+	shutdown     chan struct{}
+	shutdownOnce sync.Once
+	closeOnce    sync.Once
 	stateMu     sync.RWMutex
 }
 
@@ -89,7 +90,7 @@ func (m *MatrixAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, erro
 
 // Disconnect 停止同步循环。
 func (m *MatrixAdapter) Disconnect(ctx context.Context) error {
-	close(m.shutdown)
+	m.shutdownOnce.Do(func() { close(m.shutdown) })
 	m.closeOnce.Do(func() { close(m.msgCh) })
 	slog.Info("matrix adapter disconnected")
 	return nil

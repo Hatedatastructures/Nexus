@@ -52,6 +52,7 @@ type YuanbaoAdapter struct {
 	wsURL      string
 	apiDomain  string
 	messageHandler func(*MessageEvent)
+	httpClient *http.Client
 
 	// WebSocket 连接
 	conn      *websocket.Conn
@@ -135,6 +136,7 @@ func NewYuanbaoAdapter(appID, appSecret string, messageHandler func(*MessageEven
 	return &YuanbaoAdapter{
 		appID:           appID,
 		appSecret:       appSecret,
+		httpClient:     &http.Client{Timeout: 30 * time.Second},
 		wsURL:           wsURL,
 		apiDomain:       apiDomain,
 		messageHandler:  messageHandler,
@@ -181,7 +183,7 @@ func (a *YuanbaoAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, err
 	go a.listenLoop(msgCh)
 
 	// 启动心跳循环
-	go a.heartbeatLoop()
+	go a.heartbeatLoop(ctx)
 
 	slog.Info("[Yuanbao] connected", "bot_id", a.botID)
 	return msgCh, nil
@@ -421,7 +423,7 @@ func (a *YuanbaoAdapter) parseMessage(payload map[string]any) *MessageEvent {
 		MessageType: MsgText,
 		MessageID:   msgID,
 		Source: &SessionSource{
-			Platform: PlatformWeChat, // 元宝使用微信平台标识
+			Platform: PlatformYuanbao,
 			ChatID:   chatID,
 			UserID:   userID,
 			ChatType: chatType,
@@ -433,12 +435,14 @@ func (a *YuanbaoAdapter) parseMessage(payload map[string]any) *MessageEvent {
 // ───────────────────────────── 心跳循环 ─────────────────────────────
 
 // heartbeatLoop 发送心跳。
-func (a *YuanbaoAdapter) heartbeatLoop() {
+func (a *YuanbaoAdapter) heartbeatLoop(ctx context.Context) {
 	ticker := time.NewTicker(yuanbaoHeartbeatInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-ticker.C:
 			a.mu.Lock()
 			running := a.running

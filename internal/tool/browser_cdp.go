@@ -33,7 +33,7 @@ var cdpNextID atomic.Int64
 // timeout: 超时时间
 //
 // 返回解析后的 result 对象。如果响应中包含 "error" 字段则返回错误。
-func cdpCall(ws *websocket.Conn, method string, params map[string]any, sessionID string, timeout time.Duration) (map[string]any, error) {
+func cdpCall(ctx context.Context, ws *websocket.Conn, method string, params map[string]any, sessionID string, timeout time.Duration) (map[string]any, error) {
 	callID := cdpNextID.Add(1)
 
 	// 构建 CDP 请求
@@ -61,6 +61,12 @@ func cdpCall(ws *websocket.Conn, method string, params map[string]any, sessionID
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return nil, fmt.Errorf("等待 CDP 响应超时 (%s): %s", timeout, method)
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
 		}
 
 		if err := ws.SetReadDeadline(time.Now().Add(remaining)); err != nil {
@@ -97,12 +103,12 @@ func cdpCall(ws *websocket.Conn, method string, params map[string]any, sessionID
 // 当 targetID 非空时，先调用 Target.attachToTarget 获取 sessionId，
 // 再用该 sessionId 发送真正的命令。适用于页面级方法（Page.*、Runtime.* 等）。
 // 当 targetID 为空时，直接在浏览器级别发送命令，适用于全局方法（Target.*、Browser.* 等）。
-func cdpCallWithTarget(ws *websocket.Conn, method string, params map[string]any, targetID string, timeout time.Duration) (map[string]any, error) {
+func cdpCallWithTarget(ctx context.Context, ws *websocket.Conn, method string, params map[string]any, targetID string, timeout time.Duration) (map[string]any, error) {
 	sessionID := ""
 
 	// 如果需要附加到特定目标，先建立会话
 	if targetID != "" {
-		attachResult, err := cdpCall(ws, "Target.attachToTarget", map[string]any{
+		attachResult, err := cdpCall(ctx, ws, "Target.attachToTarget", map[string]any{
 			"targetId": targetID,
 			"flatten":  true,
 		}, "", timeout)
@@ -116,7 +122,7 @@ func cdpCallWithTarget(ws *websocket.Conn, method string, params map[string]any,
 		}
 	}
 
-	return cdpCall(ws, method, params, sessionID, timeout)
+	return cdpCall(ctx, ws, method, params, sessionID, timeout)
 }
 
 // ───────────────────────────── BrowserCDPTool ─────────────────────────────
@@ -234,7 +240,7 @@ func (t *BrowserCDPTool) Execute(ctx context.Context, args map[string]any) (stri
 	defer ws.Close()
 
 	// 发送 CDP 命令
-	result, err := cdpCallWithTarget(ws, method, params, targetID, timeout)
+	result, err := cdpCallWithTarget(ctx, ws, method, params, targetID, timeout)
 	if err != nil {
 		slog.Error("CDP command execution failed", "method", method, "err", err)
 		return ToolError(fmt.Sprintf("CDP 命令失败: %v", err)), nil

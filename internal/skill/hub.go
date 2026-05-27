@@ -102,7 +102,7 @@ func (h *SkillsHub) searchGitHubCode(ctx context.Context, query string) ([]*Skil
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return nil, fmt.Errorf("GitHub API 返回 %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -116,7 +116,7 @@ func (h *SkillsHub) searchGitHubCode(ctx context.Context, query string) ([]*Skil
 			Path string `json:"path"`
 		} `json:"items"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("解析 GitHub API 响应失败: %w", err)
 	}
 
@@ -180,7 +180,7 @@ func (h *SkillsHub) searchGitHubRepo(ctx context.Context, repo string) (*SkillMe
 		Description string `json:"description"`
 		Topics      []string `json:"topics"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&repoInfo); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&repoInfo); err != nil {
 		return nil, nil
 	}
 

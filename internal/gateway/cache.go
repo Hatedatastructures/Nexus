@@ -84,6 +84,17 @@ func (c *AgentCache) GetOrCreate(sessionKey string, factory func() (*agent.AIAge
 		if entry.element != nil {
 			c.lruList.MoveToFront(entry.element)
 		}
+		// 泄露的 agent 实例需要清理
+		if newAgent != nil {
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Warn("agent shutdown panicked", "err", r)
+					}
+				}()
+				newAgent.Shutdown()
+			}()
+		}
 		return entry.agent, nil
 	}
 
@@ -146,6 +157,11 @@ func (c *AgentCache) SweepIdle(ctx context.Context) int {
 	// 异步清理被驱逐的代理
 	for _, entry := range expired {
 		go func(e *cacheEntry) {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Warn("agent shutdown panicked", "err", r)
+				}
+			}()
 			if e.agent != nil {
 				e.agent.Shutdown()
 			}

@@ -80,16 +80,30 @@ func (f *FeishuAdapter) Disconnect(ctx context.Context) error {
 
 // Send 发送文本消息。
 func (f *FeishuAdapter) Send(ctx context.Context, chatID string, content string, opts *SendOptions) (*SendResult, error) {
+	contentJSON, _ := json.Marshal(map[string]string{"text": content})
 	body := map[string]any{
 		"receive_id": chatID,
 		"msg_type":   "text",
-		"content":    fmt.Sprintf(`{"text":"%s"}`, escapeJSON(content)),
+		"content":    string(contentJSON),
 	}
 	return f.doAPI(ctx, "POST", "/open-apis/im/v1/messages?receive_id_type=chat_id", body)
 }
 
+// validateMessageID 验证消息 ID 只含安全字符，防止路径注入。
+func validateMessageID(id string) error {
+	for _, c := range id {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+			return fmt.Errorf("无效的消息 ID")
+		}
+	}
+	return nil
+}
+
 // EditMessage 编辑已发送的消息 (飞书卡片更新)。
 func (f *FeishuAdapter) EditMessage(ctx context.Context, chatID string, messageID string, content string) (*SendResult, error) {
+	if err := validateMessageID(messageID); err != nil {
+		return nil, err
+	}
 	// 飞书通过更新消息卡片来编辑
 	body := map[string]any{
 		"content": fmt.Sprintf(`{"text":"%s"}`, escapeJSON(content)),
@@ -99,6 +113,9 @@ func (f *FeishuAdapter) EditMessage(ctx context.Context, chatID string, messageI
 
 // DeleteMessage 删除消息。
 func (f *FeishuAdapter) DeleteMessage(ctx context.Context, chatID string, messageID string) error {
+	if err := validateMessageID(messageID); err != nil {
+		return err
+	}
 	_, err := f.doAPI(ctx, "DELETE", "/open-apis/im/v1/messages/"+messageID, nil)
 	return err
 }
@@ -162,6 +179,9 @@ func (f *FeishuAdapter) ReplyMessage(ctx context.Context, messageID string, cont
 // 由外部 HTTP 服务器调用。
 // Deprecated: 使用 ReceiveEventWithVerification 代替，以便验证请求签名。
 func (f *FeishuAdapter) ReceiveEvent(payload []byte) error {
+	if f.verificationToken != "" {
+		return fmt.Errorf("ReceiveEvent 已弃用，请使用 ReceiveEventWithVerification 并提供签名参数")
+	}
 	return f.receiveEventInternal(payload)
 }
 
@@ -389,7 +409,11 @@ func (f *FeishuAdapter) getTenantToken(ctx context.Context) (string, error) {
 	}
 
 	f.tenantToken = result.TenantAccessToken
-	f.tokenExpiry = time.Now().Add(time.Duration(result.Expire-60) * time.Second)
+	buffer := 60
+	if result.Expire < buffer {
+		buffer = result.Expire / 2
+	}
+	f.tokenExpiry = time.Now().Add(time.Duration(result.Expire-buffer) * time.Second)
 	return f.tenantToken, nil
 }
 

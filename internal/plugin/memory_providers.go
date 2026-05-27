@@ -115,7 +115,7 @@ func (p *HonchoProvider) Prefetch(ctx context.Context, query string) (string, er
 	var result struct {
 		Context string `json:"context"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result)
 	return result.Context, nil
 }
 
@@ -223,7 +223,7 @@ func (p *Mem0Provider) Prefetch(ctx context.Context, query string) (string, erro
 			Memory string `json:"memory"`
 		} `json:"memories"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result)
 
 	var memories []string
 	for _, m := range result.Memories {
@@ -333,7 +333,7 @@ func (p *SupermemoryProvider) Prefetch(ctx context.Context, query string) (strin
 			Content string `json:"content"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result); err != nil {
 		return "", nil
 	}
 

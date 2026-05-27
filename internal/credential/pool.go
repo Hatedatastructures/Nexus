@@ -5,9 +5,10 @@ package credential
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"log/slog"
-	"math/rand"
 	"sync"
 )
 
@@ -31,11 +32,12 @@ type Credential struct {
 // 支持多凭证、轮换策略、故障转移。
 // 线程安全: 所有公开方法使用 sync.RWMutex 保护。
 type Pool struct {
-	mu          sync.RWMutex
-	credentials []Credential
-	strategy    string // 选择策略: fill_first / round_robin / random / least_used
-	cursor      int    // round_robin 游标
-	useCounts   []int  // 每个凭证的使用计数 (least_used 策略)
+	mu             sync.RWMutex
+	credentials    []Credential
+	strategy       string // 选择策略: fill_first / round_robin / random / least_used
+	cursor         int    // round_robin 游标
+	useCounts      []int  // 每个凭证的使用计数 (least_used 策略)
+	lastSelectedIdx int   // 上次选择的凭证索引 (用于 MarkExhausted)
 }
 
 // NewPool 创建凭证池
@@ -44,6 +46,13 @@ func NewPool() *Pool {
 		credentials: nil,
 		strategy:    "fill_first",
 	}
+}
+
+// cryptoRandIntn 使用 crypto/rand 生成 [0, n) 范围内的随机整数。
+func cryptoRandIntn(n int) int {
+	b := make([]byte, 4)
+	_, _ = crand.Read(b)
+	return int(binary.BigEndian.Uint32(b[:])) % n
 }
 
 // SetStrategy 设置凭证选择策略。
@@ -99,6 +108,7 @@ func (p *Pool) Select() *Credential {
 	case "least_used":
 		return p.selectLeastUsed()
 	default: // fill_first 及未知策略
+		p.lastSelectedIdx = 0
 		return &p.credentials[0]
 	}
 }
@@ -109,14 +119,16 @@ func (p *Pool) selectRoundRobin() *Credential {
 	idx := p.cursor % len(p.credentials)
 	p.cursor = (p.cursor + 1) % len(p.credentials)
 	p.useCounts[idx]++
+	p.lastSelectedIdx = idx
 	return &p.credentials[idx]
 }
 
 // selectRandom 随机选择一个凭证。
 // 必须在持有 p.mu 锁的情况下调用。
 func (p *Pool) selectRandom() *Credential {
-	idx := rand.Intn(len(p.credentials))
+	idx := cryptoRandIntn(len(p.credentials))
 	p.useCounts[idx]++
+	p.lastSelectedIdx = idx
 	return &p.credentials[idx]
 }
 
@@ -133,6 +145,7 @@ func (p *Pool) selectLeastUsed() *Credential {
 		}
 	}
 	p.useCounts[minIdx]++
+	p.lastSelectedIdx = minIdx
 	return &p.credentials[minIdx]
 }
 
@@ -168,8 +181,8 @@ func (p *Pool) MarkExhausted(ctx context.Context, statusCode int, errorMsg strin
 		targetIdx = (p.cursor - 1 + len(p.credentials)) % len(p.credentials)
 	case "fill_first":
 		targetIdx = 0
-	default: // random, least_used: 无法确定，移除第一个
-		targetIdx = 0
+	default: // random, least_used: 使用上次选择的索引
+		targetIdx = p.lastSelectedIdx
 	}
 
 	// 至少保留一个凭证
@@ -183,6 +196,9 @@ func (p *Pool) MarkExhausted(ctx context.Context, statusCode int, errorMsg strin
 
 	// round_robin 策略下调整 cursor
 	if p.strategy == "round_robin" {
+		if targetIdx < p.cursor {
+			p.cursor--
+		}
 		if p.cursor >= len(p.credentials) {
 			p.cursor = 0
 		}
@@ -196,7 +212,7 @@ func (p *Pool) MarkExhausted(ctx context.Context, statusCode int, errorMsg strin
 		p.useCounts[idx]++
 		return &p.credentials[idx]
 	case "random":
-		idx := rand.Intn(len(p.credentials))
+		idx := cryptoRandIntn(len(p.credentials))
 		p.useCounts[idx]++
 		return &p.credentials[idx]
 	case "least_used":

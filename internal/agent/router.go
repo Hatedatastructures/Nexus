@@ -388,8 +388,11 @@ func RetryDelay(statusCode int) time.Duration {
 
 // ExponentialBackoff 计算指数退避等待时间。
 func ExponentialBackoff(attempt int, base time.Duration, max time.Duration) time.Duration {
+	if max <= 0 {
+		max = 30 * time.Second
+	}
 	delay := time.Duration(float64(base) * math.Pow(2, float64(attempt)))
-	if delay > max {
+	if delay > max || delay < 0 {
 		return max
 	}
 	return delay

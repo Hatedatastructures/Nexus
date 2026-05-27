@@ -101,12 +101,13 @@ type QQBotAdapter struct {
 	connected   bool
 
 	// 并发控制
-	mu            sync.Mutex
-	closeOnce     sync.Once
-	dedup         *qqbotDeduplicator
-	pendingResps  map[string]chan map[string]any
-	seqNo         int64
-	lastHeartbeat time.Time
+	mu              sync.Mutex
+	closeOnce       sync.Once
+	dedup           *qqbotDeduplicator
+	pendingResps    map[string]chan map[string]any
+	seqNo           int64
+	lastHeartbeat   time.Time
+	heartbeatCancel context.CancelFunc
 
 	// HTTP 客户端
 	httpClient *http.Client
@@ -311,7 +312,11 @@ func (a *QQBotAdapter) connectWebSocket(ctx context.Context, gatewayURL string, 
 			delay := backoff[min(backoffIdx, len(backoff)-1)]
 			backoffIdx++
 			slog.Warn("[QQBot] WebSocket connection failed", "err", err, "retry_after", delay)
-			time.Sleep(delay)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(delay):
+				}
 
 			// 刷新 token
 			if err := a.getAccessToken(ctx); err != nil {
@@ -356,8 +361,13 @@ func (a *QQBotAdapter) connectWebSocket(ctx context.Context, gatewayURL string, 
 			a.sendResume(conn)
 		}
 
-		// 启动心跳
-		go a.heartbeatLoop()
+		// 启动心跳（先取消旧的）
+		if a.heartbeatCancel != nil {
+			a.heartbeatCancel()
+		}
+		hbCtx, hbCancel := context.WithCancel(ctx)
+		a.heartbeatCancel = hbCancel
+		go a.heartbeatLoop(hbCtx)
 
 		// 监听消息
 		a.listenLoop(msgCh)
@@ -661,12 +671,14 @@ func (a *QQBotAdapter) onDirectMessage(d map[string]any, msgCh chan *MessageEven
 }
 
 // heartbeatLoop 发送心跳。
-func (a *QQBotAdapter) heartbeatLoop() {
+func (a *QQBotAdapter) heartbeatLoop(ctx context.Context) {
 	ticker := time.NewTicker(qqbotHeartbeatInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-ticker.C:
 			a.mu.Lock()
 			running := a.running
@@ -696,6 +708,11 @@ func (a *QQBotAdapter) heartbeatLoop() {
 func (a *QQBotAdapter) Send(ctx context.Context, chatID string, content string, opts *SendOptions) (*SendResult, error) {
 	if chatID == "" {
 		return &SendResult{Success: false, Error: "chat_id 是必填项"}, nil
+	}
+
+	// 验证 chatID/groupOpenID 只含安全字符
+	if err := validateChatID(chatID); err != nil {
+		return nil, err
 	}
 
 	// 确定是私聊还是群聊
@@ -1055,4 +1072,14 @@ func init() {
 
 func generateMsgID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+// validateChatID 验证 chatID/groupOpenID 只含安全字符，防止路径注入。
+func validateChatID(id string) error {
+	for _, c := range id {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == ':') {
+			return fmt.Errorf("无效的 chat ID")
+		}
+	}
+	return nil
 }

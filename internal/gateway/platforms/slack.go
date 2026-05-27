@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -31,7 +32,8 @@ type SlackAdapter struct {
 	// Socket Mode WebSocket 状态
 	ws        *websocket.Conn
 	wsMu      sync.Mutex
-	closeOnce sync.Once // 确保 msgCh 只关闭一次
+	closeOnce sync.Once //
+	stopped   atomic.Bool // 确保 msgCh 只关闭一次
 }
 
 // NewSlackAdapter 创建 Slack 适配器。
@@ -67,6 +69,7 @@ func (s *SlackAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error
 
 // Disconnect 关闭消息通道。
 func (s *SlackAdapter) Disconnect(ctx context.Context) error {
+	s.stopped.Store(true)
 	s.closeOnce.Do(func() {
 		close(s.msgCh)
 	})
@@ -315,6 +318,9 @@ func (s *SlackAdapter) handleEventsAPI(envelope *struct {
 		},
 	}
 
+	if s.stopped.Load() {
+		return
+	}
 	select {
 	case s.msgCh <- msgEvent:
 	default:

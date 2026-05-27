@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -248,7 +249,7 @@ func (a *FeishuCommentAdapter) refreshAccessToken(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	var result map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&result); err != nil {
 		return err
 	}
 
@@ -294,7 +295,7 @@ func (a *FeishuCommentAdapter) refreshAccessTokenLocked(ctx context.Context) {
 	defer resp.Body.Close()
 
 	var result map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&result); err != nil {
 		slog.Warn("[Feishu Comment] refreshAccessTokenLocked: decode failed", "err", err)
 		return
 	}
@@ -324,7 +325,8 @@ func (a *FeishuCommentAdapter) replyComment(ctx context.Context, fileToken, comm
 	token := a.accessToken
 	a.tokenMu.Unlock()
 
-	apiURL := fmt.Sprintf("https://open.feishu.cn/open-apis/drive/v1/files/%s/comments/%s/replies", fileToken, commentID)
+	apiURL := fmt.Sprintf("https://open.feishu.cn/open-apis/drive/v1/files/%s/comments/%s/replies",
+		url.PathEscape(fileToken), url.PathEscape(commentID))
 
 	payload := map[string]any{
 		"content": map[string]any{
@@ -355,7 +357,7 @@ func (a *FeishuCommentAdapter) replyComment(ctx context.Context, fileToken, comm
 	defer resp.Body.Close()
 
 	var result map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&result); err != nil {
 		return err
 	}
 

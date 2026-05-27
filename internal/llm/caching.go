@@ -60,17 +60,29 @@ func ApplyCacheControl(messages []Message, model string) []Message {
 	cachePointCount := 0
 	maxCachePoints := 4 // Anthropic 最多 4 个缓存断点
 
+	lastUserIdx := -1
+	for i := len(result) - 1; i >= 0; i-- {
+		if result[i].Role == RoleUser {
+			lastUserIdx = i
+			break
+		}
+	}
+
 	for i := range result {
 		msg := &result[i]
 
-		// 系统提示词：标记缓存
 		if msg.Role == RoleSystem && cachePointCount < maxCachePoints {
 			msg.Content = addAnthropicCacheControl(msg.Content)
 			cachePointCount++
 			continue
 		}
 
-		// 对最后一条用户消息之前的内容标记缓存断点
+		if i < lastUserIdx && (msg.Role == RoleUser || msg.Role == RoleAssistant) && cachePointCount < maxCachePoints {
+			msg.Content = addAnthropicCacheControl(msg.Content)
+			cachePointCount++
+			continue
+		}
+
 		if cachePointCount >= maxCachePoints {
 			break
 		}

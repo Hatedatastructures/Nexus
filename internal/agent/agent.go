@@ -153,6 +153,11 @@ func (a *AIAgent) Shutdown() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	// 停止 ProviderRouter 健康检查协程
+	if a.router != nil {
+		a.router.Stop()
+	}
+
 	// 清空内部消息缓存
 	a.messages = nil
 	a.cachedSystemPrompt = ""

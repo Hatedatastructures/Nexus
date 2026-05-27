@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,7 +22,8 @@ import (
 // 支持 Telegram、Discord、Slack、飞书、钉钉、微信等平台。
 // 通过各平台的 HTTP API 直接发送，无需依赖网关适配器实例。
 type SendMessageTool struct {
-	client *http.Client
+	client     *http.Client
+	clientOnce sync.Once
 }
 
 // Name 返回工具名称。
@@ -108,9 +110,9 @@ func (t *SendMessageTool) Execute(ctx context.Context, args map[string]any) (str
 	threadID, _ := args["thread_id"].(string)
 	parseMode, _ := args["parse_mode"].(string)
 
-	if t.client == nil {
+	t.clientOnce.Do(func() {
 		t.client = &http.Client{Timeout: 30 * time.Second}
-	}
+	})
 
 	var result map[string]any
 	var err error
@@ -237,6 +239,13 @@ func (t *SendMessageTool) sendDiscord(ctx context.Context, chatID, message, thre
 	}
 	if threadID != "" {
 		body["channel_id"] = threadID
+	}
+
+	// 验证 chatID 格式 (Discord 频道 ID 仅含数字)
+	for _, c := range chatID {
+		if c < '0' || c > '9' {
+			return nil, fmt.Errorf("无效的 Discord 频道 ID")
+		}
 	}
 
 	url := "https://discord.com/api/v10/channels/" + chatID + "/messages"
@@ -414,7 +423,7 @@ func (t *SendMessageTool) getFeishuToken(ctx context.Context, appID, appSecret s
 		Msg               string `json:"msg"`
 		TenantAccessToken string `json:"tenant_access_token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&tokenResp); err != nil {
 		return "", err
 	}
 	if tokenResp.Code != 0 {
@@ -598,7 +607,7 @@ func (t *SendMessageTool) getWeChatToken(ctx context.Context, appID, appSecret s
 		ErrCode     int    `json:"errcode"`
 		ErrMsg      string `json:"errmsg"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&tokenResp); err != nil {
 		return "", err
 	}
 	if tokenResp.ErrCode != 0 {

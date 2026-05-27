@@ -30,7 +30,7 @@ var (
 )
 
 // ensureBrowserLocked 确保浏览器实例已启动（调用方持有 browserMu）。
-func ensureBrowserLocked() error {
+func ensureBrowserLocked(ctx context.Context) error {
 	if browserReady && browserInstance != nil {
 		return nil
 	}
@@ -40,7 +40,7 @@ func ensureBrowserLocked() error {
 	// 优先使用 Browserbase 云浏览器（如果配置了环境变量）
 	if cfg, ok := loadBrowserbaseConfig(); ok {
 		slog.Info("Browserbase config detected, using cloud browser")
-		sess, err := NewBrowserbaseSession(context.Background(), cfg)
+		sess, err := NewBrowserbaseSession(ctx, cfg)
 		if err != nil {
 			return fmt.Errorf("创建 Browserbase 会话失败: %w", err)
 		}
@@ -100,7 +100,7 @@ func ensureBrowserLocked() error {
 func ensureBrowser() error {
 	browserMu.Lock()
 	defer browserMu.Unlock()
-	return ensureBrowserLocked()
+	return ensureBrowserLocked(context.Background())
 }
 
 // getBrowser 返回浏览器实例。
@@ -116,15 +116,13 @@ func getPage() (*rod.Page, error) {
 	browserMu.Lock()
 	defer browserMu.Unlock()
 
-	if err := ensureBrowserLocked(); err != nil {
+	if err := ensureBrowserLocked(context.Background()); err != nil {
 		return nil, err
 	}
 
 	if pageInstance != nil {
 		// 检查页面是否仍然有效
-		_, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_, evalErr := pageInstance.Eval(`() => document.title`)
+		_, evalErr := pageInstance.Timeout(2 * time.Second).Eval(`() => document.title`)
 		if evalErr == nil {
 			return pageInstance, nil
 		}

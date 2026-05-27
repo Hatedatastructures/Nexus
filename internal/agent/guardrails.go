@@ -4,7 +4,9 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
+	"sort"
 	"sync"
 	"time"
 )
@@ -203,11 +205,25 @@ func serializeArgs(args map[string]any) string {
 	if args == nil {
 		return "{}"
 	}
-	data, err := json.Marshal(args)
-	if err != nil {
-		return "{}"
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
 	}
-	return string(data)
+	sort.Strings(keys)
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		key, _ := json.Marshal(k)
+		val, _ := json.Marshal(args[k])
+		buf.Write(key)
+		buf.WriteByte(':')
+		buf.Write(val)
+	}
+	buf.WriteByte('}')
+	return buf.String()
 }
 
 // itoa 简单的整数转字符串 (避免引入 strconv 包)。

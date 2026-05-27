@@ -13,6 +13,7 @@ import (
 	"math/rand"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -36,7 +37,9 @@ type DiscordAdapter struct {
 	ws         *websocket.Conn  // 当前 WebSocket 连接
 	wsMu       sync.Mutex       // WebSocket 连接锁
 	stateMu    sync.RWMutex     // 网关状态锁 (保护 lastSeq, sessionID, heartbeatInterval)
-	closeOnce  sync.Once        // 确保 msgCh 只关闭一次
+	wsRetryDelay  time.Duration   //
+	closeOnce  sync.Once        //
+	stopped    atomic.Bool      // 确保 msgCh 只关闭一次
 }
 
 // NewDiscordAdapter 创建 Discord 适配器。
@@ -73,6 +76,7 @@ func (d *DiscordAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, err
 
 // Disconnect 关闭消息通道。
 func (d *DiscordAdapter) Disconnect(ctx context.Context) error {
+	d.stopped.Store(true)
 	d.closeOnce.Do(func() {
 		close(d.msgCh)
 	})
@@ -169,16 +173,23 @@ func (d *DiscordAdapter) wsLoop(ctx context.Context) {
 
 		if err := d.connectGateway(ctx); err != nil {
 			slog.Warn("discord gateway connect failed", "err", err)
-			// 等待后重连
+			d.wsRetryDelay = d.wsRetryDelay * 2
+			if d.wsRetryDelay < 5*time.Second {
+				d.wsRetryDelay = 5 * time.Second
+			}
+			if d.wsRetryDelay > 60*time.Second {
+				d.wsRetryDelay = 60 * time.Second
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(5 * time.Second):
+			case <-time.After(d.wsRetryDelay):
 			}
 			continue
 		}
 
-		// 连接成功，等待关闭
+		// 连接成功，重置退避并等待关闭
+		d.wsRetryDelay = 0
 		<-ctx.Done()
 		d.closeWS()
 		return
@@ -262,6 +273,9 @@ func (d *DiscordAdapter) gatewayEventLoop(ctx context.Context, conn *websocket.C
 			}
 			d.stateMu.Lock()
 			d.heartbeatInterval = time.Duration(hello.HeartbeatInterval) * time.Millisecond
+			if d.heartbeatInterval < time.Second {
+				d.heartbeatInterval = 5 * time.Second
+			}
 			d.stateMu.Unlock()
 			slog.Debug("discord gateway hello received", "interval", d.heartbeatInterval)
 
@@ -427,6 +441,9 @@ func (d *DiscordAdapter) handleMessageCreate(raw json.RawMessage) {
 		},
 	}
 
+	if d.stopped.Load() {
+		return
+	}
 	select {
 	case d.msgCh <- event:
 	default:
@@ -519,7 +536,7 @@ func (d *DiscordAdapter) chatTypeFromChannelID(channelID string) string {
 	var ch struct {
 		Type int `json:"type"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&ch); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&ch); err != nil {
 		return "dm"
 	}
 

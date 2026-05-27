@@ -78,9 +78,13 @@ func getCamofoxSession(taskID string) *CamofoxSession {
 	}
 
 	// 创建新会话
+	suffix := taskID
+	if len(suffix) > 16 {
+		suffix = suffix[:16]
+	}
 	session := &CamofoxSession{
 		UserID:     fmt.Sprintf("nexus_%s", uuid.New().String()[:10]),
-		SessionKey: fmt.Sprintf("task_%s", taskID[:16]),
+		SessionKey: fmt.Sprintf("task_%s", suffix),
 		Managed:    false,
 	}
 	camofoxSessions[taskID] = session

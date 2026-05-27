@@ -137,10 +137,20 @@ func parseSinglePatch(content string) (PatchOperation, error) {
 	return op, nil
 }
 
+// ───────────────────────────── 沙箱路径解析 ─────────────────────────────
+
+// resolvePatchPath 当 env 非 nil 时，将相对路径约束到沙箱工作目录。
+func resolvePatchPath(path string, env sandbox.Environment) string {
+	if env != nil && env.CWD() != "" {
+		return filepath.Join(env.CWD(), path)
+	}
+	return path
+}
+
 // ───────────────────────────── 应用函数 ─────────────────────────────
 
 // ApplyOperations 将补丁操作应用到文件系统。
-// env 非 nil 时通过沙箱执行，否则直接操作本地文件系统。
+// env 非 nil 时通过沙箱工作目录约束路径，否则直接操作本地文件系统。
 func ApplyOperations(ops []PatchOperation, env sandbox.Environment) error {
 	for _, op := range ops {
 		// 验证路径安全性
@@ -175,8 +185,9 @@ func applyOperation(op PatchOperation, env sandbox.Environment) error {
 }
 
 func applyAdd(op PatchOperation, env sandbox.Environment) error {
+	fp := resolvePatchPath(op.FilePath, env)
 	if op.CreateDirs {
-		dir := filepath.Dir(op.FilePath)
+		dir := filepath.Dir(fp)
 		if dir != "" && dir != "." {
 			if err := os.MkdirAll(dir, 0755); err != nil {
 				return fmt.Errorf("创建目录失败: %w", err)
@@ -185,16 +196,17 @@ func applyAdd(op PatchOperation, env sandbox.Environment) error {
 	}
 
 	if !op.Overwrite {
-		if _, err := os.Stat(op.FilePath); err == nil {
+		if _, err := os.Stat(fp); err == nil {
 			return fmt.Errorf("文件已存在且未设置 overwrite")
 		}
 	}
 
-	return os.WriteFile(op.FilePath, []byte(op.NewText), 0644)
+	return os.WriteFile(fp, []byte(op.NewText), 0644)
 }
 
 func applyUpdate(op PatchOperation, env sandbox.Environment) error {
-	data, err := os.ReadFile(op.FilePath)
+	fp := resolvePatchPath(op.FilePath, env)
+	data, err := os.ReadFile(fp)
 	if err != nil {
 		return fmt.Errorf("读取文件失败: %w", err)
 	}
@@ -203,7 +215,7 @@ func applyUpdate(op PatchOperation, env sandbox.Environment) error {
 
 	if op.OldText == "" {
 		// 无旧文本: 替换整个文件
-		return os.WriteFile(op.FilePath, []byte(op.NewText), 0644)
+		return os.WriteFile(fp, []byte(op.NewText), 0644)
 	}
 
 	// 模糊匹配替换
@@ -212,18 +224,18 @@ func applyUpdate(op PatchOperation, env sandbox.Environment) error {
 		return fmt.Errorf("未找到匹配的旧文本")
 	}
 
-	return os.WriteFile(op.FilePath, []byte(replaced), 0644)
+	return os.WriteFile(fp, []byte(replaced), 0644)
 }
 
 func applyDelete(op PatchOperation, env sandbox.Environment) error {
-	return os.Remove(op.FilePath)
+	return os.Remove(resolvePatchPath(op.FilePath, env))
 }
 
 func applyMove(op PatchOperation, env sandbox.Environment) error {
 	if op.TargetPath == "" {
 		return fmt.Errorf("MOVE 操作缺少 target_path")
 	}
-	return os.Rename(op.FilePath, op.TargetPath)
+	return os.Rename(resolvePatchPath(op.FilePath, env), resolvePatchPath(op.TargetPath, env))
 }
 
 // ───────────────────────────── 模糊匹配 ─────────────────────────────

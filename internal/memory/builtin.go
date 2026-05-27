@@ -201,27 +201,23 @@ func tokenizeQuery(query string) []string {
 
 	words := strings.Fields(buf.String())
 	var tokens []string
+	seen := make(map[string]bool)
+	addToken := func(w string) {
+		if !seen[w] {
+			seen[w] = true
+			tokens = append(tokens, w)
+		}
+	}
 	for _, w := range words {
-		if len(w) >= 2 || len(w) == 1 {
-			// CJK 单字符也保留（一个汉字即有意义）
-			for _, r := range w {
-				if r >= 0x4e00 && r <= 0x9fff || r >= 0x3040 && r <= 0x30ff {
-					tokens = append(tokens, w)
-					break
-				}
+		isCJK := false
+		for _, r := range w {
+			if r >= 0x4e00 && r <= 0x9fff || r >= 0x3040 && r <= 0x30ff {
+				isCJK = true
+				break
 			}
-			if len(w) >= 2 {
-				already := false
-				for _, t := range tokens {
-					if t == w {
-						already = true
-						break
-					}
-				}
-				if !already {
-					tokens = append(tokens, w)
-				}
-			}
+		}
+		if isCJK || len(w) >= 2 {
+			addToken(w)
 		}
 	}
 	return tokens

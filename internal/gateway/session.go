@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"sync"
@@ -139,12 +140,17 @@ func (m *SessionManager) Size() int {
 }
 
 // StartAutoSweep 启动后台定期清理过期 session。
-func (m *SessionManager) StartAutoSweep(interval, maxIdle time.Duration) {
+func (m *SessionManager) StartAutoSweep(ctx context.Context, interval, maxIdle time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			m.SweepExpired(maxIdle)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.SweepExpired(maxIdle)
+			}
 		}
 	}()
 }

@@ -2,7 +2,10 @@
 // ThinkScrubber 从流式输出中分离思考内容 (<think> / <|thinking|> / <scratchpad> 标签)。
 package agent
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // ───────────────────────────── 思考标签配置 ─────────────────────────────
 
@@ -99,6 +102,15 @@ func (s *ThinkScrubber) Reset() {
 
 // ───────────────────────────── 状态机核心 ─────────────────────────────
 
+
+// firstRune returns the first rune of a string.
+func firstRune(s string) rune {
+	for _, r := range s {
+		return r
+	}
+	return 0
+}
+
 // processChar 处理单个字符, 返回用户可见的文本 (可能为空)。
 func (s *ThinkScrubber) processChar(ch rune) string {
 	switch s.state {
@@ -120,7 +132,7 @@ func (s *ThinkScrubber) processIdle(ch rune) string {
 	s.buffer = string(ch)
 
 	// 检查是否匹配开始标签的首字符
-	if s.openTag[0] == byte(ch) {
+	if firstRune(s.openTag) == ch {
 		if len(s.openTag) == 1 {
 			// 标签只有一个字符 (极端情况), 直接进入思考内容
 			s.buffer = ""
@@ -143,7 +155,7 @@ func (s *ThinkScrubber) processInTag(ch rune) string {
 	pos := len(s.buffer)
 
 	// 检查当前缓冲是否仍匹配开始标签前缀
-	if pos <= len(s.openTag) && s.openTag[:pos] == s.buffer {
+	if pos <= utf8.RuneCountInString(s.openTag) && string([]rune(s.openTag)[:pos]) == s.buffer {
 		if pos == len(s.openTag) {
 			// 完整匹配开始标签, 切换到思考内容状态
 			s.buffer = ""
@@ -166,7 +178,7 @@ func (s *ThinkScrubber) processInContent(ch rune) string {
 	s.buffer = string(ch)
 
 	// 检查是否匹配结束标签的首字符
-	if s.closeTag[0] == byte(ch) {
+	if firstRune(s.closeTag) == ch {
 		if len(s.closeTag) == 1 {
 			// 标签只有一个字符, 直接结束
 			s.buffer = ""
@@ -192,7 +204,7 @@ func (s *ThinkScrubber) processOutTag(ch rune) string {
 	pos := len(s.buffer)
 
 	// 检查当前缓冲是否仍匹配结束标签前缀
-	if pos <= len(s.closeTag) && s.closeTag[:pos] == s.buffer {
+	if pos <= utf8.RuneCountInString(s.closeTag) && string([]rune(s.closeTag)[:pos]) == s.buffer {
 		if pos == len(s.closeTag) {
 			// 完整匹配结束标签, 回到空闲状态
 			s.buffer = ""

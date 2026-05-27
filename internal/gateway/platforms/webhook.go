@@ -412,7 +412,7 @@ func isSafeURL(rawURL string) bool {
 	}
 	ips, err := net.LookupIP(host)
 	if err != nil {
-		return true
+		return false
 	}
 	for _, ip := range ips {
 		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {

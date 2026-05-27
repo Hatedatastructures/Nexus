@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"time"
 )
 
 // ───────────────────────────── OS 进程句柄 ─────────────────────────────
@@ -27,6 +26,10 @@ type OSProcessHandle struct {
 	stderrBuf *bytes.Buffer // 标准错误缓冲区
 	exitCode  *int          // 缓存退出码 (nil = 仍在运行)
 	killed    bool          // 是否已主动终止
+
+	waitOnce  sync.Once
+	waitState *os.ProcessState
+	waitErr   error
 }
 
 // ───────────────────────────── ProcessHandle 接口实现 ─────────────────────────────
@@ -48,6 +51,11 @@ func (h *OSProcessHandle) Poll() (*int, error) {
 
 	// 通过等待进程状态检查进程是否已退出 (跨平台)
 	// 不能使用 Signal(os.Kill)，因为它会实际发送 SIGKILL 杀死进程
+	if h.waitState != nil {
+		code := h.waitState.ExitCode()
+		h.exitCode = &code
+		return h.exitCode, nil
+	}
 	if h.cmd.ProcessState != nil {
 		code := h.cmd.ProcessState.ExitCode()
 		h.exitCode = &code
@@ -77,8 +85,10 @@ func (h *OSProcessHandle) Kill() error {
 		return fmt.Errorf("终止进程失败: %w", err)
 	}
 
-	// 等待进程退出
-	time.Sleep(100 * time.Millisecond)
+	// 等待进程退出（通过 sync.Once 确保只调用一次）
+	h.waitOnce.Do(func() {
+		h.waitState, h.waitErr = h.cmd.Process.Wait()
+	})
 
 	h.killed = true
 	slog.Info("process killed", "pid", pid)
@@ -102,12 +112,14 @@ func (h *OSProcessHandle) Wait(ctx context.Context) (int, error) {
 	var waitErr error
 
 	go func() {
-		state, err := h.process.Wait()
-		if err != nil {
-			waitErr = err
+		h.waitOnce.Do(func() {
+			h.waitState, h.waitErr = h.process.Wait()
+		})
+		if h.waitErr != nil {
+			waitErr = h.waitErr
 		}
-		if state != nil {
-			exitCode = state.ExitCode()
+		if h.waitState != nil {
+			exitCode = h.waitState.ExitCode()
 		}
 		close(done)
 	}()

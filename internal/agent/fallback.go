@@ -145,14 +145,21 @@ func (a *AIAgent) tryFallbackChain(ctx context.Context, err error, req *llm.Chat
 			"model", entry.model,
 		)
 
-		// 临时替换模型名称
-		originalModel := req.Model
-		req.Model = entry.model
+		// deep copy to avoid provider mutating shared slices/maps
+		reqCopy := *req
+		reqCopy.Model = entry.model
+		if req.Messages != nil {
+			reqCopy.Messages = make([]llm.Message, len(req.Messages))
+			copy(reqCopy.Messages, req.Messages)
+		}
+		if req.Metadata != nil {
+			reqCopy.Metadata = make(map[string]any, len(req.Metadata))
+			for k, v := range req.Metadata {
+				reqCopy.Metadata[k] = v
+			}
+		}
 
-		resp, tryErr := entry.provider.CreateChatCompletion(ctx, req)
-
-		// 恢复原始模型
-		req.Model = originalModel
+		resp, tryErr := entry.provider.CreateChatCompletion(ctx, &reqCopy)
 
 		if tryErr == nil {
 			slog.Info("fallback chain: provider succeeded",

@@ -209,8 +209,10 @@ func (a *BlueBubblesAdapter) safeSend(ch chan *MessageEvent, msg *MessageEvent) 
 			// channel 已关闭
 		}
 	}()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
 	select {
-	case <-time.After(5 * time.Second):
+	case <-timer.C:
 		return fmt.Errorf("send timeout")
 	case ch <- msg:
 		return nil

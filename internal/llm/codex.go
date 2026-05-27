@@ -109,9 +109,9 @@ func (t *CodexTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 }
 
 func (t *CodexTransport) ParseStream(ctx context.Context, body io.ReadCloser) <-chan *StreamDelta {
-	body.Close()
 	ch := make(chan *StreamDelta, 1)
-	ch <- &StreamDelta{Done: true}
+	ch <- &StreamDelta{Done: true, Error: fmt.Errorf("Codex Responses API does not support streaming, use non-streaming call")}
 	close(ch)
+	body.Close()
 	return ch
 }

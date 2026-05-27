@@ -208,12 +208,15 @@ func (c *Curator) scanSkills() error {
 		return nil
 	}
 
+	c.mu.Lock()
 	existing := make(map[string]bool)
 	for _, s := range c.state.Skills {
 		existing[s.Name] = true
 	}
+	c.mu.Unlock()
 
-	return filepath.Walk(c.skillsDir, func(path string, info os.FileInfo, err error) error {
+	var newSkills []CuratorSkill
+	err := filepath.Walk(c.skillsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -225,7 +228,7 @@ func (c *Curator) scanSkills() error {
 		name := filepath.Base(dir)
 
 		if !existing[name] {
-			c.state.Skills = append(c.state.Skills, CuratorSkill{
+			newSkills = append(newSkills, CuratorSkill{
 				Name:     name,
 				Path:     dir,
 				State:    SkillStateActive,
@@ -235,6 +238,15 @@ func (c *Curator) scanSkills() error {
 
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if len(newSkills) > 0 {
+		c.mu.Lock()
+		c.state.Skills = append(c.state.Skills, newSkills...)
+		c.mu.Unlock()
+	}
+	return nil
 }
 
 // WriteRunReport 生成策展报告。

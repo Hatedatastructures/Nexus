@@ -78,8 +78,9 @@ func (d *DingTalkAdapter) Disconnect(ctx context.Context) error {
 
 // Send 发送文本消息 (使用消息通知 API)。
 func (d *DingTalkAdapter) Send(ctx context.Context, chatID string, content string, opts *SendOptions) (*SendResult, error) {
+	msgParamJSON, _ := json.Marshal(map[string]string{"content": content})
 	body := map[string]any{
-		"msgParam": fmt.Sprintf(`{"content":"%s"}`, escapeJSONDing(content)),
+		"msgParam": string(msgParamJSON),
 		"msgKey":   "sampleText",
 		"openConversationId": chatID,
 		"robotCode": d.appKey,
@@ -89,6 +90,9 @@ func (d *DingTalkAdapter) Send(ctx context.Context, chatID string, content strin
 
 // EditMessage 钉钉支持流式更新 (通过 Stream AI 卡片方式)。
 func (d *DingTalkAdapter) EditMessage(ctx context.Context, chatID string, messageID string, content string) (*SendResult, error) {
+	if err := validateMessageID(messageID); err != nil {
+		return nil, err
+	}
 	// 钉钉的流式编辑通过更新 AI 流式卡片实现
 	body := map[string]any{
 		"msgParam": fmt.Sprintf(`{"content":"%s"}`, escapeJSONDing(content)),
@@ -100,6 +104,9 @@ func (d *DingTalkAdapter) EditMessage(ctx context.Context, chatID string, messag
 
 // DeleteMessage 钉钉支持撤回消息。
 func (d *DingTalkAdapter) DeleteMessage(ctx context.Context, chatID string, messageID string) error {
+	if err := validateMessageID(messageID); err != nil {
+		return err
+	}
 	body := map[string]string{
 		"openConversationId": chatID,
 		"processQueryKeys":   messageID,
@@ -115,8 +122,9 @@ func (d *DingTalkAdapter) SendTyping(ctx context.Context, chatID string) error {
 
 // SendImage 发送图片消息。
 func (d *DingTalkAdapter) SendImage(ctx context.Context, chatID string, imageURL string, caption string, opts *SendOptions) (*SendResult, error) {
+	imgParamJSON, _ := json.Marshal(map[string]string{"photoURL": imageURL, "title": caption})
 	body := map[string]any{
-		"msgParam": fmt.Sprintf(`{"photoURL":"%s","title":"%s"}`, imageURL, escapeJSONDing(caption)),
+		"msgParam": string(imgParamJSON),
 		"msgKey":   "samplePhotoMsg",
 		"openConversationId": chatID,
 	}
@@ -135,8 +143,9 @@ func (d *DingTalkAdapter) SendVoice(ctx context.Context, chatID string, audioPat
 
 // SendVideo 钉钉支持视频消息。
 func (d *DingTalkAdapter) SendVideo(ctx context.Context, chatID string, videoPath string, caption string, opts *SendOptions) (*SendResult, error) {
+	vidParamJSON, _ := json.Marshal(map[string]string{"videoURL": videoPath, "title": caption})
 	body := map[string]any{
-		"msgParam": fmt.Sprintf(`{"videoURL":"%s","title":"%s"}`, videoPath, escapeJSONDing(caption)),
+		"msgParam": string(vidParamJSON),
 		"msgKey":   "sampleVideoMsg",
 		"openConversationId": chatID,
 	}
@@ -145,8 +154,9 @@ func (d *DingTalkAdapter) SendVideo(ctx context.Context, chatID string, videoPat
 
 // SendDocument 发送文件消息。
 func (d *DingTalkAdapter) SendDocument(ctx context.Context, chatID string, filePath string, caption string, opts *SendOptions) (*SendResult, error) {
+	docParamJSON, _ := json.Marshal(map[string]string{"media_id": filePath, "title": caption})
 	body := map[string]any{
-		"msgParam": fmt.Sprintf(`{"media_id":"%s","title":"%s"}`, filePath, escapeJSONDing(caption)),
+		"msgParam": string(docParamJSON),
 		"msgKey":   "sampleFileMsg",
 		"openConversationId": chatID,
 	}
@@ -173,7 +183,11 @@ func (d *DingTalkAdapter) ReceiveCallback(payload []byte) error {
 			if subtle.ConstantTimeCompare([]byte(sign), []byte(expected)) != 1 {
 				return fmt.Errorf("钉钉回调签名验证失败")
 			}
+		} else {
+			return fmt.Errorf("钉钉回调缺少签名参数 (timestamp/sign)")
 		}
+	} else {
+		slog.Warn("[DingTalk] callbackSecret 未配置，回调签名验证被跳过")
 	}
 
 	// 检查是否为加密回调
@@ -374,7 +388,11 @@ func (d *DingTalkAdapter) getAccessToken(ctx context.Context) (string, error) {
 	}
 
 	d.accessToken = result.AccessToken
-	d.tokenExpiry = time.Now().Add(time.Duration(result.ExpireIn-60) * time.Second)
+	buffer := 60
+	if result.ExpireIn < buffer {
+		buffer = result.ExpireIn / 2
+	}
+	d.tokenExpiry = time.Now().Add(time.Duration(result.ExpireIn-buffer) * time.Second)
 
 	return d.accessToken, nil
 }

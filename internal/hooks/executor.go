@@ -51,7 +51,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, hook *ShellHook, event *Hoo
 	resp, err := parseResponse(stdout)
 	if err != nil {
 		slog.Warn("failed to parse hook response, defaulting to allow", "command", hook.Command(), "err", err)
-		return &HookResponse{Decision: "allow"}, nil
+		return &HookResponse{Decision: "block", Reason: "hook 响应解析失败"}, nil
 	}
 
 	// 补充默认 reason

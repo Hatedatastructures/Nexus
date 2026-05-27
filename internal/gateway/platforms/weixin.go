@@ -189,10 +189,18 @@ func (a *WeixinAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) 
 			slog.Warn("[Weixin] failed to fetch messages", "err", err, "consecutive", consecutiveFailures)
 
 			if consecutiveFailures >= weixinMaxConsecutiveFailures {
-				time.Sleep(time.Duration(weixinBackoffDelaySeconds) * time.Second)
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(time.Duration(weixinBackoffDelaySeconds) * time.Second):
+					}
 				consecutiveFailures = 0
 			} else {
-				time.Sleep(time.Duration(weixinRetryDelaySeconds) * time.Second)
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(time.Duration(weixinRetryDelaySeconds) * time.Second):
+					}
 			}
 			continue
 		}
@@ -420,10 +428,12 @@ func (a *WeixinAdapter) callAPI(ctx context.Context, endpoint string, body map[s
 	req.Header.Set("iLink-App-ClientVersion", "131072") // (2 << 16) | (2 << 8) | 0
 	req.Header.Set("X-WECHAT-UIN", generateWechatUIN())
 
-	// 设置超时
-	client := &http.Client{Timeout: time.Duration(timeoutMs) * time.Millisecond}
+	// 设置超时并复用连接池
+	ctx2, cancel2 := context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel2()
+	req = req.WithContext(ctx2)
 
-	resp, err := client.Do(req)
+	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 	}

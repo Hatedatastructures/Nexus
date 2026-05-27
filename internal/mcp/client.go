@@ -104,6 +104,7 @@ func (c *MCPClient) Connect(ctx context.Context, command string, args []string, 
 		c.mu.Lock()
 		c.connected = false
 		c.mu.Unlock()
+		c.cleanup()
 		return fmt.Errorf("MCP 初始化失败: %w", err)
 	}
 
@@ -132,6 +133,12 @@ func (c *MCPClient) startReader(ctx context.Context, stdout io.Reader) {
 	go func() {
 		reader := bufio.NewReader(stdout)
 		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				if err != io.EOF {
@@ -153,14 +160,28 @@ func (c *MCPClient) startReader(ctx context.Context, stdout io.Reader) {
 						ch, exists := c.pendingReqs[int64(id)]
 						c.mu.Unlock()
 						if exists {
-							ch <- &resp
+							func() {
+								defer func() {
+									if r := recover(); r != nil {
+										slog.Debug("MCP reader: channel already closed, discarding response")
+									}
+								}()
+								ch <- &resp
+							}()
 						}
 					} else if id, ok := resp.ID.(string); ok {
 						// 字符串 ID (不太常见)
 						c.mu.Lock()
 						for reqID, ch := range c.pendingReqs {
 							if fmt.Sprintf("%d", reqID) == id {
-								ch <- &resp
+								func() {
+									defer func() {
+										if r := recover(); r != nil {
+											slog.Debug("MCP reader: channel already closed, discarding response")
+										}
+									}()
+									ch <- &resp
+								}()
 								break
 							}
 						}
@@ -216,16 +237,8 @@ func (c *MCPClient) CallTool(ctx context.Context, name string, args map[string]a
 }
 
 // Disconnect 断开与 MCP 服务器的连接。
-func (c *MCPClient) Disconnect() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.connected {
-		return nil
-	}
-
-	c.connected = false
-
+// cleanup 清理子进程和资源。
+func (c *MCPClient) cleanup() {
 	if c.cancel != nil {
 		c.cancel()
 	}
@@ -236,7 +249,29 @@ func (c *MCPClient) Disconnect() error {
 
 	if c.cmd != nil {
 		c.cmd.Process.Kill()
+		c.cmd.Wait()
 	}
+
+	// 关闭所有等待中的响应通道
+	c.mu.Lock()
+	for id, ch := range c.pendingReqs {
+		close(ch)
+		delete(c.pendingReqs, id)
+	}
+	c.mu.Unlock()
+}
+
+func (c *MCPClient) Disconnect() error {
+	c.mu.Lock()
+	connected := c.connected
+	c.connected = false
+	c.mu.Unlock()
+
+	if !connected {
+		return nil
+	}
+
+	c.cleanup()
 
 	slog.Info("MCP client disconnected")
 	return nil
@@ -289,16 +324,16 @@ func (c *MCPClient) doRequest(ctx context.Context, method string, params map[str
 		return nil, fmt.Errorf("序列化请求失败: %w", err)
 	}
 
-	// 写入 stdin
+	// 写入 stdin（锁覆盖整个写入，防止并发消息交错）
 	c.mu.Lock()
 	stdin := c.stdin
-	c.mu.Unlock()
-
 	if stdin == nil {
+		c.mu.Unlock()
 		return nil, fmt.Errorf("stdin 管道未建立")
 	}
-
-	if _, err := fmt.Fprintln(stdin, string(data)); err != nil {
+	_, err = fmt.Fprintln(stdin, string(data))
+	c.mu.Unlock()
+	if err != nil {
 		return nil, fmt.Errorf("写入请求失败: %w", err)
 	}
 

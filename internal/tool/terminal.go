@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -101,6 +102,24 @@ func (t *TerminalTool) Schema() *ToolSchema {
 	}
 }
 
+// sanitizeLog 清理日志字符串中的控制字符。
+func sanitizeLog(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '\r':
+			b.WriteString("\\r")
+		case '\n':
+			b.WriteString("\\n")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+
 // Execute 执行终端命令。
 // 流程: 审批检查 → 构建执行选项 → sandbox.Execute() → 格式化结果。
 func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (string, error) {
@@ -116,10 +135,10 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (string
 		result, reason := checker.Check(ctx, command)
 		switch result {
 		case approval.Denied:
-			slog.Warn("terminal command denied by approval engine", "command", command, "reason", reason)
+			slog.Warn("terminal command denied by approval engine", "command", sanitizeLog(command), "reason", reason)
 			return ToolError(fmt.Sprintf("命令被拒绝: %s", reason)), nil
 		case approval.Pending:
-			slog.Warn("terminal command requires user approval", "command", command, "reason", reason)
+			slog.Warn("terminal command requires user approval", "command", sanitizeLog(command), "reason", reason)
 			return ToolError(fmt.Sprintf("命令需要审批: %s。请用户在终端确认后重试。", reason)), nil
 		}
 	}
@@ -151,7 +170,7 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (string
 		// 后台执行
 		handle, bgErr := env.ExecuteBackground(ctx, command, opts)
 		if bgErr != nil {
-			slog.Error("background command start failed", "command", command, "err", bgErr)
+			slog.Error("background command start failed", "command", sanitizeLog(command), "err", bgErr)
 			return ToolError(fmt.Sprintf("后台命令启动失败: %v", bgErr)), nil
 		}
 		// 后台命令返回进程句柄信息
@@ -167,7 +186,7 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (string
 	// 前台执行
 	result, err = env.Execute(ctx, command, opts)
 	if err != nil {
-		slog.Error("command execution error", "command", command, "err", err)
+		slog.Error("command execution error", "command", sanitizeLog(command), "err", err)
 		return ToolError(fmt.Sprintf("命令执行出错: %v", err)), nil
 	}
 

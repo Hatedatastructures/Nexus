@@ -95,6 +95,9 @@ func parseBucket(h http.Header, limitKey, remainingKey, resetKey string) RateLim
 			if bucket.ResetSecs > 1e10 {
 				bucket.ResetSecs = bucket.ResetSecs - float64(time.Now().Unix())
 			}
+			if bucket.ResetSecs < 0 {
+				bucket.ResetSecs = 0
+			}
 		}
 	}
 

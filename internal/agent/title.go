@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"nexus-agent/internal/llm"
 	"nexus-agent/internal/state"
@@ -93,17 +94,20 @@ func MaybeAutoTitle(ctx context.Context, provider llm.Provider, store *state.Sto
 				slog.Warn("auto title generation panic", "session_id", sessionID, "panic", r)
 			}
 		}()
-		title, err := GenerateTitle(ctx, provider, messages)
+		titleCtx, titleCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer titleCancel()
+
+		title, err := GenerateTitle(titleCtx, provider, messages)
 		if err != nil {
 			slog.Warn("auto title generation failed", "session_id", sessionID, "err", err)
 			return
 		}
 		if title != "" {
 			// 重新获取 session 避免跨 goroutine 指针竞争
-			sess, err := store.GetSession(ctx, sessionID)
+			sess, err := store.GetSession(titleCtx, sessionID)
 			if err == nil && sess != nil {
 				sess.Title = title
-				if err := store.UpdateSession(ctx, sess); err != nil {
+				if err := store.UpdateSession(titleCtx, sess); err != nil {
 					slog.Warn("save title failed", "session_id", sessionID, "err", err)
 				}
 			}

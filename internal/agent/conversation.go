@@ -319,13 +319,7 @@ if err := a.persister.RecordPromptHistory(userMessage); err != nil {
 					)
 				}
 			}()
-			memCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			select {
-			case <-memCtx.Done():
-			default:
-				a.memoryManager.SystemPromptBlock()
-			}
+			a.memoryManager.SystemPromptBlock()
 		}()
 	}
 
@@ -639,6 +633,15 @@ func (a *AIAgent) handleStreamCall(ctx context.Context, req *llm.ChatRequest) (*
 		}
 
 		if delta.Done {
+			if len(delta.ToolCalls) > 0 {
+				toolCalls = delta.ToolCalls
+			}
+			if delta.Usage != nil {
+				finalUsage = delta.Usage
+			}
+			if delta.Reasoning != "" {
+				reasoningBuilder.WriteString(delta.Reasoning)
+			}
 			break
 		}
 

@@ -75,6 +75,7 @@ type LLMProvider interface {
 // OpenRouterProvider OpenRouter 提供者。
 type OpenRouterProvider struct {
 	apiKey string
+	client *http.Client
 }
 
 // Call 调用 OpenRouter API。
@@ -103,8 +104,10 @@ func (p *OpenRouterProvider) Call(ctx context.Context, model string, systemPromp
 	req.Header.Set("HTTP-Referer", "https://github.com/nexus-agent")
 	req.Header.Set("X-Title", "Nexus Agent")
 
-	client := &http.Client{Timeout: moaDefaultTimeout}
-	resp, err := client.Do(req)
+	if p.client == nil {
+		p.client = &http.Client{Timeout: moaDefaultTimeout}
+	}
+	resp, err := p.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("HTTP 请求失败: %w", err)
 	}

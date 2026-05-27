@@ -118,8 +118,10 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (strin
 			results, err = t.searchExa(ctx, apiKey, query, numResults)
 		} else if apiKey := os.Getenv("FIRECRAWL_API_KEY"); apiKey != "" {
 			results, err = t.searchFirecrawl(ctx, apiKey, query, numResults)
+		} else if apiKey := os.Getenv("PARALLEL_API_KEY"); apiKey != "" {
+			results, err = t.searchParallel(ctx, apiKey, query, numResults)
 		} else {
-			return ToolError("未配置搜索后端。请设置 TAVILY_API_KEY / EXA_API_KEY / FIRECRAWL_API_KEY 环境变量。"), nil
+			return ToolError("未配置搜索后端。请设置 TAVILY_API_KEY / EXA_API_KEY / FIRECRAWL_API_KEY / PARALLEL_API_KEY 环境变量。"), nil
 		}
 	}
 
@@ -173,7 +175,7 @@ func (t *WebSearchTool) searchTavily(ctx context.Context, apiKey, query string, 
 			Content string `json:"content"`
 		} `json:"results"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result); err != nil {
 		return nil, err
 	}
 
@@ -233,7 +235,7 @@ func (t *WebSearchTool) searchExa(ctx context.Context, apiKey, query string, num
 			Text    string `json:"text"`
 		} `json:"results"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result); err != nil {
 		return nil, err
 	}
 
@@ -283,7 +285,7 @@ func (t *WebSearchTool) searchFirecrawl(ctx context.Context, apiKey, query strin
 			Content string `json:"content"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result); err != nil {
 		return nil, err
 	}
 
@@ -332,7 +334,7 @@ func (t *WebSearchTool) searchParallel(ctx context.Context, apiKey, query string
 			Content string `json:"content"`
 		} `json:"results"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result); err != nil {
 		return nil, err
 	}
 
@@ -467,7 +469,7 @@ func (t *WebCrawlTool) Execute(ctx context.Context, args map[string]any) (string
 		} `json:"data"`
 		Total int `json:"total"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result); err != nil {
 		return ToolError(fmt.Sprintf("解析响应失败: %v", err)), nil
 	}
 
@@ -732,10 +734,11 @@ func stripHTMLTags(html string) string {
 
 // truncateString 截断字符串到指定长度。
 func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "\n...[内容已截断]"
+	return string(runes[:maxLen]) + "\n...[内容已截断]"
 }
 
 // ───────────────────────────── init 注册 ─────────────────────────────

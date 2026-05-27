@@ -134,7 +134,7 @@ func (t *BrowserSuperviseTool) Execute(ctx context.Context, args map[string]any)
 		select {
 		case <-ctx.Done():
 			slog.Info("supervision cancelled by context", "completed_checks", len(checks))
-			break
+			goto done
 		default:
 		}
 

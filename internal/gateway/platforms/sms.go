@@ -82,6 +82,9 @@ func (a *SMSAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error) 
 
 	go func() {
 		addr := fmt.Sprintf(":%d", a.webhookPort)
+		if a.webhookPort != 443 && a.webhookPort != 8443 {
+			slog.Warn("[SMS] webhook 使用 HTTP，建议启用 TLS", "addr", addr)
+		}
 		slog.Info("[SMS] webhook server started", "addr", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
 			slog.Error("[SMS] webhook server failed", "err", err)
@@ -137,7 +140,7 @@ func (a *SMSAdapter) Send(ctx context.Context, chatID string, content string, op
 	}
 
 	var result map[string]any
-	json.NewDecoder(resp.Body).Decode(&result)
+	json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&result)
 
 	messageSID := ""
 	if sid, ok := result["sid"].(string); ok {

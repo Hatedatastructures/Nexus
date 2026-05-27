@@ -176,7 +176,11 @@ func (a *SignalAdapter) sseListener(ctx context.Context, msgCh chan *MessageEven
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
 			slog.Warn("[Signal] failed to create request", "err", err)
-			time.Sleep(5 * time.Second)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
 			continue
 		}
 
@@ -185,7 +189,11 @@ func (a *SignalAdapter) sseListener(ctx context.Context, msgCh chan *MessageEven
 		resp, err := a.httpClient.Do(req)
 		if err != nil {
 			slog.Warn("[Signal] SSE connection failed", "err", err)
-			time.Sleep(5 * time.Second)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
 			continue
 		}
 
@@ -194,13 +202,17 @@ func (a *SignalAdapter) sseListener(ctx context.Context, msgCh chan *MessageEven
 		resp.Body.Close()
 
 		// 连接断开，重连
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
 	}
 }
 
 // parseSSEStream 解析 SSE 流。
 func (a *SignalAdapter) parseSSEStream(body io.ReadCloser, msgCh chan *MessageEvent) {
-	decoder := json.NewDecoder(body)
+	decoder := json.NewDecoder(io.LimitReader(body, 100<<20))
 
 	for {
 		a.mu.Lock()
@@ -331,11 +343,16 @@ func (a *SignalAdapter) markSentTimestamp(ts int64) {
 
 	a.sentTimestamps[ts] = true
 
-	// 清理超过上限的条目
+	// 清理超过上限的条目：删除超过一半的旧记录
 	if len(a.sentTimestamps) > signalDedupMaxSize {
+		deleteCount := len(a.sentTimestamps) / 2
+		deleted := 0
 		for key := range a.sentTimestamps {
 			delete(a.sentTimestamps, key)
-			break
+			deleted++
+			if deleted >= deleteCount {
+				break
+			}
 		}
 	}
 }
@@ -385,58 +402,50 @@ func (a *SignalAdapter) Send(ctx context.Context, chatID string, content string,
 // convertMarkdownToSignal 转换 Markdown 为 Signal 样式。
 func (a *SignalAdapter) convertMarkdownToSignal(content string) (string, []map[string]any) {
 	var bodyRanges []map[string]any
-	result := content
-
-	// 处理 **bold**
-	for {
-		idx := strings.Index(result, "**")
-		if idx == -1 {
-			break
+	var result strings.Builder
+	runes := []rune(content)
+	i := 0
+	for i < len(runes) {
+		// Bold: **text**
+		if i+1 < len(runes) && runes[i] == '*' && runes[i+1] == '*' {
+			end := strings.Index(string(runes[i+2:]), "**")
+			if end != -1 {
+				end += i + 2
+				start := result.Len()
+				result.WriteString(string(runes[i+2 : end]))
+				bodyRanges = append(bodyRanges, map[string]any{
+					"start":  start,
+					"length": end - i - 2,
+					"style":  "BOLD",
+				})
+				i = end + 2
+				continue
+			}
 		}
-		endIdx := strings.Index(result[idx+2:], "**")
-		if endIdx == -1 {
-			break
+		// Italic: *text*
+		if runes[i] == '*' && (i+1 >= len(runes) || runes[i+1] != '*') {
+			if i > 0 && runes[i-1] == '*' {
+				i++
+				continue
+			}
+			end := strings.Index(string(runes[i+1:]), "*")
+			if end != -1 {
+				end += i + 1
+				start := result.Len()
+				result.WriteString(string(runes[i+1 : end]))
+				bodyRanges = append(bodyRanges, map[string]any{
+					"start":  start,
+					"length": end - i - 1,
+					"style":  "ITALIC",
+				})
+				i = end + 1
+				continue
+			}
 		}
-		endIdx += idx + 2
-
-		// 记录样式范围
-		bodyRanges = append(bodyRanges, map[string]any{
-			"start": idx,
-			"length": endIdx - idx - 2,
-			"style": "BOLD",
-		})
-
-		// 去除 ** 标记
-		result = result[:idx] + result[idx+2:endIdx] + result[endIdx+2:]
+		result.WriteRune(runes[i])
+		i++
 	}
-
-	// 处理 *italic*
-	for {
-		idx := strings.Index(result, "*")
-		if idx == -1 {
-			break
-		}
-		// 检查是否是 ** 的残留
-		if idx > 0 && result[idx-1] == '*' {
-			result = result[:idx-1] + result[idx:]
-			continue
-		}
-		endIdx := strings.Index(result[idx+1:], "*")
-		if endIdx == -1 {
-			break
-		}
-		endIdx += idx + 1
-
-		bodyRanges = append(bodyRanges, map[string]any{
-			"start": idx,
-			"length": endIdx - idx - 1,
-			"style": "ITALIC",
-		})
-
-		result = result[:idx] + result[idx+1:endIdx] + result[endIdx+1:]
-	}
-
-	return result, bodyRanges
+	return result.String(), bodyRanges
 }
 
 // SendImage 发送图片。

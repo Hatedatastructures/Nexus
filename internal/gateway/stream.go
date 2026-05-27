@@ -176,13 +176,14 @@ func (s *StreamConsumer) Finish(ctx context.Context) string {
 			return s.currentMsgID
 		}
 
-		slog.Warn("stream consumer final edit failed, falling back to send",
+		slog.Warn("stream consumer final edit failed, keeping partial message",
 			"chat_id", s.chatID,
 			"err", err,
 		)
+		return s.currentMsgID
 	}
 
-	// 回退: 发送新消息
+	// 仅在从未发送过消息时发送新消息
 	result, err := s.adapter.Send(ctx, s.chatID, finalText, nil)
 	if err != nil {
 		slog.Error("stream consumer final send failed",

@@ -61,6 +61,9 @@ func (s *Store) executeWrite(ctx context.Context, fn func(*sql.DB) error) error 
 
 		// 提交
 		_, err = s.db.ExecContext(ctx, "COMMIT")
+
+		s.writeCount++
+		needCheckpoint := s.writeCount%checkpointEvery == 0
 		s.mu.Unlock()
 
 		if err != nil {
@@ -72,10 +75,7 @@ func (s *Store) executeWrite(ctx context.Context, fn func(*sql.DB) error) error 
 			return fmt.Errorf("COMMIT 失败: %w", err)
 		}
 
-		// 成功 —— 定期执行尽力而为的 WAL checkpoint
-		// writeCount 已移入 Store 结构体，在 s.mu 保护下递增，无需额外同步
-		s.writeCount++
-		if s.writeCount%checkpointEvery == 0 {
+		if needCheckpoint {
 			s.tryCheckpoint(context.Background())
 		}
 

@@ -3,7 +3,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"nexus-agent/internal/tool"
@@ -50,14 +49,6 @@ func (a *ToolRegistryAdapter) Dispatch(name string, args map[string]any) (string
 	result, err := a.registry.Dispatch(ctx, name, args)
 	if err != nil {
 		return "", fmt.Errorf("工具 %q 执行失败: %w", name, err)
-	}
-
-	// 检查是否为错误结果
-	var errMap map[string]string
-	if json.Unmarshal([]byte(result), &errMap) == nil {
-		if errMsg, ok := errMap["error"]; ok {
-			return result, fmt.Errorf("%s", errMsg)
-		}
 	}
 
 	return result, nil

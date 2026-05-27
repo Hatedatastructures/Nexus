@@ -169,9 +169,8 @@ func doTokenRequest(tokenURL string, data url.Values, clientID string) (*OAuthTo
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		slog.Error("Token endpoint returned error",
 			"status", resp.StatusCode,
-			"body", string(body),
-		)
-		return nil, fmt.Errorf("Token 端点返回 HTTP %d: %s", resp.StatusCode, string(body))
+			)
+		return nil, fmt.Errorf("Token 端点返回 HTTP %d", resp.StatusCode)
 	}
 
 	// 解析标准 OAuthToken 响应
@@ -252,7 +251,6 @@ func CompleteOAuthFlow(cfg *OAuthConfig, code, state, verifier string) (*OAuthTo
 	}
 
 	slog.Info("OAuth authorization flow completed",
-		"access_token_prefix", token.AccessToken[:min(10, len(token.AccessToken))],
 		"expires_at", token.ExpiresAt,
 	)
 	return token, nil

@@ -236,6 +236,9 @@ func (a *APIServerAdapter) handleChatCompletions(w http.ResponseWriter, r *http.
 		}
 
 	// 等待响应
+	timer := time.NewTimer(apiServerRequestTimeout)
+	defer timer.Stop()
+
 	select {
 	case response := <-responseCh:
 		if req.Stream {
@@ -243,7 +246,7 @@ func (a *APIServerAdapter) handleChatCompletions(w http.ResponseWriter, r *http.
 		} else {
 			a.handleNormalResponse(w, req.Model, response)
 		}
-	case <-time.After(apiServerRequestTimeout):
+	case <-timer.C:
 		a.responseMu.Lock()
 		delete(a.pendingResponses, requestID)
 		a.responseMu.Unlock()

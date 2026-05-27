@@ -205,15 +205,22 @@ func (p *CopilotProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 // buildCopilotRequest 构建 Copilot API 的 HTTP 请求。
 // 复用 OpenAI 请求体格式，设置 Copilot 特有的认证头。
 func (p *CopilotProvider) buildCopilotRequest(ctx context.Context, req *ChatRequest, stream bool) (*http.Request, error) {
-	// 复用 OpenAI 请求体构建
+	// 复用 OpenAI 请求体构建 (浅拷贝避免修改原始 req.Metadata)
+	reqCopy := *req
 	if stream {
-		if req.Metadata == nil {
-			req.Metadata = make(map[string]any)
+		if reqCopy.Metadata == nil {
+			reqCopy.Metadata = make(map[string]any)
+		} else {
+			md := make(map[string]any, len(reqCopy.Metadata)+1)
+			for k, v := range reqCopy.Metadata {
+				md[k] = v
+			}
+			reqCopy.Metadata = md
 		}
-		req.Metadata["stream"] = true
+		reqCopy.Metadata["stream"] = true
 	}
 
-	body := buildOpenAIRequestBody(req)
+	body := buildOpenAIRequestBody(&reqCopy)
 
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {

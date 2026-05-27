@@ -4,6 +4,7 @@ package tool
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -294,11 +295,35 @@ func extractSkillNameFromIdentifier(identifier string) string {
 }
 
 func isGitIdentifier(identifier string) bool {
-	return strings.HasPrefix(identifier, "git@") ||
-		strings.HasSuffix(identifier, ".git") ||
-		strings.HasPrefix(identifier, "https://github.com/") ||
-		strings.HasPrefix(identifier, "https://gitlab.com/") ||
-		strings.HasPrefix(identifier, "https://bitbucket.org/")
+	if strings.HasPrefix(identifier, "git@") {
+		// 提取 git@host:... 中的 host
+		rest := identifier[4:]
+		colonIdx := strings.Index(rest, ":")
+		if colonIdx < 0 {
+			return false
+		}
+		host := rest[:colonIdx]
+		return isAllowedGitHost(host)
+	}
+	// HTTPS URL: must be from a known host
+	if strings.HasPrefix(identifier, "https://") {
+		u, err := url.Parse(identifier)
+		if err != nil {
+			return false
+		}
+		return isAllowedGitHost(u.Hostname())
+	}
+	return false
+}
+
+// isAllowedGitHost 检查 git 主机是否在白名单中。
+func isAllowedGitHost(host string) bool {
+	switch host {
+	case "github.com", "gitlab.com", "bitbucket.org":
+		return true
+	default:
+		return false
+	}
 }
 
 func init() {

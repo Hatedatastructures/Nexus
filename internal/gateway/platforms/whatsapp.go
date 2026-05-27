@@ -245,8 +245,8 @@ func (w *WhatsAppAdapter) convertMessage(msg *whatsappMessage) *MessageEvent {
 		event.MessageType = MsgPhoto
 		if msg.Image != nil {
 			event.MediaURLs = []string{msg.Image.ID}
+			event.Text = msg.Image.Caption
 		}
-		event.Text = msg.Image.Caption
 	case "audio", "voice":
 		event.MessageType = MsgVoice
 	case "video":

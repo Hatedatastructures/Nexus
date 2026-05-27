@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"nexus-agent/internal/approval"
 )
 
 // ───────────────────────────── 代码执行工具 ─────────────────────────────
@@ -79,6 +81,19 @@ func (t *CodeExecuteTool) Execute(ctx context.Context, args map[string]any) (str
 	code, ok := args["code"].(string)
 	if !ok || code == "" {
 		return ToolError("参数 code 是必填项且必须为字符串"), nil
+	}
+
+	// 审批检查
+	if v := globalTerminalChecker.Load(); v != nil {
+		checker := v.(*approval.Checker)
+		result, reason := checker.Check(ctx, code)
+		switch result {
+		case approval.Denied:
+			slog.Warn("code_execute denied by approval engine", "reason", reason)
+			return ToolError(fmt.Sprintf("代码执行被拒绝: %s", reason)), nil
+		case approval.Pending:
+			return ToolError(fmt.Sprintf("代码执行需要审批: %s", reason)), nil
+		}
 	}
 
 	language := "python"

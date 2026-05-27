@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 )
 
 // ───────────────────────────── context 键 ─────────────────────────────
@@ -33,11 +34,16 @@ type MemoryHandler interface {
 
 // globalMemoryManager 存储全局的记忆管理器引用。
 // 在代理初始化时通过 SetMemoryManager 设置。
-var globalMemoryManager MemoryHandler
+var (
+	globalMemoryManager  MemoryHandler
+	globalMemoryManagerMu sync.RWMutex
+)
 
 // SetMemoryManager 设置全局记忆管理器。
 // 在代理启动时调用一次。
 func SetMemoryManager(mgr MemoryHandler) {
+	globalMemoryManagerMu.Lock()
+	defer globalMemoryManagerMu.Unlock()
 	globalMemoryManager = mgr
 }
 
@@ -51,6 +57,8 @@ func getMemoryManager(ctx context.Context) MemoryHandler {
 	if mgr, ok := ctx.Value(memoryManagerKey).(MemoryHandler); ok && mgr != nil {
 		return mgr
 	}
+	globalMemoryManagerMu.RLock()
+	defer globalMemoryManagerMu.RUnlock()
 	return globalMemoryManager
 }
 

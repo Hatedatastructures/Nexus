@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -301,11 +302,13 @@ func (w *WeChatAdapter) getAccessToken(ctx context.Context) (string, error) {
 		return w.accessToken, nil
 	}
 
-	url := fmt.Sprintf(
-		"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=%s&secret=%s",
-		w.appID, w.secret,
-	)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	vals := url.Values{
+		"grant_type": {"client_credential"},
+		"appid":     {w.appID},
+		"secret":    {w.secret},
+	}
+	apiURL := "https://api.weixin.qq.com/cgi-bin/token?" + vals.Encode()
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
 		return "", err
 	}
@@ -334,7 +337,9 @@ func (w *WeChatAdapter) getAccessToken(ctx context.Context) (string, error) {
 	}
 
 	w.accessToken = result.AccessToken
-	w.tokenExpiry = time.Now().Add(time.Duration(result.ExpiresIn-60) * time.Second)
+	buffer := 60
+	if result.ExpiresIn < buffer { buffer = result.ExpiresIn / 2 }
+	w.tokenExpiry = time.Now().Add(time.Duration(result.ExpiresIn-buffer) * time.Second)
 
 	return w.accessToken, nil
 }

@@ -179,7 +179,7 @@ func retryWithBackoff[T any](
 
 		// 计算退避时间：backoff * 2^attempt
 		waitTime := time.Duration(float64(backoff) * math.Pow(2, float64(attempt)))
-		if waitTime > maxBackoff {
+		if waitTime > maxBackoff || waitTime < 0 {
 			waitTime = maxBackoff
 		}
 

@@ -4,6 +4,7 @@ package sandbox
 
 import (
 	"archive/tar"
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -127,7 +128,8 @@ func (m *FileSyncManager) SyncBack(downloadFn func(remotePath string) (io.ReadCl
 				continue
 			}
 		absRoot, _ := filepath.Abs(m.localRoot)
-		if !strings.HasPrefix(absLocal, absRoot) {
+		rel, err := filepath.Rel(absRoot, absLocal)
+		if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
 			slog.Warn("skipping file outside root directory", "name", header.Name)
 			continue
 		}
@@ -135,7 +137,7 @@ func (m *FileSyncManager) SyncBack(downloadFn func(remotePath string) (io.ReadCl
 		// 先读取全部内容到缓冲区，同时计算哈希
 		remoteHash := sha256.New()
 		const maxTarFileSize = 10 * 1024 * 1024 // 10MB
-		var buf strings.Builder
+		var buf bytes.Buffer
 		limited := io.LimitReader(io.TeeReader(tr, remoteHash), maxTarFileSize)
 		if _, err := io.Copy(&buf, limited); err != nil {
 			continue
@@ -154,7 +156,7 @@ func (m *FileSyncManager) SyncBack(downloadFn func(remotePath string) (io.ReadCl
 			continue
 		}
 
-		if err := os.WriteFile(localPath, []byte(buf.String()), 0644); err != nil {
+		if err := os.WriteFile(localPath, buf.Bytes(), 0644); err != nil {
 			continue
 		}
 

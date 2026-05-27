@@ -226,6 +226,7 @@ func (t *OpenAITransport) ParseStream(ctx context.Context, body io.ReadCloser) <
 				ch <- &StreamDelta{
 					Content:   contentBuilder.String(),
 					ToolCalls: toolCalls,
+					Usage:     finalUsage,
 					Done:      true,
 				}
 				return

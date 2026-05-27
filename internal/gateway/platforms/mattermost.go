@@ -55,10 +55,11 @@ type MattermostAdapter struct {
 	connected bool
 
 	// 并发控制
-	mu          sync.Mutex
-	dedup       *mattermostDeduplicator
-	pendingResps map[string]chan map[string]any
-	seqNo       int64
+	mu              sync.Mutex
+	dedup           *mattermostDeduplicator
+	pendingResps     map[string]chan map[string]any
+	seqNo           int64
+	heartbeatCancel context.CancelFunc
 
 	// @mention 配置
 	requireMention bool
@@ -199,7 +200,11 @@ func (a *MattermostAdapter) connectWebSocket(ctx context.Context, msgCh chan *Me
 			delay := backoff[min(backoffIdx, len(backoff)-1)]
 			backoffIdx++
 			slog.Warn("[Mattermost] WebSocket connection failed", "err", err, "retry_after", delay)
-			time.Sleep(delay)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(delay):
+				}
 			continue
 		}
 
@@ -221,8 +226,13 @@ func (a *MattermostAdapter) connectWebSocket(ctx context.Context, msgCh chan *Me
 			continue
 		}
 
-		// 启动心跳
-		go a.heartbeatLoop()
+		// 启动心跳（先取消旧的）
+		if a.heartbeatCancel != nil {
+			a.heartbeatCancel()
+		}
+		hbCtx, hbCancel := context.WithCancel(ctx)
+		a.heartbeatCancel = hbCancel
+		go a.heartbeatLoop(hbCtx)
 
 		// 监听消息
 		a.listenLoop(msgCh)
@@ -360,11 +370,17 @@ func (a *MattermostAdapter) parsePost(post, data map[string]any) *MessageEvent {
 }
 
 // heartbeatLoop 发送心跳。
-func (a *MattermostAdapter) heartbeatLoop() {
+func (a *MattermostAdapter) heartbeatLoop(ctx context.Context) {
 	ticker := time.NewTicker(mattermostHeartbeatInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
 		a.mu.Lock()
 		running := a.running
 		conn := a.conn

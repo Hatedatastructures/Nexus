@@ -17,6 +17,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,6 +34,7 @@ const (
 // WeComCallbackAdapter 企业微信回调模式适配器。
 type WeComCallbackAdapter struct {
 	corpID         string
+	corpSecret     string
 	agentID        string
 	token          string
 	encodingAESKey string
@@ -41,6 +43,10 @@ type WeComCallbackAdapter struct {
 	msgCh          chan *MessageEvent
 	running        bool
 	webhookPort    int
+
+	tokenMu      sync.Mutex
+	accessToken  string
+	tokenExpiry  time.Time
 }
 
 // WeComXMLMessage 企业微信 XML 消息结构。
@@ -68,6 +74,7 @@ type WeComXMLResponse struct {
 // NewWeComCallbackAdapter 创建企业微信回调适配器。
 func NewWeComCallbackAdapter(messageHandler func(*MessageEvent)) *WeComCallbackAdapter {
 	corpID := os.Getenv("WECOM_CORP_ID")
+	corpSecret := os.Getenv("WECOM_CORP_SECRET")
 	agentID := os.Getenv("WECOM_AGENT_ID")
 	token := os.Getenv("WECOM_TOKEN")
 	encodingAESKey := os.Getenv("WECOM_ENCODING_AES_KEY")
@@ -79,6 +86,7 @@ func NewWeComCallbackAdapter(messageHandler func(*MessageEvent)) *WeComCallbackA
 
 	return &WeComCallbackAdapter{
 		corpID:         corpID,
+		corpSecret:     corpSecret,
 		agentID:        agentID,
 		token:          token,
 		encodingAESKey: encodingAESKey,
@@ -109,6 +117,9 @@ func (a *WeComCallbackAdapter) Connect(ctx context.Context) (<-chan *MessageEven
 
 	go func() {
 		addr := fmt.Sprintf(":%d", a.webhookPort)
+		if a.webhookPort != 443 && a.webhookPort != 8443 {
+			slog.Warn("[WeCom Callback] webhook 使用 HTTP，建议启用 TLS", "addr", addr)
+		}
 		slog.Info("[WeCom Callback] webhook server started", "addr", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
 			slog.Error("[WeCom Callback] webhook server failed", "err", err)
@@ -164,7 +175,7 @@ func (a *WeComCallbackAdapter) Send(ctx context.Context, chatID string, content 
 	defer resp.Body.Close()
 
 	var result map[string]any
-	json.NewDecoder(resp.Body).Decode(&result)
+	json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result)
 
 	if errcode, ok := result["errcode"].(float64); ok && errcode != 0 {
 		errmsg, _ := result["errmsg"].(string)
@@ -315,10 +326,22 @@ func (a *WeComCallbackAdapter) generateSignature(timestamp, nonce, echostr strin
 }
 
 func (a *WeComCallbackAdapter) getAccessToken(ctx context.Context) (string, error) {
+	a.tokenMu.Lock()
+	defer a.tokenMu.Unlock()
+
+	if a.accessToken != "" && time.Now().Before(a.tokenExpiry) {
+		return a.accessToken, nil
+	}
+
+	secret := a.corpSecret
+	if secret == "" {
+		return "", fmt.Errorf("未配置 corp_secret (WECOM_CORP_SECRET)")
+	}
+
 	u, _ := url.Parse("https://qyapi.weixin.qq.com/cgi-bin/gettoken")
 	q := u.Query()
 	q.Set("corpid", a.corpID)
-	q.Set("corpsecret", a.encodingAESKey)
+	q.Set("corpsecret", secret)
 	u.RawQuery = q.Encode()
 	apiURL := u.String()
 
@@ -333,22 +356,32 @@ func (a *WeComCallbackAdapter) getAccessToken(ctx context.Context) (string, erro
 	}
 	defer resp.Body.Close()
 
-	var result map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	var result struct {
+		ErrCode     int    `json:"errcode"`
+		ErrMsg      string `json:"errmsg"`
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
 		return "", err
 	}
 
-	if errcode, ok := result["errcode"].(float64); ok && errcode != 0 {
-		errmsg, _ := result["errmsg"].(string)
-		return "", fmt.Errorf("企业微信 API 错误: %s", errmsg)
+	if result.ErrCode != 0 {
+		return "", fmt.Errorf("企业微信 API 错误 %d: %s", result.ErrCode, result.ErrMsg)
 	}
 
-	accessToken, ok := result["access_token"].(string)
-	if !ok {
+	if result.AccessToken == "" {
 		return "", fmt.Errorf("无法获取 access_token")
 	}
 
-	return accessToken, nil
+	a.accessToken = result.AccessToken
+	buffer := 60
+	if result.ExpiresIn < buffer {
+		buffer = result.ExpiresIn / 2
+	}
+	a.tokenExpiry = time.Now().Add(time.Duration(result.ExpiresIn-buffer) * time.Second)
+
+	return a.accessToken, nil
 }
 
 // ───────────────────────────── 自注册 ─────────────────────────────

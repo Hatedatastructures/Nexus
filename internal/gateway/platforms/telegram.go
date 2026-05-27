@@ -274,7 +274,7 @@ func (t *TelegramAdapter) getUpdates(ctx context.Context, offset int) ([]update,
 		OK     bool     `json:"ok"`
 		Result []update `json:"result"`
 	}
-	if err := json.NewDecoder(bytes.NewReader(resp)).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(bytes.NewReader(resp), 10<<20)).Decode(&result); err != nil {
 		return nil, err
 	}
 	return result.Result, nil
@@ -476,6 +476,7 @@ func (t *TelegramAdapter) Configure(settings map[string]any) error {
 	t.client = &http.Client{Timeout: 30 * time.Second}
 	t.baseURL = "https://api.telegram.org/bot" + token
 	t.msgCh = make(chan *MessageEvent, 128)
+	t.statusMsgIDs = make(map[string]string)
 	return nil
 }
 
@@ -484,7 +485,7 @@ func (t *TelegramAdapter) Configure(settings map[string]any) error {
 // formatInt 将整数格式化为字符串。
 func formatInt(n int) string {
 	if n == 0 {
-		return ""
+		return "0"
 	}
 	return fmt.Sprintf("%d", n)
 }

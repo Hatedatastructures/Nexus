@@ -86,8 +86,6 @@ func ParseSSEStream(ctx context.Context, body io.ReadCloser) <-chan *SSEEvent {
 			field := line[:colonIdx]
 			value := ""
 			if colonIdx+1 < len(line) {
-				value = line[colonIdx+1:]
-				// 如果值以空格开头，去除前导空格
 				value = strings.TrimPrefix(line[colonIdx+1:], " ")
 			}
 
@@ -112,6 +110,9 @@ func ParseSSEStream(ctx context.Context, body io.ReadCloser) <-chan *SSEEvent {
 					} else {
 						break
 					}
+				}
+				if retryVal > 60000 {
+					retryVal = 60000
 				}
 				currentEvent.Retry = retryVal
 			}

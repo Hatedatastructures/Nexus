@@ -4,6 +4,7 @@ package llm
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -848,9 +849,11 @@ func convertGeminiUsage(meta *geminiUsageMetadata) *TokenUsage {
 	}
 }
 
-// generateShortID 生成简短的唯一 ID。
+// generateShortID 生成简短的唯一 ID (使用 crypto/rand)。
 func generateShortID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano()%10000000000)
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%016x", b)
 }
 
 // buildGeminiToolExtra 为 Gemini 工具调用构建 Extra 字段（含 thought_signature）。

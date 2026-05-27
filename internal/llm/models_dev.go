@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -40,6 +41,7 @@ type ModelsDevClient struct {
 	cacheTTL  time.Duration            // 缓存过期时间
 	mu        sync.RWMutex             // 保护 cache 的读写锁
 	refreshMu sync.Mutex               // 防止并发刷新
+	refreshCh chan struct{}            // 刷新信号（容量 1，合并多次未命中）
 	http      *http.Client             // HTTP 客户端
 }
 
@@ -47,8 +49,9 @@ type ModelsDevClient struct {
 // 默认缓存 TTL 为 1 小时，首次查询时自动加载数据。
 func NewModelsDevClient() *ModelsDevClient {
 	c := &ModelsDevClient{
-		cache:    make(map[string]*ModelDevInfo),
-		cacheTTL: 1 * time.Hour,
+		cache:     make(map[string]*ModelDevInfo),
+		cacheTTL:  1 * time.Hour,
+		refreshCh: make(chan struct{}, 1),
 		http: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -72,11 +75,25 @@ func (c *ModelsDevClient) GetModel(modelID string) *ModelDevInfo {
 	}
 
 	// 缓存未命中，尝试刷新（异步，不阻塞调用者）
+	select {
+	case c.refreshCh <- struct{}{}:
+	default:
+		// 已有待处理的刷新请求，跳过
+	}
 	go func() {
 		if !c.refreshMu.TryLock() {
 			return // another refresh already in progress
 		}
 		defer c.refreshMu.Unlock()
+
+		// 刷新频率限制：距上次刷新不到 30 秒则跳过
+		c.mu.RLock()
+		lastRefresh := c.cacheTime
+		c.mu.RUnlock()
+		if time.Since(lastRefresh) < 30*time.Second {
+			return
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := c.Refresh(ctx); err != nil {
@@ -176,7 +193,7 @@ func (c *ModelsDevClient) fetchFromAPI(ctx context.Context) (map[string]*ModelDe
 	}
 
 	var entries []apiModelEntry
-	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 50<<20)).Decode(&entries); err != nil {
 		return nil, fmt.Errorf("JSON 解析失败: %w", err)
 	}
 

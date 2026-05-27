@@ -152,11 +152,18 @@ func EstimateCost(provider, model string, usage CanonicalUsage) (CostResult, err
 	// 精确匹配
 	entry, ok := officialDocsPricing[key]
 	if !ok {
-		// 模糊匹配: 尝试去掉版本号后缀
+		// 模糊匹配: 逐步去掉最后的 "-" 后缀，优先最长匹配
 		baseModel := model
-		if idx := strings.LastIndex(model, "-"); idx > 0 {
-			baseModel = model[:idx]
+		for {
+			idx := strings.LastIndex(baseModel, "-")
+			if idx <= 0 {
+				break
+			}
+			baseModel = baseModel[:idx]
 			entry, ok = officialDocsPricing[provider+":"+baseModel]
+			if ok {
+				break
+			}
 		}
 		if !ok {
 			return CostResult{}, fmt.Errorf("未找到模型 %s:%s 的定价信息", provider, model)

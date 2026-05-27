@@ -17,7 +17,7 @@ import (
 // ───────────────────────────── 常量 ─────────────────────────────
 
 const (
-	haDefaultAPIURL   = "http://homeassistant.local:8123/api"
+	haDefaultAPIURL   = "https://homeassistant.local:8123/api"
 	haRequestTimeout  = 15 * time.Second
 	haMaxResultChars  = 50000
 )

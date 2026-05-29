@@ -177,6 +177,9 @@ func (m *JobManager) List(ctx context.Context) ([]*Job, error) {
 
 // Update 更新作业信息并重新计算下次执行时间。
 func (m *JobManager) Update(ctx context.Context, job *Job) error {
+	if job.ID == "" {
+		return fmt.Errorf("作业 ID 不能为空")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

@@ -188,7 +188,7 @@ func (t *BedrockTransport) ParseStream(ctx context.Context, body io.ReadCloser) 
 		toolCallBuilders := make(map[int]*toolCallBuilder)
 		var finalUsage *TokenUsage // 流式响应的累积 token 用量
 
-		for event := range ParseSSEStream(ctx, body) {
+		for event := range ParseBinaryEventStream(ctx, body) {
 			select {
 			case <-ctx.Done():
 				return
@@ -267,10 +267,11 @@ func (t *BedrockTransport) ParseStream(ctx context.Context, body io.ReadCloser) 
 					})
 				}
 				ch <- &StreamDelta{
-					Content:   contentBuilder.String(),
-					ToolCalls: toolCalls,
-					Reasoning: reasoningBuilder.String(),
-					Done:      true,
+					Content:    contentBuilder.String(),
+					ToolCalls:  toolCalls,
+					Reasoning:  reasoningBuilder.String(),
+					StopReason: "end_turn",
+					Done:       true,
 				}
 				return
 			}

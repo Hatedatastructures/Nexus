@@ -95,6 +95,9 @@ func (t *GeminiTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 
 	candidate := geminiResp.Candidates[0]
 	content := candidate.Content
+	if content == nil {
+		return nil, fmt.Errorf("Gemini 响应 candidates[0].Content 为 nil (可能被安全过滤器拦截)")
+	}
 
 	response := &ChatResponse{
 		Model: geminiResp.ModelVersion,

@@ -86,7 +86,8 @@ func (t *CodexTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 				Text string `json:"text"`
 			} `json:"content"`
 		} `json:"output"`
-		Usage *TokenUsage `json:"usage"`
+		Usage  *TokenUsage `json:"usage"`
+		Status string      `json:"status"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, fmt.Errorf("解析 Codex 响应失败: %w", err)
@@ -101,9 +102,35 @@ func (t *CodexTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 		}
 	}
 
+	// 空 output: 返回错误而非静默成功
+	if len(resp.Output) == 0 {
+		if resp.Status == "failed" {
+			return nil, fmt.Errorf("Codex 请求失败 (status=failed)")
+		}
+		if resp.Status == "cancelled" {
+			return nil, fmt.Errorf("Codex 请求被取消 (status=cancelled)")
+		}
+		return &ChatResponse{
+			Content:    "",
+			StopReason: StopEndTurn,
+			Usage:      resp.Usage,
+		}, nil
+	}
+
+	result := content.String()
+
+	// 根据 status 字段判断 stop reason
+	stopReason := StopEndTurn
+	switch resp.Status {
+	case "incomplete":
+		stopReason = StopLength
+	case "failed", "cancelled":
+		stopReason = StopEndTurn
+	}
+
 	return &ChatResponse{
-		Content:    content.String(),
-		StopReason: StopEndTurn,
+		Content:    result,
+		StopReason: stopReason,
 		Usage:      resp.Usage,
 	}, nil
 }

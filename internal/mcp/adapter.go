@@ -4,6 +4,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"nexus-agent/internal/tool"
 )
@@ -43,12 +44,13 @@ func (a *ToolRegistryAdapter) GetSchema(name string) (*ToolSchema, bool) {
 }
 
 // Dispatch 执行指定工具。
-// 忽略 context 参数 (tool.Registry 的 Dispatch 需要 ctx)。
 func (a *ToolRegistryAdapter) Dispatch(name string, args map[string]any) (string, error) {
 	ctx := context.Background()
-	result, err := a.registry.Dispatch(ctx, name, args)
+	toolName := strings.TrimPrefix(name, "mcp_")
+
+	result, err := a.registry.Dispatch(ctx, toolName, args)
 	if err != nil {
-		return "", fmt.Errorf("工具 %q 执行失败: %w", name, err)
+		return "", fmt.Errorf("工具 %q 执行失败: %w", toolName, err)
 	}
 
 	return result, nil

@@ -71,12 +71,13 @@ type ChatResponse struct {
 
 // StreamDelta 是流式响应的单个增量
 type StreamDelta struct {
-	Content   string     `json:"content,omitempty"`   // 当前增量文本
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // 完整的工具调用 (在流结束时填充)
-	Reasoning string     `json:"reasoning,omitempty"` // 推理过程增量
-	Usage     *TokenUsage `json:"usage,omitempty"`    // 累积 token 用量 (流式结束时填充)
-	Done      bool       `json:"done"`                 // 是否为最终增量
-	Error     error      `json:"-"`                    // 发生的错误 (不序列化)
+	Content    string     `json:"content,omitempty"`    // 当前增量文本
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`  // 完整的工具调用 (在流结束时填充)
+	Reasoning  string     `json:"reasoning,omitempty"`  // 推理过程增量
+	Usage      *TokenUsage `json:"usage,omitempty"`     // 累积 token 用量 (流式结束时填充)
+	StopReason string     `json:"stop_reason,omitempty"` // 停止原因 (end_turn, tool_use, max_tokens, stop)
+	Done       bool       `json:"done"`                  // 是否为最终增量
+	Error      error      `json:"-"`                     // 发生的错误 (不序列化)
 }
 
 // TokenUsage 统计一次 API 调用的 token 用量

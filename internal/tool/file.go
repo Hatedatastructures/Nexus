@@ -26,6 +26,13 @@ var allowedDir = func() string {
 	return dir
 }()
 
+// SetAllowedDir updates the allowed root directory for file operations.
+func SetAllowedDir(dir string) {
+	if dir != "" {
+		allowedDir = dir
+	}
+}
+
 // checkPathSecurity 对路径执行安全检查，返回安全错误或空字符串。
 // 依次执行: 遍历组件快速拒绝 → 目录边界完整验证。
 // 用于所有文件操作工具的入口处统一拦截。
@@ -62,10 +69,36 @@ var sensitivePaths = []string{
 	// Nexus 配置和凭证
 	".nexus/.env",
 	".nexus/credentials",
-	// SSH 密钥
+	".nexus/auth.json",
+	".nexus/auth.lock",
+	".nexus/mcp-tokens/",
+	".nexus/pairing/",
+	".nexus/webhook_subscriptions.json",
+	// SSH 密钥和配置
 	".ssh/id_rsa",
 	".ssh/id_ed25519",
 	".ssh/authorized_keys",
+	".ssh/config",
+	".ssh/",
+	// 云服务凭证
+	".aws/",
+	".gnupg/",
+	".kube/",
+	".docker/",
+	".azure/",
+	".config/gh/",
+	".config/gcloud/",
+	// Shell 配置（防止写入）
+	".bashrc",
+	".zshrc",
+	".profile",
+	".bash_profile",
+	".zprofile",
+	".netrc",
+	".pgpass",
+	".npmrc",
+	".pypirc",
+	".git-credentials",
 	// Windows 系统目录
 	`C:\Windows\System32`,
 	`C:\Windows\System`,

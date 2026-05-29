@@ -187,7 +187,7 @@ func (d *DingTalkAdapter) ReceiveCallback(payload []byte) error {
 			return fmt.Errorf("钉钉回调缺少签名参数 (timestamp/sign)")
 		}
 	} else {
-		slog.Warn("[DingTalk] callbackSecret 未配置，回调签名验证被跳过")
+		return fmt.Errorf("钉钉回调验证失败: callbackSecret 未配置")
 	}
 
 	// 检查是否为加密回调

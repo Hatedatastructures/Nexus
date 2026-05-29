@@ -246,10 +246,11 @@ func (t *LMStudioTransport) ParseStream(ctx context.Context, body io.ReadCloser)
 					})
 				}
 				ch <- &StreamDelta{
-					Content:   contentBuilder.String(),
-					Reasoning: reasoningBuilder.String(),
-					ToolCalls: toolCalls,
-					Done:      true,
+					Content:    contentBuilder.String(),
+					Reasoning:  reasoningBuilder.String(),
+					ToolCalls:  toolCalls,
+					StopReason: "end_turn",
+					Done:       true,
 				}
 				return
 			}

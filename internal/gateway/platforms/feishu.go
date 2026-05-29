@@ -168,6 +168,9 @@ func (f *FeishuAdapter) SendDocument(ctx context.Context, chatID string, filePat
 // ReplyMessage 回复指定消息。
 // 飞书支持线程回复，通过 root_id 指定被回复的消息。
 func (f *FeishuAdapter) ReplyMessage(ctx context.Context, messageID string, content string) (*SendResult, error) {
+	if err := validateMessageID(messageID); err != nil {
+		return nil, err
+	}
 	body := map[string]any{
 		"msg_type": "text",
 		"content":  fmt.Sprintf(`{"text":"%s"}`, escapeJSON(content)),
@@ -178,28 +181,55 @@ func (f *FeishuAdapter) ReplyMessage(ctx context.Context, messageID string, cont
 // ReceiveEvent 处理飞书事件推送。
 // 由外部 HTTP 服务器调用。
 // Deprecated: 使用 ReceiveEventWithVerification 代替，以便验证请求签名。
-func (f *FeishuAdapter) ReceiveEvent(payload []byte) error {
+func (f *FeishuAdapter) ReceiveEvent(payload []byte) ([]byte, error) {
 	if f.verificationToken != "" {
-		return fmt.Errorf("ReceiveEvent 已弃用，请使用 ReceiveEventWithVerification 并提供签名参数")
+		return nil, fmt.Errorf("ReceiveEvent 已弃用，请使用 ReceiveEventWithVerification 并提供签名参数")
 	}
-	return f.receiveEventInternal(payload)
+	// 尝试处理 url_verification 挑战
+	var challengeReq struct {
+		Type      string `json:"type"`
+		Challenge string `json:"challenge"`
+	}
+	if err := json.Unmarshal(payload, &challengeReq); err == nil && challengeReq.Type == "url_verification" {
+		resp, _ := json.Marshal(map[string]string{"challenge": challengeReq.Challenge})
+		return resp, nil
+	}
+	return nil, f.receiveEventInternal(payload)
 }
 
 // ReceiveEventWithVerification 处理飞书事件推送并验证签名。
 // timestamp 和 signature 来自 HTTP 请求头。
-func (f *FeishuAdapter) ReceiveEventWithVerification(payload []byte, timestamp, signature string) error {
+// 当收到 url_verification 挑战时，返回包含 challenge 值的 JSON 响应。
+func (f *FeishuAdapter) ReceiveEventWithVerification(payload []byte, timestamp, signature string) ([]byte, error) {
+	// 处理 url_verification 挑战事件
+	var challengeReq struct {
+		Type      string `json:"type"`
+		Challenge string `json:"challenge"`
+		Token     string `json:"token"`
+	}
+	if err := json.Unmarshal(payload, &challengeReq); err == nil && challengeReq.Type == "url_verification" {
+		if f.verificationToken != "" && challengeReq.Token != f.verificationToken {
+			return nil, fmt.Errorf("url_verification token 验证失败")
+		}
+		resp, _ := json.Marshal(map[string]string{"challenge": challengeReq.Challenge})
+		return resp, nil
+	}
+
 	// 验证飞书事件签名
-	if f.verificationToken != "" && signature != "" && timestamp != "" {
+	if f.verificationToken != "" {
+		if signature == "" || timestamp == "" {
+			return nil, fmt.Errorf("飞书事件缺少签名参数 (X-Lark-Signature / X-Lark-Request-Timestamp)")
+		}
 		h := hmac.New(sha256.New, []byte(f.verificationToken))
 		h.Write([]byte(timestamp))
 		h.Write([]byte("\n"))
 		h.Write(payload)
 		expected := base64.StdEncoding.EncodeToString(h.Sum(nil))
 		if subtle.ConstantTimeCompare([]byte(signature), []byte(expected)) != 1 {
-			return fmt.Errorf("飞书事件签名验证失败")
+			return nil, fmt.Errorf("飞书事件签名验证失败")
 		}
 	}
-	return f.receiveEventInternal(payload)
+	return nil, f.receiveEventInternal(payload)
 }
 
 func (f *FeishuAdapter) receiveEventInternal(payload []byte) error {

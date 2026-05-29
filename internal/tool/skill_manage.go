@@ -63,7 +63,7 @@ func (t *SkillManageTool) Execute(ctx context.Context, args map[string]any) (str
 		if identifier == "" {
 			return ToolError("identifier 参数是必填项"), nil
 		}
-		return t.installSkill(identifier)
+		return t.installSkill(ctx, identifier)
 	case "uninstall":
 		name := getStringFromArgs(args, "name")
 		if name == "" {
@@ -83,7 +83,7 @@ func (t *SkillManageTool) Execute(ctx context.Context, args map[string]any) (str
 	}
 }
 
-func (t *SkillManageTool) installSkill(identifier string) (string, error) {
+func (t *SkillManageTool) installSkill(ctx context.Context, identifier string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ToolError(fmt.Sprintf("获取主目录失败: %v", err)), nil
@@ -115,7 +115,7 @@ func (t *SkillManageTool) installSkill(identifier string) (string, error) {
 			return ToolError("系统未安装 git"), nil
 		}
 
-		cmd := exec.Command("git", "clone", "--depth", "1", identifier, targetDir)
+		cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", identifier, targetDir)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			return ToolError(fmt.Sprintf("克隆失败: %v\n%s", err, string(output))), nil

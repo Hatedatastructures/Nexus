@@ -394,6 +394,11 @@ func (p *BuiltinProvider) add(ctx context.Context, target, content string) (stri
 		return toolError("内容不能为空。"), nil
 	}
 
+	// 威胁模式扫描: 阻止注入和窃取载荷
+	if msg := scanMemoryThreat(content); msg != "" {
+		return toolError(msg), nil
+	}
+
 	path := p.filePath(target)
 	lockPath := p.lockPath(target)
 
@@ -460,6 +465,11 @@ func (p *BuiltinProvider) replace(ctx context.Context, target, oldText, newConte
 	}
 	if newContent == "" {
 		return toolError("new_content 不能为空。请使用 'remove' 操作来删除条目。"), nil
+	}
+
+	// 威胁模式扫描: 阻止注入和窃取载荷
+	if msg := scanMemoryThreat(newContent); msg != "" {
+		return toolError(msg), nil
 	}
 
 	path := p.filePath(target)

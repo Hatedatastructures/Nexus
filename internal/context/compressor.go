@@ -25,13 +25,20 @@ const (
 
 // ShouldCompress 根据当前 token 数判断是否需要压缩。
 // 当 totalTokens > contextLimit * thresholdPercent 时返回 true。
-// 包含反抖动保护: 连续两次无效压缩后跳过。
+// 包含反抖动保护: 连续两次无效压缩后进入冷却期，冷却期每轮递减直到恢复。
 func (c *Compressor) ShouldCompress(contextLimit, totalTokens int) bool {
-	// Anti-thrash: 如果连续两次压缩未显著减少 token，跳过
+	// 冷却期恢复: 每次调用递减冷却计数器
+	if c.antiThrashCooldown > 0 {
+		c.antiThrashCooldown--
+		slog.Debug("compression cooldown ticking", "remaining", c.antiThrashCooldown)
+		return false
+	}
+
+	// Anti-thrash: 连续无效压缩达到阈值后进入冷却期（而非永久禁用）
 	if c.consecutiveSummaries >= summaryAntiThrashThreshold {
-		slog.Debug("skipping compression: consecutive ineffective compressions",
-			"consecutive", c.consecutiveSummaries,
-		)
+		c.consecutiveSummaries = 0
+		c.antiThrashCooldown = 3 // 冷却 3 轮后允许重新尝试
+		slog.Debug("entering compression cooldown", "cooldown", 3)
 		return false
 	}
 

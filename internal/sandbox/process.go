@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 )
 
@@ -67,7 +68,8 @@ func (h *OSProcessHandle) Poll() (*int, error) {
 }
 
 // Kill 终止进程。
-// 先尝试优雅终止，超时后强制杀死。
+// 在 Windows 上使用 taskkill /T /F 终止整个进程树，
+// 在 Unix 上使用 os.Process.Kill() 发送 SIGKILL。
 func (h *OSProcessHandle) Kill() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -78,11 +80,20 @@ func (h *OSProcessHandle) Kill() error {
 
 	pid := h.process.Pid
 
-	// 使用 os.Process.Kill() (跨平台: Unix=SIGKILL, Windows=TerminateProcess)
-	if err := h.process.Kill(); err != nil {
-		// 进程可能已经退出
-		slog.Debug("process kill failed", "pid", pid, "err", err)
-		return fmt.Errorf("终止进程失败: %w", err)
+	if runtime.GOOS == "windows" {
+		// Windows: 使用 taskkill /T /F 终止进程树
+		cmd := exec.Command("taskkill", "/T", "/F", "/PID", fmt.Sprintf("%d", pid))
+		if output, err := cmd.CombinedOutput(); err != nil {
+			slog.Debug("taskkill failed, falling back to os.Kill", "pid", pid, "err", err, "output", string(output))
+			if killErr := h.process.Kill(); killErr != nil {
+				return fmt.Errorf("终止进程失败: %w", killErr)
+			}
+		}
+	} else {
+		if err := h.process.Kill(); err != nil {
+			slog.Debug("process kill failed", "pid", pid, "err", err)
+			return fmt.Errorf("终止进程失败: %w", err)
+		}
 	}
 
 	// 等待进程退出（通过 sync.Once 确保只调用一次）

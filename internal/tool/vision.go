@@ -92,7 +92,10 @@ func (t *VisionAnalyzeTool) Execute(ctx context.Context, args map[string]any) (s
 		model = m
 	}
 
-	// 安全敏感路径检查
+	// 安全检查: 路径安全 + 敏感路径
+	if _, err := checkPathSecurity(imagePath, true); err != nil {
+		return ToolError(fmt.Sprintf("安全限制: %v", err)), nil
+	}
 	if isPathSensitive(imagePath) {
 		slog.Warn("vision analysis blocked (sensitive path)", "path", imagePath)
 		return ToolError(fmt.Sprintf("安全限制: 不允许访问敏感路径 %s", imagePath)), nil

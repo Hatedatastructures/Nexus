@@ -425,6 +425,9 @@ func (g *GoogleOAuth) doTokenRequest(ctx context.Context, data url.Values) (*Tok
 		return nil, fmt.Errorf("读取 token 响应失败: %w", err)
 	}
 
+	if resp.StatusCode == 401 {
+		return nil, fmt.Errorf("OAuth 认证失败 (HTTP 401): token 已失效或被撤销。请重新运行 OAuth 授权流程以获取新凭证。原始响应: %s", string(body))
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("token 端点返回 HTTP %d: %s", resp.StatusCode, string(body))
 	}

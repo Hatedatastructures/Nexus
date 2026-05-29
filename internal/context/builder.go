@@ -561,6 +561,10 @@ type Compressor struct {
 
 	// Anti-thrash 保护: 追踪连续无效压缩次数
 	consecutiveSummaries int // 连续未显著减少 token 的压缩次数
+	antiThrashCooldown   int // 反抖动冷却计数器: 每次调用 ShouldCompress 递减，归零后恢复
+
+	// summaryModel 用于生成总结的模型名称 (默认 "claude-sonnet-4-20250514")
+	summaryModel string
 
 	// SummaryTemplate 自定义摘要模板 (可选)。
 	// 非空时替代默认的结构化模板，用于生成上下文压缩摘要。
@@ -580,6 +584,7 @@ func NewCompressor(protectFirstN, tailTokenBudget int) *Compressor {
 		protectFirstN:    protectFirstN,
 		tailTokenBudget:  tailTokenBudget,
 		thresholdPercent: 0.75,
+		summaryModel:     "claude-sonnet-4-20250514",
 	}
 }
 

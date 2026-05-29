@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,38 @@ type SendMessageTool struct {
 
 // Name 返回工具名称。
 func (t *SendMessageTool) Name() string { return "send_message" }
+
+// allowedURLSchemes 是消息内容中 Markdown 链接允许的 URL scheme。
+var allowedURLSchemes = map[string]bool{
+	"http":   true,
+	"https":  true,
+	"mailto": true,
+	"tel":    true,
+}
+
+// sanitizeMessageLinks 清理消息内容中的 Markdown 链接，仅允许安全的 URL scheme。
+func sanitizeMessageLinks(content string) string {
+	// 匹配 Markdown 链接: [text](url)
+	linkRe := regexp.MustCompile(`\[([^\]]*)\]\(([^)]+)\)`)
+	return linkRe.ReplaceAllStringFunc(content, func(match string) string {
+		sub := linkRe.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		url := strings.TrimSpace(sub[2])
+		// 提取 scheme
+		schemeEnd := strings.Index(url, ":")
+		if schemeEnd < 0 {
+			return match // 无 scheme，保留
+		}
+		scheme := strings.ToLower(url[:schemeEnd])
+		if allowedURLSchemes[scheme] {
+			return match
+		}
+		// 不安全的 scheme，移除链接但保留文本
+		return sub[1]
+	})
+}
 
 // Description 返回工具描述。
 func (t *SendMessageTool) Description() string {
@@ -109,6 +142,9 @@ func (t *SendMessageTool) Execute(ctx context.Context, args map[string]any) (str
 
 	threadID, _ := args["thread_id"].(string)
 	parseMode, _ := args["parse_mode"].(string)
+
+	// 清理消息内容中的不安全 Markdown 链接
+	message = sanitizeMessageLinks(message)
 
 	t.clientOnce.Do(func() {
 		t.client = &http.Client{Timeout: 30 * time.Second}

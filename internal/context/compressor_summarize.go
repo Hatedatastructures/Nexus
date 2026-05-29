@@ -84,7 +84,7 @@ func (c *Compressor) generateSummary(ctx context.Context, messages []llm.Message
 
 	// 调用辅助 LLM
 	resp, err := provider.CreateChatCompletion(ctx, &llm.ChatRequest{
-		Model: "claude-sonnet-4-20250514", // 使用快速廉价的模型
+		Model: c.summaryModel,
 		Messages: []llm.Message{
 			{Role: llm.RoleUser, Content: prompt},
 		},

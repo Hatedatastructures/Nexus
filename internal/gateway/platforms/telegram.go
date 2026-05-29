@@ -26,6 +26,7 @@ type TelegramAdapter struct {
 	baseURL       string             // API 基础 URL: https://api.telegram.org/bot{token}
 	msgCh         chan *MessageEvent // 入站消息通道
 	cancelFn      context.CancelFunc // 取消函数
+	closeOnce     sync.Once          // 确保 msgCh 只关闭一次
 	disconnectOnce sync.Once         // 确保 Disconnect 只执行一次
 	mu             sync.Mutex        // 保护 cancelFn
 
@@ -215,7 +216,7 @@ func (t *TelegramAdapter) SendDocument(ctx context.Context, chatID string, fileP
 
 // pollLoop 长轮询循环。
 func (t *TelegramAdapter) pollLoop(ctx context.Context) {
-	defer close(t.msgCh) // pollLoop 退出时关闭 channel，避免外部 close 导致 panic
+	defer t.closeOnce.Do(func() { close(t.msgCh) }) // pollLoop 退出时安全关闭 channel
 
 	offset := 0
 	retryDelay := time.Second
@@ -295,6 +296,11 @@ func (t *TelegramAdapter) parseMessage(upd *update) *MessageEvent {
 		// 标记发送者是否为机器人
 	}
 
+	// 过滤机器人自身消息
+	if msg.From.IsBot {
+		return nil
+	}
+
 	switch msg.Chat.Type {
 	case "private":
 		source.ChatType = "dm"
@@ -318,7 +324,11 @@ func (t *TelegramAdapter) parseMessage(upd *update) *MessageEvent {
 	}
 
 	// 解析消息类型和内容
+	// 过滤 /start 命令和空消息
 	if msg.Text != "" {
+		if msg.Text == "/start" || msg.Text == "/start@" + msg.From.Username {
+			return nil
+		}
 		event.Text = msg.Text
 		event.MessageType = MsgText
 	} else if msg.Photo != nil && len(msg.Photo) > 0 {

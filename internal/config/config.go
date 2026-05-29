@@ -336,6 +336,16 @@ func expandEnv(cfg *Config) {
 	for k := range cfg.Gateway.Platforms {
 		cfg.Gateway.Platforms[k].Token = expandEnvString(cfg.Gateway.Platforms[k].Token)
 	}
+
+	// 回退链中的 APIKey 也需要展开
+	for i := range cfg.Agent.FallbackChain {
+		cfg.Agent.FallbackChain[i].APIKey = expandEnvString(cfg.Agent.FallbackChain[i].APIKey)
+		cfg.Agent.FallbackChain[i].BaseURL = expandEnvString(cfg.Agent.FallbackChain[i].BaseURL)
+	}
+	if cfg.Agent.FallbackModelCfg != nil {
+		cfg.Agent.FallbackModelCfg.APIKey = expandEnvString(cfg.Agent.FallbackModelCfg.APIKey)
+		cfg.Agent.FallbackModelCfg.BaseURL = expandEnvString(cfg.Agent.FallbackModelCfg.BaseURL)
+	}
 }
 
 func expandEnvString(s string) string {

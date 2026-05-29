@@ -8,9 +8,14 @@ import (
 	crand "crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
+	"time"
 )
+
+// ErrAllExhausted 表示所有凭证均处于冷却期。
+var ErrAllExhausted = errors.New("all credentials are exhausted, waiting for cooldown")
 
 // ───────────────────────────── 凭证类型 ─────────────────────────────
 
@@ -32,19 +37,23 @@ type Credential struct {
 // 支持多凭证、轮换策略、故障转移。
 // 线程安全: 所有公开方法使用 sync.RWMutex 保护。
 type Pool struct {
-	mu             sync.RWMutex
-	credentials    []Credential
-	strategy       string // 选择策略: fill_first / round_robin / random / least_used
-	cursor         int    // round_robin 游标
-	useCounts      []int  // 每个凭证的使用计数 (least_used 策略)
-	lastSelectedIdx int   // 上次选择的凭证索引 (用于 MarkExhausted)
+	mu              sync.RWMutex
+	credentials     []Credential
+	strategy        string // 选择策略: fill_first / round_robin / random / least_used
+	cursor          int    // round_robin 游标
+	useCounts       []int  // 每个凭证的使用计数 (least_used 策略)
+	lastSelectedIdx int    // 上次选择的凭证索引 (用于 MarkExhausted)
+	exhaustedAt     map[string]time.Time // 凭证耗尽时间戳 (用于冷却恢复)
+	exhaustCooldown time.Duration        // 耗尽冷却时间 (默认 30 分钟)
 }
 
 // NewPool 创建凭证池
 func NewPool() *Pool {
 	return &Pool{
-		credentials: nil,
-		strategy:    "fill_first",
+		credentials:     nil,
+		strategy:        "fill_first",
+		exhaustedAt:     make(map[string]time.Time),
+		exhaustCooldown: 30 * time.Minute,
 	}
 }
 
@@ -61,6 +70,13 @@ func (p *Pool) SetStrategy(strategy string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.strategy = strategy
+}
+
+// SetExhaustCooldown 设置耗尽冷却时间。
+func (p *Pool) SetExhaustCooldown(d time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.exhaustCooldown = d
 }
 
 // ApplyConfig 从配置对象应用凭证池策略。
@@ -85,13 +101,38 @@ func (p *Pool) Add(cred Credential) {
 	p.useCounts = append(p.useCounts, 0)
 }
 
+// recoverExhausted 清除冷却时间已过的耗尽标记。
+// 必须在持有 p.mu 写锁的情况下调用。
+func (p *Pool) recoverExhausted() {
+	now := time.Now()
+	for id, t := range p.exhaustedAt {
+		if now.Sub(t) >= p.exhaustCooldown {
+			delete(p.exhaustedAt, id)
+		}
+	}
+}
+
+// availableIndices 返回未耗尽的凭证索引列表。
+// 必须在持有 p.mu 锁的情况下调用。
+func (p *Pool) availableIndices() []int {
+	avail := make([]int, 0, len(p.credentials))
+	for i, c := range p.credentials {
+		if _, exhausted := p.exhaustedAt[c.ID]; !exhausted {
+			avail = append(avail, i)
+		}
+	}
+	return avail
+}
+
 // Select 根据当前策略选择最佳可用凭证。
+// 自动恢复冷却已过的耗尽凭证，跳过仍在冷却中的凭证。
+// 若所有凭证均处于冷却期则返回 nil。
 //
 // 支持以下策略:
-//   - fill_first:  始终返回第一个凭证 (按优先级顺序使用)
+//   - fill_first:  始终返回第一个可用凭证 (按优先级顺序使用)
 //   - round_robin:  轮询策略，使用 cursor 循环选择
-//   - random:       随机选择一个凭证
-//   - least_used:   选择使用次数最少的凭证
+//   - random:       随机选择一个可用凭证
+//   - least_used:   选择使用次数最少的可用凭证
 func (p *Pool) Select() *Credential {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -100,17 +141,79 @@ func (p *Pool) Select() *Credential {
 		return nil
 	}
 
+	p.recoverExhausted()
+
+	avail := p.availableIndices()
+	if len(avail) == 0 {
+		return nil
+	}
+
 	switch p.strategy {
 	case "round_robin":
-		return p.selectRoundRobin()
+		return p.selectRoundRobinAvail(avail)
 	case "random":
-		return p.selectRandom()
+		return p.selectRandomAvail(avail)
 	case "least_used":
-		return p.selectLeastUsed()
+		return p.selectLeastUsedAvail(avail)
 	default: // fill_first 及未知策略
-		p.lastSelectedIdx = 0
-		return &p.credentials[0]
+		idx := avail[0]
+		p.useCounts[idx]++
+		p.lastSelectedIdx = idx
+		return &p.credentials[idx]
 	}
+}
+
+// selectRoundRobinAvail 在可用凭证中轮询选择。
+// 必须在持有 p.mu 锁的情况下调用。
+func (p *Pool) selectRoundRobinAvail(avail []int) *Credential {
+	// 将 cursor 推进到第一个 >= 当前 cursor 的可用索引
+	for i := range avail {
+		if avail[i] >= p.cursor {
+			idx := avail[i]
+			p.cursor = idx + 1
+			if p.cursor >= len(p.credentials) {
+				p.cursor = 0
+			}
+			p.useCounts[idx]++
+			p.lastSelectedIdx = idx
+			return &p.credentials[idx]
+		}
+	}
+	// 回绕到开头
+	idx := avail[0]
+	p.cursor = idx + 1
+	if p.cursor >= len(p.credentials) {
+		p.cursor = 0
+	}
+	p.useCounts[idx]++
+	p.lastSelectedIdx = idx
+	return &p.credentials[idx]
+}
+
+// selectRandomAvail 在可用凭证中随机选择一个。
+// 必须在持有 p.mu 锁的情况下调用。
+func (p *Pool) selectRandomAvail(avail []int) *Credential {
+	pick := cryptoRandIntn(len(avail))
+	idx := avail[pick]
+	p.useCounts[idx]++
+	p.lastSelectedIdx = idx
+	return &p.credentials[idx]
+}
+
+// selectLeastUsedAvail 在可用凭证中选择使用次数最少的。
+// 必须在持有 p.mu 锁的情况下调用。
+func (p *Pool) selectLeastUsedAvail(avail []int) *Credential {
+	bestIdx := avail[0]
+	bestCount := p.useCounts[bestIdx]
+	for _, i := range avail[1:] {
+		if p.useCounts[i] < bestCount {
+			bestCount = p.useCounts[i]
+			bestIdx = i
+		}
+	}
+	p.useCounts[bestIdx]++
+	p.lastSelectedIdx = bestIdx
+	return &p.credentials[bestIdx]
 }
 
 // selectRoundRobin 轮询选择: 使用 cursor 循环遍历凭证。
@@ -150,13 +253,15 @@ func (p *Pool) selectLeastUsed() *Credential {
 }
 
 // MarkExhausted 标记当前凭证已耗尽并轮换到下一个可用凭证。
+// 凭证不会从池中移除，而是进入冷却期 (默认 30 分钟)，
+// 冷却结束后自动恢复可用。
 // 记录日志用于故障排查。
 //
 // 不同策略的轮换行为:
-//   - fill_first:  移除耗尽的凭证，返回新的第一个
-//   - round_robin:  移动 cursor 到下一个
-//   - random:       移除耗尽的凭证，后续随机选择
-//   - least_used:   移除耗尽的凭证，后续重新计算最少使用
+//   - fill_first:  标记耗尽，返回下一个优先级凭证
+//   - round_robin:  标记耗尽，移动 cursor 到下一个
+//   - random:       标记耗尽，后续随机选择
+//   - least_used:   标记耗尽，后续重新计算最少使用
 func (p *Pool) MarkExhausted(ctx context.Context, statusCode int, errorMsg string) *Credential {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -166,18 +271,10 @@ func (p *Pool) MarkExhausted(ctx context.Context, statusCode int, errorMsg strin
 		return nil
 	}
 
-	slog.WarnContext(ctx, "credential marked exhausted, rotating",
-		"status_code", statusCode,
-		"error", errorMsg,
-		"remaining", len(p.credentials)-1,
-		"strategy", p.strategy,
-	)
-
 	// 查找实际耗尽的凭证索引
 	targetIdx := 0
 	switch p.strategy {
 	case "round_robin":
-		// cursor 已经前进到下一个，所以耗尽的是 cursor-1
 		targetIdx = (p.cursor - 1 + len(p.credentials)) % len(p.credentials)
 	case "fill_first":
 		targetIdx = 0
@@ -185,49 +282,41 @@ func (p *Pool) MarkExhausted(ctx context.Context, statusCode int, errorMsg strin
 		targetIdx = p.lastSelectedIdx
 	}
 
-	// 至少保留一个凭证
-	if len(p.credentials) <= 1 {
-		slog.WarnContext(ctx, "only one credential remaining, cannot remove")
+	exhaustedID := p.credentials[targetIdx].ID
+	now := time.Now()
+
+	p.recoverExhausted()
+	p.exhaustedAt[exhaustedID] = now
+
+	avail := p.availableIndices()
+
+	slog.WarnContext(ctx, "credential marked exhausted, cooling down",
+		"status_code", statusCode,
+		"error", errorMsg,
+		"exhausted_id", exhaustedID,
+		"available", len(avail),
+		"cooldown", p.exhaustCooldown,
+		"strategy", p.strategy,
+	)
+
+	if len(avail) == 0 {
+		slog.WarnContext(ctx, "all credentials exhausted, waiting for cooldown")
 		return nil
 	}
 
-	p.credentials = append(p.credentials[:targetIdx], p.credentials[targetIdx+1:]...)
-	p.useCounts = append(p.useCounts[:targetIdx], p.useCounts[targetIdx+1:]...)
-
-	// round_robin 策略下调整 cursor
-	if p.strategy == "round_robin" {
-		if targetIdx < p.cursor {
-			p.cursor--
-		}
-		if p.cursor >= len(p.credentials) {
-			p.cursor = 0
-		}
-	}
-
-	// 根据策略返回下一个凭证
+	// 根据策略返回下一个可用凭证
 	switch p.strategy {
 	case "round_robin":
-		idx := p.cursor % len(p.credentials)
-		p.cursor = (p.cursor + 1) % len(p.credentials)
-		p.useCounts[idx]++
-		return &p.credentials[idx]
+		return p.selectRoundRobinAvail(avail)
 	case "random":
-		idx := cryptoRandIntn(len(p.credentials))
-		p.useCounts[idx]++
-		return &p.credentials[idx]
+		return p.selectRandomAvail(avail)
 	case "least_used":
-		minIdx := 0
-		minCount := p.useCounts[0]
-		for i := 1; i < len(p.useCounts); i++ {
-			if p.useCounts[i] < minCount {
-				minCount = p.useCounts[i]
-				minIdx = i
-			}
-		}
-		p.useCounts[minIdx]++
-		return &p.credentials[minIdx]
+		return p.selectLeastUsedAvail(avail)
 	default: // fill_first
-		return &p.credentials[0]
+		idx := avail[0]
+		p.useCounts[idx]++
+		p.lastSelectedIdx = idx
+		return &p.credentials[idx]
 	}
 }
 

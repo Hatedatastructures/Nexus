@@ -175,7 +175,7 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (string
 		}
 		// 后台命令返回进程句柄信息
 		resultJSON, _ := json.Marshal(map[string]any{
-			"output":    fmt.Sprintf("后台进程已启动 (命令: %s)", command),
+			"output":    fmt.Sprintf("后台进程已启动 (命令: %s). 注意: 后台模式下不会捕获 stdout/stderr，如需检查输出请使用前台模式。", command),
 			"exit_code": 0,
 			"cwd":       env.CWD(),
 			"pid":       fmt.Sprintf("%v", handle),

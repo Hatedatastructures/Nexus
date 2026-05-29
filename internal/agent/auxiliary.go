@@ -177,11 +177,10 @@ func (c *AuxiliaryClient) chatCompletionStreamWithStrategy(ctx context.Context, 
 			"model", entry.Model,
 		)
 
-		originalModel := req.Model
-		req.Model = entry.Model
+		reqCopy := *req
+		reqCopy.Model = entry.Model
 
-		ch, err := entry.Provider.CreateChatCompletionStream(ctx, req)
-		req.Model = originalModel
+		ch, err := entry.Provider.CreateChatCompletionStream(ctx, &reqCopy)
 
 		if err == nil {
 			c.router.MarkHealthy(entry.Provider.Name(), true)
@@ -213,8 +212,8 @@ func (c *AuxiliaryClient) chatCompletionStreamWithStrategy(ctx context.Context, 
 
 // tryProvider 在单个提供者上尝试请求，内部包含重试逻辑。
 func (c *AuxiliaryClient) tryProvider(ctx context.Context, entry *ProviderEntry, req *llm.ChatRequest) (*llm.ChatResponse, error) {
-	originalModel := req.Model
-	req.Model = entry.Model
+	reqCopy := *req
+	reqCopy.Model = entry.Model
 
 	var lastErr error
 	for attempt := 0; attempt <= c.retryCount; attempt++ {
@@ -227,15 +226,13 @@ func (c *AuxiliaryClient) tryProvider(ctx context.Context, entry *ProviderEntry,
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				req.Model = originalModel
 				return nil, ctx.Err()
 			case <-timer.C:
 			}
 		}
 
-		resp, err := entry.Provider.CreateChatCompletion(ctx, req)
+		resp, err := entry.Provider.CreateChatCompletion(ctx, &reqCopy)
 		if err == nil {
-			req.Model = originalModel
 			return resp, nil
 		}
 
@@ -244,18 +241,15 @@ func (c *AuxiliaryClient) tryProvider(ctx context.Context, entry *ProviderEntry,
 
 		// 如果是不可重试的错误，立即退出
 		if action == actionAbort {
-			req.Model = originalModel
 			return nil, err
 		}
 
 		// 如果是需要立即降级的错误，也退出重试循环
 		if action == actionImmediateFallback {
-			req.Model = originalModel
 			return nil, err
 		}
 	}
 
-	req.Model = originalModel
 	return nil, lastErr
 }
 

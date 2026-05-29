@@ -157,11 +157,16 @@ func (a *WeComAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error
 	// 连接 WebSocket
 	conn, err := a.openConnection(ctx)
 	if err != nil {
+		a.mu.Lock()
+		a.running = false
+		a.mu.Unlock()
 		return nil, fmt.Errorf("连接失败: %w", err)
 	}
 
+	a.mu.Lock()
 	a.conn = conn
 	a.connected = true
+	a.mu.Unlock()
 
 	// 启动监听循环
 	go a.listenLoop()
@@ -174,15 +179,16 @@ func (a *WeComAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error
 }
 
 // Disconnect 断开连接。
-func (a *WeComAdapter) Disconnect(ctx context.Context) error {
+	func (a *WeComAdapter) Disconnect(ctx context.Context) error {
 	a.mu.Lock()
 	a.running = false
 	a.connected = false
+	conn := a.conn
+	a.conn = nil
 	a.mu.Unlock()
 
-	if a.conn != nil {
-		a.conn.Close()
-		a.conn = nil
+	if conn != nil {
+		conn.Close()
 	}
 
 	slog.Info("[WeCom] disconnected")
@@ -528,17 +534,11 @@ func (a *WeComAdapter) Send(ctx context.Context, chatID string, content string, 
 		req["headers"] = map[string]any{"req_id": replyReqID}
 	}
 
-	// 注册响应通道
+	// 注册响应通道 + 发送请求（原子操作，防止 flush 竞态）
 	respCh := make(chan map[string]any, 1)
 	a.mu.Lock()
 	a.pendingResps[reqID] = respCh
-	a.mu.Unlock()
-
-	// 发送请求
-	a.mu.Lock()
 	if err := conn.WriteJSON(req); err != nil {
-		a.mu.Unlock()
-		a.mu.Lock()
 		delete(a.pendingResps, reqID)
 		a.mu.Unlock()
 		return nil, fmt.Errorf("发送失败: %w", err)

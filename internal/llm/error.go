@@ -277,8 +277,21 @@ func classifyErrorInternal(statusCode int, bodyLower string) *ClassifiedError {
 		}
 	}
 
-	// 其他 5xx
+	// 其他 5xx: 检查是否为请求验证错误
 	if statusCode >= 500 && statusCode < 600 {
+		// 某些提供者对无效请求返回 500 而非 400
+		if strings.Contains(bodyLower, "invalid_request") ||
+			strings.Contains(bodyLower, "request_validation") ||
+			strings.Contains(bodyLower, "invalid x-api-key") ||
+			strings.Contains(bodyLower, "invalid api key") {
+			return &ClassifiedError{
+				Reason:         ReasonFormatError,
+				StatusCode:     statusCode,
+				Retryable:      false,
+				ShouldFallback: false,
+				Message:        msg,
+			}
+		}
 		return &ClassifiedError{
 			Reason:     ReasonServerError,
 			StatusCode: statusCode,

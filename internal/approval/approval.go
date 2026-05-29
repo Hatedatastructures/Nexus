@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // ───────────────────────────── 审批结果 ─────────────────────────────
@@ -42,6 +43,7 @@ func (r Result) String() string {
 // 维护危险命令模式列表和审批状态。
 type Checker struct {
 	mode      string   // 审批模式: "off" / "smart" / "always"
+	modeMu    sync.RWMutex // 保护 mode 字段的并发读写
 	allowlist []string // 永久允许的模式
 	blocklist []string // 永久禁止的模式
 }
@@ -60,11 +62,15 @@ func NewChecker(mode string, allowlist, blocklist []string) *Checker {
 
 // Mode 返回当前的审批模式。
 func (c *Checker) Mode() string {
+	c.modeMu.RLock()
+	defer c.modeMu.RUnlock()
 	return c.mode
 }
 
 // SetMode 设置审批模式。
 func (c *Checker) SetMode(mode string) {
+	c.modeMu.Lock()
+	defer c.modeMu.Unlock()
 	c.mode = mode
 }
 
@@ -184,8 +190,12 @@ func (c *Checker) Check(ctx context.Context, command string) (Result, string) {
 		return Approved, "空命令"
 	}
 
+	c.modeMu.RLock()
+	mode := c.mode
+	c.modeMu.RUnlock()
+
 	// off 模式: 始终通过
-	if c.mode == "off" {
+	if mode == "off" {
 		return Approved, "审批模式为 off"
 	}
 
@@ -203,6 +213,15 @@ func (c *Checker) Check(ctx context.Context, command string) (Result, string) {
 	// 检查自定义白名单
 	for _, allowed := range c.allowlist {
 		if strings.Contains(command, allowed) {
+			// 白名单不能绕过硬阻止检查
+			if result, reason := c.checkHardBlocked(command); result == Denied {
+				slog.Warn("allowlist bypass blocked by hard-blocked check",
+					"command", truncateForLog(command, 200),
+					"allowlist_pattern", allowed,
+					"hard_blocked_reason", reason,
+				)
+				return Denied, reason
+			}
 			return Approved, fmt.Sprintf("自定义白名单: 匹配 '%s'", allowed)
 		}
 	}
@@ -217,7 +236,7 @@ func (c *Checker) Check(ctx context.Context, command string) (Result, string) {
 	}
 
 	// always 模式: 始终需要审批 (除非安全模式)
-	if c.mode == "always" {
+	if mode == "always" {
 		if c.isSafe(command) {
 			return Approved, "安全命令 (always 模式自动放行)"
 		}
@@ -225,7 +244,7 @@ func (c *Checker) Check(ctx context.Context, command string) (Result, string) {
 	}
 
 	// smart 模式: 仅检查危险命令
-	if c.mode == "smart" {
+	if mode == "smart" {
 		// 安全命令自动通过
 		if c.isSafe(command) {
 			return Approved, "安全命令自动通过"
@@ -244,7 +263,7 @@ func (c *Checker) Check(ctx context.Context, command string) (Result, string) {
 	}
 
 	// 默认通过 (未知模式)
-	return Approved, fmt.Sprintf("未知审批模式: %s", c.mode)
+	return Approved, fmt.Sprintf("未知审批模式: %s", mode)
 }
 
 // CheckTool 检查工具调用是否安全。

@@ -99,6 +99,10 @@ if err := a.persister.RecordPromptHistory(userMessage); err != nil {
 	if a.resumeMode && a.state != nil && a.sessionID != "" && len(history) == 0 {
 		if records, err := a.state.GetMessages(ctx, a.sessionID, 50, 0); err == nil && len(records) > 0 {
 			for _, r := range records {
+				// 跳过纯工具调用条目 (role=tool 或有 tool_calls 但无用户可见内容)
+				if r.Role == "tool" || (r.ToolCalls != "" && r.ToolCalls != "null" && r.ToolCalls != "[]" && r.Content == "") {
+					continue
+				}
 				history = append(history, llm.Message{
 					Role:    llm.MessageRole(r.Role),
 					Content: r.Content,
@@ -215,7 +219,11 @@ if err := a.persister.RecordPromptHistory(userMessage); err != nil {
 			result.Completed = true
 			break
 		} else if stopReason == llm.StopMaxTokens || stopReason == llm.StopLength {
-			// max_tokens / length: 文本被截断，继续生成
+			// max_tokens / length: 文本被截断，注入续接提示
+			messages = append(messages, llm.Message{
+				Role:    llm.RoleUser,
+				Content: "Please continue from where you left off.",
+			})
 			continue
 		} else {
 			// 未知 stop reason，视为结束
@@ -668,7 +676,7 @@ func (a *AIAgent) handleStreamCall(ctx context.Context, req *llm.ChatRequest) (*
 		}
 	}
 
-	// 根据是否有工具调用动态设置 stop reason
+	// 使用 LLM 返回的 stop reason，仅在没有工具调用时回退
 	stopReason := llm.StopEndTurn
 	if len(toolCalls) > 0 {
 		stopReason = llm.StopToolUse

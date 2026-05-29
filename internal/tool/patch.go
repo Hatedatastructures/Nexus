@@ -140,11 +140,39 @@ func parseSinglePatch(content string) (PatchOperation, error) {
 // ───────────────────────────── 沙箱路径解析 ─────────────────────────────
 
 // resolvePatchPath 当 env 非 nil 时，将相对路径约束到沙箱工作目录。
-func resolvePatchPath(path string, env sandbox.Environment) string {
+// 同时解析 symlink 确保路径未逃逸。
+func resolvePatchPath(path string, env sandbox.Environment) (string, error) {
+	var resolved string
 	if env != nil && env.CWD() != "" {
-		return filepath.Join(env.CWD(), path)
+		resolved = filepath.Join(env.CWD(), path)
+	} else {
+		resolved = path
 	}
-	return path
+
+	// 解析 symlink 获取真实路径
+	realPath, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("解析符号链接失败: %w", err)
+		}
+		// 文件尚不存在，检查父目录
+		parentDir := filepath.Dir(resolved)
+		realParent, evalErr := filepath.EvalSymlinks(parentDir)
+		if evalErr != nil {
+			return "", fmt.Errorf("解析父目录符号链接失败: %w", evalErr)
+		}
+		realPath = filepath.Join(realParent, filepath.Base(resolved))
+	}
+
+	// 当有沙箱时，确保真实路径未逃逸出工作目录
+	if env != nil && env.CWD() != "" {
+		cwd, _ := filepath.Abs(env.CWD())
+		if cwd != "" && !strings.HasPrefix(realPath, cwd+string(os.PathSeparator)) && realPath != cwd {
+			return "", fmt.Errorf("路径逃逸出工作目录: %s", path)
+		}
+	}
+
+	return realPath, nil
 }
 
 // ───────────────────────────── 应用函数 ─────────────────────────────
@@ -185,7 +213,10 @@ func applyOperation(op PatchOperation, env sandbox.Environment) error {
 }
 
 func applyAdd(op PatchOperation, env sandbox.Environment) error {
-	fp := resolvePatchPath(op.FilePath, env)
+	fp, err := resolvePatchPath(op.FilePath, env)
+	if err != nil {
+		return err
+	}
 	if op.CreateDirs {
 		dir := filepath.Dir(fp)
 		if dir != "" && dir != "." {
@@ -205,7 +236,10 @@ func applyAdd(op PatchOperation, env sandbox.Environment) error {
 }
 
 func applyUpdate(op PatchOperation, env sandbox.Environment) error {
-	fp := resolvePatchPath(op.FilePath, env)
+	fp, err := resolvePatchPath(op.FilePath, env)
+	if err != nil {
+		return err
+	}
 	data, err := os.ReadFile(fp)
 	if err != nil {
 		return fmt.Errorf("读取文件失败: %w", err)
@@ -228,14 +262,26 @@ func applyUpdate(op PatchOperation, env sandbox.Environment) error {
 }
 
 func applyDelete(op PatchOperation, env sandbox.Environment) error {
-	return os.Remove(resolvePatchPath(op.FilePath, env))
+	fp, err := resolvePatchPath(op.FilePath, env)
+	if err != nil {
+		return err
+	}
+	return os.Remove(fp)
 }
 
 func applyMove(op PatchOperation, env sandbox.Environment) error {
 	if op.TargetPath == "" {
 		return fmt.Errorf("MOVE 操作缺少 target_path")
 	}
-	return os.Rename(resolvePatchPath(op.FilePath, env), resolvePatchPath(op.TargetPath, env))
+	src, err := resolvePatchPath(op.FilePath, env)
+	if err != nil {
+		return err
+	}
+	dst, err := resolvePatchPath(op.TargetPath, env)
+	if err != nil {
+		return err
+	}
+	return os.Rename(src, dst)
 }
 
 // ───────────────────────────── 模糊匹配 ─────────────────────────────

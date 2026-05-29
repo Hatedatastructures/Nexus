@@ -763,6 +763,9 @@ func (a *QQBotAdapter) Send(ctx context.Context, chatID string, content string, 
 
 // SendImage 发送图片。
 func (a *QQBotAdapter) SendImage(ctx context.Context, chatID string, imageURL string, caption string, opts *SendOptions) (*SendResult, error) {
+	if err := validateChatID(chatID); err != nil {
+		return nil, err
+	}
 	// QQ Bot 需要先上传媒体
 	fileInfo, err := a.uploadMedia(ctx, chatID, imageURL, qqbotMediaTypeImage)
 	if err != nil {
@@ -862,6 +865,9 @@ func (a *QQBotAdapter) uploadMedia(ctx context.Context, chatID, fileURL string, 
 
 // SendTyping 发送正在输入指示。
 func (a *QQBotAdapter) SendTyping(ctx context.Context, chatID string) error {
+	if err := validateChatID(chatID); err != nil {
+		return err
+	}
 	if strings.HasPrefix(chatID, "group:") {
 		return nil // 群聊不支持输入指示
 	}
@@ -994,6 +1000,9 @@ func (a *QQBotAdapter) DeleteMessage(ctx context.Context, chatID string, message
 
 // SendVoice 发送语音。
 func (a *QQBotAdapter) SendVoice(ctx context.Context, chatID string, audioPath string, opts *SendOptions) (*SendResult, error) {
+	if err := validateChatID(chatID); err != nil {
+		return nil, err
+	}
 	fileInfo, err := a.uploadMedia(ctx, chatID, audioPath, qqbotMediaTypeVoice)
 	if err != nil {
 		return &SendResult{Success: false, Error: fmt.Sprintf("上传语音失败: %v", err)}, nil

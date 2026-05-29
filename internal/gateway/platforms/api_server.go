@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -62,15 +63,26 @@ func (a *APIServerAdapter) SupportsStreaming() bool { return true }
 
 // bearerAuthMiddleware 检查 NEXUS_API_KEY 环境变量，
 // 如果已设置则要求 Authorization: Bearer <key> 头部，
-// 如果未设置则跳过认证 (向后兼容)。
+// 如果未设置则拒绝所有请求 (fail-closed)。
+// 同时验证 Host 和 Origin 头部，防止 DNS 重绑定攻击。
 func bearerAuthMiddleware(next http.Handler) http.Handler {
 	apiKey := os.Getenv("NEXUS_API_KEY")
 	if apiKey == "" {
-		slog.Warn("[API Server] NEXUS_API_KEY not set, API endpoints are unauthenticated")
-		return next
+		slog.Error("[API Server] NEXUS_API_KEY not set, refusing all requests (fail-closed)")
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/health" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			http.Error(w, "Service Unavailable: NEXUS_API_KEY not configured", http.StatusServiceUnavailable)
+		})
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !validateHostOrigin(w, r) {
+			return
+		}
+
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
 			http.Error(w, "Unauthorized: missing Authorization header", http.StatusUnauthorized)
@@ -85,6 +97,53 @@ func bearerAuthMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// validateHostOrigin 验证请求的 Host 和 Origin 头部。
+// 防止 DNS 重绑定攻击: 仅允许 loopback 地址访问 API Server。
+func validateHostOrigin(w http.ResponseWriter, r *http.Request) bool {
+	// 验证 Host 头
+	host := r.Host
+	if host != "" {
+		h, _, err := net.SplitHostPort(host)
+		if err != nil {
+			h = host
+		}
+		if !isLoopbackHost(h) {
+			slog.Warn("[API Server] rejected non-loopback Host", "host", host, "remote", r.RemoteAddr)
+			http.Error(w, "Forbidden: non-loopback access denied", http.StatusForbidden)
+			return false
+		}
+	}
+
+	// 验证 Origin 头（浏览器发起的请求）
+	origin := r.Header.Get("Origin")
+	if origin != "" {
+		origin = strings.TrimPrefix(origin, "http://")
+		origin = strings.TrimPrefix(origin, "https://")
+		h, _, err := net.SplitHostPort(origin)
+		if err != nil {
+			h = origin
+		}
+		h = strings.TrimSuffix(h, "/")
+		if !isLoopbackHost(h) {
+			slog.Warn("[API Server] rejected non-loopback Origin", "origin", r.Header.Get("Origin"), "remote", r.RemoteAddr)
+			http.Error(w, "Forbidden: non-loopback origin denied", http.StatusForbidden)
+			return false
+		}
+	}
+
+	return true
+}
+
+// isLoopbackHost 检查主机名是否为 loopback 地址。
+func isLoopbackHost(host string) bool {
+	switch host {
+	case "localhost", "127.0.0.1", "::1", "[::1]":
+		return true
+	default:
+		return net.ParseIP(host).IsLoopback()
+	}
 }
 
 func (a *APIServerAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error) {

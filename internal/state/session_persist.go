@@ -52,7 +52,7 @@ func (sp *SessionPersister) Open() error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 
-	if err := os.MkdirAll(sp.dir, 0o755); err != nil {
+	if err := os.MkdirAll(sp.dir, 0o700); err != nil {
 		return fmt.Errorf("create session dir: %w", err)
 	}
 
@@ -64,7 +64,7 @@ func (sp *SessionPersister) Open() error {
 	}
 
 	flag := os.O_CREATE | os.O_WRONLY | os.O_APPEND
-	f, err := os.OpenFile(path, flag, 0o644)
+	f, err := os.OpenFile(path, flag, 0o600)
 	if err != nil {
 		return fmt.Errorf("open session file: %w", err)
 	}
@@ -204,7 +204,7 @@ func (sp *SessionPersister) rotateIfNeeded() error {
 	}
 
 	// Open a fresh file.
-	f, err := os.OpenFile(base, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(base, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open new session file after rotation: %w", err)
 	}

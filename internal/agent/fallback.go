@@ -76,12 +76,17 @@ func NewFallbackChain(entries []*FallbackEntry, providerMap map[string]llm.Provi
 // shouldFallback 判断错误是否应该触发故障转移。
 // 使用 llm.ClassifyFromError 进行统一分类，排除上下文溢出和格式错误
 // (这两种错误应通过压缩或修正请求处理，而非切换提供者)。
+// 计费耗尽 (HTTP 402) 也排除在外，因为同一账户的额度耗尽在所有提供者上都会失败。
 func shouldFallback(err error) bool {
 	if err == nil {
 		return false
 	}
 	classified := llm.ClassifyFromError(err)
 
+	// 计费耗尽: 同一账户/密钥，切换提供者无法解决
+	if classified.Reason == llm.ReasonBilling {
+		return false
+	}
 	// 上下文溢出: 应压缩上下文，而非切换提供者
 	if classified.Reason == llm.ReasonContextOverflow {
 		return false
@@ -92,6 +97,18 @@ func shouldFallback(err error) bool {
 	}
 
 	return classified.ShouldFallback
+}
+
+// isBillingError returns true when the error is classified as a billing/quota
+// exhaustion issue (HTTP 402 or matching billing patterns). Such errors mean
+// the account has no remaining credits, so retrying with a different provider
+// that shares the same credentials will not help.
+func isBillingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	classified := llm.ClassifyFromError(err)
+	return classified.Reason == llm.ReasonBilling
 }
 
 // ───────────────────────────── 回退链执行 ─────────────────────────────
@@ -176,8 +193,14 @@ func (a *AIAgent) tryFallbackChain(ctx context.Context, err error, req *llm.Chat
 			"error", tryErr.Error(),
 		)
 
-		// 如果该错误不应继续回退 (如认证错误在不同提供者可能不同)
-		// 但由于是不同提供者，我们仍然继续尝试下一个
+		// 计费耗尽 (HTTP 402 等): 同一账户/密钥在所有提供者上都会失败，立即中止
+		if isBillingError(tryErr) {
+			slog.Warn("fallback chain: billing/quota exhaustion detected, aborting chain",
+				"provider", entry.provider.Name(),
+				"model", entry.model,
+			)
+			return nil, fmt.Errorf("billing/quota exhaustion: %w", tryErr)
+		}
 	}
 
 	return nil, fmt.Errorf("回退链所有提供者均失败 (共 %d 个): %w", len(a.fallbackChain.entries), lastErr)
@@ -197,7 +220,11 @@ func (a *AIAgent) tryFallback(ctx context.Context, req *llm.ChatRequest) (*llm.C
 		"to_model", a.fallbackModel,
 	)
 
-	return a.fallbackProvider.CreateChatCompletion(ctx, req)
+	originalModel := req.Model
+	req.Model = a.fallbackModel
+	resp, err := a.fallbackProvider.CreateChatCompletion(ctx, req)
+	req.Model = originalModel
+	return resp, err
 }
 
 // ───────────────────────────── 健康恢复扫描 ─────────────────────────────

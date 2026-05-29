@@ -196,7 +196,8 @@ func (t *AnthropicTransport) ParseStream(ctx context.Context, body io.ReadCloser
 						CompletionTokens: outputTokens,
 						TotalTokens:      inputTokens + outputTokens,
 					},
-					Done: true,
+					StopReason: "end_turn",
+					Done:       true,
 				}
 				return
 			}
@@ -246,7 +247,6 @@ func (t *AnthropicTransport) ParseStream(ctx context.Context, body io.ReadCloser
 								PromptTokens:     inputTokens,
 								CompletionTokens: outputTokens,
 								TotalTokens:      inputTokens + outputTokens,
-								CacheReadTokens:  sseEvent.Usage.CacheReadInputTokens,
 							},
 							Done: true,
 						}

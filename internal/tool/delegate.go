@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 // ───────────────────────────── 子代理委派工具 ─────────────────────────────
@@ -117,9 +118,13 @@ func (t *DelegateTaskTool) Execute(ctx context.Context, args map[string]any) (st
 		"timeout", timeout.String(),
 	)
 
-	// 检查批量任务
+	// 检查批量任务 (尝试 JSON 数组解析，而非脆弱的首字符判断)
 	if len(task) > 0 && task[0] == '[' {
-		return t.executeBatchTasks(subCtx, task, contextInfo, role)
+		var probe []json.RawMessage
+		if err := json.Unmarshal([]byte(task), &probe); err == nil {
+			return t.executeBatchTasks(subCtx, task, contextInfo, role)
+		}
+		// 不是合法 JSON 数组，按单任务处理
 	}
 
 	// 单任务执行
@@ -336,12 +341,13 @@ func buildSubAgentPrompt(task, contextInfo, role string) string {
 
 // ───────────────────────────── 辅助函数 ─────────────────────────────
 
-// truncateForLog 截断字符串用于日志输出。
+// truncateForLog 截断字符串用于日志输出 (UTF-8 安全)。
 func truncateForLog(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	if utf8.RuneCountInString(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	runes := []rune(s)
+	return string(runes[:maxLen]) + "..."
 }
 
 // ───────────────────────────── init 注册 ─────────────────────────────

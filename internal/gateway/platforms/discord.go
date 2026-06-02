@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,16 +41,23 @@ type DiscordAdapter struct {
 	wsRetryDelay  time.Duration   //
 	closeOnce  sync.Once        //
 	stopped    atomic.Bool      // 确保 msgCh 只关闭一次
+
+	// 频道类型缓存 (channelID -> "dm"/"group")
+	channelTypeCache map[string]string
+	channelTypeMu    sync.RWMutex
 }
+
+const discordChannelCacheMaxSize = 500
 
 // NewDiscordAdapter 创建 Discord 适配器。
 // token 为 Discord Bot Token。
 func NewDiscordAdapter(token string) *DiscordAdapter {
 	return &DiscordAdapter{
-		token:   token,
-		client:  &http.Client{Timeout: 30 * time.Second},
-		baseURL: "https://discord.com/api/v10",
-		msgCh:   make(chan *MessageEvent, 128),
+		token:            token,
+		client:           &http.Client{Timeout: 30 * time.Second},
+		baseURL:          "https://discord.com/api/v10",
+		msgCh:            make(chan *MessageEvent, 128),
+		channelTypeCache: make(map[string]string),
 	}
 }
 
@@ -199,7 +207,7 @@ func (d *DiscordAdapter) wsLoop(ctx context.Context) {
 // connectGateway 建立 Gateway WebSocket 连接并开始事件循环。
 func (d *DiscordAdapter) connectGateway(ctx context.Context) error {
 	// 1. 获取 Gateway URL
-	gwURL, err := d.getGatewayURL()
+	gwURL, err := d.getGatewayURL(ctx)
 	if err != nil {
 		return err
 	}
@@ -281,9 +289,9 @@ func (d *DiscordAdapter) gatewayEventLoop(ctx context.Context, conn *websocket.C
 
 			// 发送 Identify 或 Resume
 			d.stateMu.RLock()
-				sid := d.sessionID
-				d.stateMu.RUnlock()
-				if sid != "" {
+			sid := d.sessionID
+			d.stateMu.RUnlock()
+			if sid != "" {
 				d.sendResume(conn)
 			} else {
 				d.sendIdentify(conn)
@@ -361,7 +369,11 @@ func (d *DiscordAdapter) heartbeatLoop(ctx context.Context, conn *websocket.Conn
 				"op": 1,
 				"d":  seq,
 			}
-			data, _ := json.Marshal(heartbeat)
+			data, err := json.Marshal(heartbeat)
+			if err != nil {
+				slog.Warn("discord: failed to marshal heartbeat", "error", err)
+				return
+			}
 			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				slog.Warn("discord heartbeat failed", "err", err)
 				return
@@ -384,8 +396,14 @@ func (d *DiscordAdapter) sendIdentify(conn *websocket.Conn) {
 			},
 		},
 	}
-	data, _ := json.Marshal(payload)
-	_ = conn.WriteMessage(websocket.TextMessage, data)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		slog.Warn("discord: failed to marshal identify payload", "error", err)
+		return
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		slog.Warn("discord: failed to send identify", "error", err)
+	}
 }
 
 // sendResume 发送 Resume 消息。
@@ -396,14 +414,20 @@ func (d *DiscordAdapter) sendResume(conn *websocket.Conn) {
 	d.stateMu.RUnlock()
 	payload := map[string]any{
 		"op": 6,
-		"d": map[string]string{
-			"token":     d.token,
+		"d": map[string]any{
+			"token":      d.token,
 			"session_id": sid,
-			"seq":       fmt.Sprintf("%d", seq),
+			"seq":        seq,
 		},
 	}
-	data, _ := json.Marshal(payload)
-	_ = conn.WriteMessage(websocket.TextMessage, data)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		slog.Warn("discord: failed to marshal resume payload", "error", err)
+		return
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		slog.Warn("discord: failed to send resume", "error", err)
+	}
 }
 
 // handleMessageCreate 处理 MESSAGE_CREATE 事件。
@@ -452,8 +476,11 @@ func (d *DiscordAdapter) handleMessageCreate(raw json.RawMessage) {
 }
 
 // getGatewayURL 获取 Gateway WebSocket URL。
-func (d *DiscordAdapter) getGatewayURL() (string, error) {
-	req, _ := http.NewRequest("GET", d.baseURL+"/gateway", nil)
+func (d *DiscordAdapter) getGatewayURL(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", d.baseURL+"/gateway", nil)
+	if err != nil {
+		return "", fmt.Errorf("创建 gateway 请求失败: %w", err)
+	}
 	req.Header.Set("Authorization", "Bot "+d.token)
 
 	resp, err := d.client.Do(req)
@@ -462,7 +489,10 @@ func (d *DiscordAdapter) getGatewayURL() (string, error) {
 	}
 	defer resp.Body.Close()
 
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
+	if err != nil {
+		return "", fmt.Errorf("读取 gateway 响应失败: %w", err)
+	}
 	var result struct {
 		URL string `json:"url"`
 	}
@@ -470,12 +500,12 @@ func (d *DiscordAdapter) getGatewayURL() (string, error) {
 		return "", err
 	}
 	if result.URL == "" {
-		return "", fmt.Errorf("empty gateway url: %s", string(raw))
+		return "", fmt.Errorf("discord gateway returned empty url (status=%d)", resp.StatusCode)
 	}
 
 	// 将 https:// 替换为 wss://
 	wsURL := result.URL
-	if len(wsURL) > 5 && wsURL[:5] == "https" {
+	if strings.HasPrefix(wsURL, "https") {
 		wsURL = "wss" + wsURL[5:]
 	}
 	return wsURL, nil
@@ -487,7 +517,7 @@ func init() {
 	GetRegistry().Register(&AdapterEntry{
 		Platform: PlatformDiscord,
 		Name:     "Discord",
-		Factory:  func() PlatformAdapter { return &DiscordAdapter{} },
+		Factory:  func() PlatformAdapter { return NewDiscordAdapter("") },
 	})
 }
 
@@ -502,6 +532,7 @@ func (d *DiscordAdapter) Configure(settings map[string]any) error {
 	d.client = &http.Client{Timeout: 30 * time.Second}
 	d.baseURL = "https://discord.com/api/v10"
 	d.msgCh = make(chan *MessageEvent, 128)
+	d.channelTypeCache = make(map[string]string)
 	return nil
 }
 
@@ -516,9 +547,34 @@ func (d *DiscordAdapter) closeWS() {
 }
 
 // chatTypeFromChannelID 根据频道 ID 判断聊天类型。
-// Discord DM 频道 ID 格式与普通频道不同，通过 API 查询判断。
+// 使用缓存避免每条消息都发起 HTTP 请求。
 func (d *DiscordAdapter) chatTypeFromChannelID(channelID string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// 查缓存
+	d.channelTypeMu.RLock()
+	if ct, ok := d.channelTypeCache[channelID]; ok {
+		d.channelTypeMu.RUnlock()
+		return ct
+	}
+	d.channelTypeMu.RUnlock()
+
+	// 缓存未命中，查询 API
+	chatType := d.fetchChannelType(context.Background(), channelID)
+
+	// 写入缓存
+	d.channelTypeMu.Lock()
+	if len(d.channelTypeCache) > discordChannelCacheMaxSize {
+		// 简单淘汰: 清空重建
+		d.channelTypeCache = make(map[string]string, len(d.channelTypeCache))
+	}
+	d.channelTypeCache[channelID] = chatType
+	d.channelTypeMu.Unlock()
+
+	return chatType
+}
+
+// fetchChannelType 通过 Discord API 查询频道类型。
+func (d *DiscordAdapter) fetchChannelType(ctx context.Context, channelID string) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.baseURL+"/channels/"+channelID, nil)
@@ -540,7 +596,6 @@ func (d *DiscordAdapter) chatTypeFromChannelID(channelID string) string {
 		return "dm"
 	}
 
-	// Discord channel types: 1=DM, 3=GroupDM, 0=GuildText, 2=GuildVoice, etc.
 	switch ch.Type {
 	case 1, 3:
 		return "dm"
@@ -579,7 +634,8 @@ func (d *DiscordAdapter) doAPI(ctx context.Context, method string, path string, 
 	}
 
 	if resp.StatusCode >= 400 {
-		errMsg := fmt.Sprintf("discord api error %d: %s", resp.StatusCode, string(raw))
+		slog.Warn("discord api error", "status", resp.StatusCode, "body", string(raw))
+		errMsg := fmt.Sprintf("discord api error %d", resp.StatusCode)
 		retryable := resp.StatusCode == 429 || resp.StatusCode >= 500
 		return &SendResult{Success: false, Error: errMsg, Retryable: retryable}, nil
 	}
@@ -588,7 +644,9 @@ func (d *DiscordAdapter) doAPI(ctx context.Context, method string, path string, 
 	var result struct {
 		ID string `json:"id"`
 	}
-	json.Unmarshal(raw, &result) // 忽略解析错误
+	if err := json.Unmarshal(raw, &result); err != nil {
+		slog.Warn("discord: failed to parse send response", "error", err)
+	}
 
 	return &SendResult{
 		Success:   true,

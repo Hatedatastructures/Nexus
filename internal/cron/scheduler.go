@@ -114,8 +114,10 @@ func (s *Scheduler) Stop() {
 //  1. 获取文件锁 (非阻塞 — 如果已被锁定则跳过)
 //  2. 获取到期作业
 //  3. 为所有重复作业预计算下次执行时间
-//  4. 并发执行作业
-//  5. 释放锁
+//  4. 顺序执行作业
+//  5. 持久化执行状态
+//  6. 投递结果
+//  7. 释放锁
 func (s *Scheduler) tick(ctx context.Context) error {
 	// 获取文件锁
 	lock, err := s.acquireLock()
@@ -158,6 +160,13 @@ func (s *Scheduler) tick(ctx context.Context) error {
 			job.LastError = err.Error()
 		}
 
+		// 持久化执行状态到磁盘
+		if err := s.manager.PersistJobStatus(ctx, job); err != nil {
+			slog.Warn("Cron: failed to persist job status",
+				"job_id", job.ID, "error", err,
+			)
+		}
+
 		// 投递结果
 		if err := DeliverResult(ctx, job, job.LastStatus, nil); err != nil {
 			slog.Warn("Cron: result delivery failed",
@@ -173,6 +182,7 @@ func (s *Scheduler) tick(ctx context.Context) error {
 func (s *Scheduler) tickWithAdapters(ctx context.Context, adapters map[platforms.Platform]platforms.PlatformAdapter) error {
 	lock, err := s.acquireLock()
 	if err != nil {
+		slog.Warn("scheduler: failed to acquire lock, skipping tick", "err", err)
 		return nil
 	}
 	defer s.releaseLock(lock)
@@ -198,6 +208,13 @@ func (s *Scheduler) tickWithAdapters(ctx context.Context, adapters map[platforms
 			)
 			job.LastStatus = "error"
 			job.LastError = err.Error()
+		}
+
+		// 持久化执行状态到磁盘
+		if err := s.manager.PersistJobStatus(ctx, job); err != nil {
+			slog.Warn("Cron: failed to persist job status",
+				"job_id", job.ID, "error", err,
+			)
 		}
 
 		DeliverResult(ctx, job, job.LastStatus, adapters)

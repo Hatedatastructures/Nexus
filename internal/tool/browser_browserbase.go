@@ -92,8 +92,8 @@ func NewBrowserbaseSession(ctx context.Context, cfg BrowserbaseConfig) (*Browser
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("Browserbase 创建会话失败 (HTTP %d): %s",
-			resp.StatusCode, string(respBody))
+		slog.Warn("Browserbase create session failed", "status", resp.StatusCode, "body", string(respBody))
+		return nil, fmt.Errorf("Browserbase 创建会话失败 (HTTP %d)", resp.StatusCode)
 	}
 
 	// 解析响应，提取会话 ID 和 CDP 连接 URL
@@ -151,9 +151,9 @@ func (s *BrowserbaseSession) Close(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
-		return fmt.Errorf("Browserbase 关闭会话失败 (HTTP %d): %s",
-			resp.StatusCode, string(body))
+		closeBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
+		slog.Warn("Browserbase close session failed", "status", resp.StatusCode, "body", string(closeBody))
+		return fmt.Errorf("Browserbase 关闭会话失败 (HTTP %d)", resp.StatusCode)
 	}
 
 	slog.Info("Browserbase cloud browser session closed", "session_id", s.sessionID)

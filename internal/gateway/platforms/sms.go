@@ -16,6 +16,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,6 +39,11 @@ type SMSAdapter struct {
 	msgCh       chan *MessageEvent
 	running     bool
 	webhookPort int
+	httpServer  *http.Server
+
+	// 并发控制
+	mu        sync.RWMutex
+	closeOnce sync.Once
 }
 
 // NewSMSAdapter 创建 SMS 适配器。
@@ -48,7 +54,9 @@ func NewSMSAdapter(messageHandler func(*MessageEvent)) *SMSAdapter {
 
 	webhookPort := 8082
 	if p := os.Getenv("SMS_WEBHOOK_PORT"); p != "" {
-		fmt.Sscanf(p, "%d", &webhookPort)
+		if _, err := fmt.Sscanf(p, "%d", &webhookPort); err != nil {
+			slog.Warn("[SMS] invalid SMS_WEBHOOK_PORT, using default", "value", p, "default", webhookPort)
+		}
 	}
 
 	return &SMSAdapter{
@@ -73,20 +81,32 @@ func (a *SMSAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error) 
 		return nil, fmt.Errorf("TWILIO_ACCOUNT_SID 和 TWILIO_AUTH_TOKEN 是必填项")
 	}
 
+	a.mu.Lock()
 	a.msgCh = make(chan *MessageEvent, 100)
 	a.running = true
+	a.mu.Unlock()
 
 	// 启动 webhook 服务器接收入站短信
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sms/webhook", a.handleWebhook)
 
 	go func() {
-		addr := fmt.Sprintf(":%d", a.webhookPort)
+		bind := os.Getenv("SMS_WEBHOOK_BIND")
+		if bind == "" {
+			bind = "127.0.0.1"
+		}
+		addr := fmt.Sprintf("%s:%d", bind, a.webhookPort)
 		if a.webhookPort != 443 && a.webhookPort != 8443 {
 			slog.Warn("[SMS] webhook 使用 HTTP，建议启用 TLS", "addr", addr)
 		}
+
+		a.mu.Lock()
+		a.httpServer = &http.Server{Addr: addr, Handler: mux}
+		srv := a.httpServer
+		a.mu.Unlock()
+
 		slog.Info("[SMS] webhook server started", "addr", addr)
-		if err := http.ListenAndServe(addr, mux); err != nil {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("[SMS] webhook server failed", "err", err)
 		}
 	}()
@@ -96,7 +116,23 @@ func (a *SMSAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error) 
 }
 
 func (a *SMSAdapter) Disconnect(ctx context.Context) error {
+	a.mu.Lock()
 	a.running = false
+	srv := a.httpServer
+	a.mu.Unlock()
+
+	if srv != nil {
+		srv.Shutdown(ctx)
+	}
+
+	a.closeOnce.Do(func() {
+		a.mu.Lock()
+		if a.msgCh != nil {
+			close(a.msgCh)
+		}
+		a.mu.Unlock()
+	})
+
 	slog.Info("[SMS] disconnected")
 	return nil
 }
@@ -107,9 +143,10 @@ func (a *SMSAdapter) Send(ctx context.Context, chatID string, content string, op
 		return &SendResult{Success: false, Error: "无效的手机号码"}, nil
 	}
 
-	// 分割长消息
-	if len(content) > smsMaxMessageLen {
-		content = content[:smsMaxMessageLen]
+	// 分割长消息（rune 安全）
+	runes := []rune(content)
+	if len(runes) > smsMaxMessageLen {
+		content = string(runes[:smsMaxMessageLen])
 	}
 
 	// 调用 Twilio API
@@ -135,12 +172,13 @@ func (a *SMSAdapter) Send(ctx context.Context, chatID string, content string, op
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
-		return &SendResult{Success: false, Error: fmt.Sprintf("Twilio API 错误: %s", string(body))}, nil
+		return &SendResult{Success: false, Error: fmt.Sprintf("Twilio API 错误 (HTTP %d)", resp.StatusCode)}, nil
 	}
 
 	var result map[string]any
-	json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&result)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&result); err != nil {
+		slog.Warn("[SMS] failed to decode Twilio response", "err", err)
+	}
 
 	messageSID := ""
 	if sid, ok := result["sid"].(string); ok {
@@ -191,14 +229,14 @@ func (a *SMSAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 验证 Twilio 签名
-	if !a.validateTwilioSignature(r) {
-		http.Error(w, "签名验证失败", http.StatusForbidden)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "解析表单失败", http.StatusBadRequest)
 		return
 	}
 
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "解析表单失败", http.StatusBadRequest)
+	// 验证 Twilio 签名（ParseForm 已调用，validateTwilioSignature 直接使用 r.Form）
+	if !a.validateTwilioSignature(r) {
+		http.Error(w, "签名验证失败", http.StatusForbidden)
 		return
 	}
 
@@ -223,11 +261,13 @@ func (a *SMSAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	a.mu.RLock()
 	select {
-		case a.msgCh <- msgEvent:
-		default:
-			slog.Warn("[SMS] message channel full, dropping message")
-		}
+	case a.msgCh <- msgEvent:
+	default:
+		slog.Warn("[SMS] message channel full, dropping message")
+	}
+	a.mu.RUnlock()
 
 	// 返回 TwiML 响应
 	w.Header().Set("Content-Type", "text/xml")
@@ -235,6 +275,7 @@ func (a *SMSAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 // validateTwilioSignature 验证 Twilio Webhook 签名 (X-Twilio-Signature)。
+// 调用前必须已经调用过 r.ParseForm()。
 func (a *SMSAdapter) validateTwilioSignature(r *http.Request) bool {
 	signature := r.Header.Get("X-Twilio-Signature")
 	if signature == "" || a.authToken == "" {
@@ -247,9 +288,6 @@ func (a *SMSAdapter) validateTwilioSignature(r *http.Request) bool {
 	}
 	fullURL := scheme + r.Host + r.URL.RequestURI()
 
-	if err := r.ParseForm(); err != nil {
-		return false
-	}
 	params := r.Form
 	keys := make([]string, 0, len(params))
 	for k := range params {

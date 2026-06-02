@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"os"
 	"testing"
 )
 
@@ -345,5 +346,420 @@ func TestFormatSize(t *testing.T) {
 					tt.bytes, result, tt.expected)
 			}
 		})
+	}
+}
+
+// ───────────────────────────── SetHermesPaths 测试 ─────────────────────────────
+
+func TestSetHermesPaths(t *testing.T) {
+	fs := NewFileSafetyChecker()
+	dir := t.TempDir()
+
+	fs.SetHermesPaths(dir, dir)
+	if fs.hermesHome == "" {
+		t.Error("hermesHome should not be empty after SetHermesPaths")
+	}
+	if fs.hermesRoot == "" {
+		t.Error("hermesRoot should not be empty after SetHermesPaths")
+	}
+}
+
+func TestSetHermesPaths_EmptyStrings(t *testing.T) {
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths("", "")
+	if fs.hermesHome != "" {
+		t.Error("hermesHome should be empty with empty input")
+	}
+	if fs.hermesRoot != "" {
+		t.Error("hermesRoot should be empty with empty input")
+	}
+}
+
+func TestSetHermesPaths_NonExistentPath(t *testing.T) {
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths("/nonexistent/path/abc", "/nonexistent/path/def")
+	// 应使用 abs 路径 (EvalSymlinks 失败时回退)
+	if fs.hermesHome == "" {
+		t.Error("hermesHome should fall back to abs path")
+	}
+	if fs.hermesRoot == "" {
+		t.Error("hermesRoot should fall back to abs path")
+	}
+}
+
+// ───────────────────────────── CheckRead 测试 ─────────────────────────────
+
+func TestCheckRead_SafePath(t *testing.T) {
+	fs := NewFileSafetyChecker()
+	dir := t.TempDir()
+	safeFile := dir + "/readme.md"
+
+	allowed, reason := fs.CheckRead(safeFile)
+	if !allowed {
+		t.Errorf("safe file should be allowed, got: %s", reason)
+	}
+}
+
+func TestCheckRead_ProtectedPath(t *testing.T) {
+	fs := NewFileSafetyChecker()
+	dir := t.TempDir()
+
+	allowed, reason := fs.CheckRead(dir + "/.ssh/id_rsa")
+	if allowed {
+		t.Error(".ssh path should be blocked for read")
+	}
+	if reason == "" {
+		t.Error("reason should not be empty when blocked")
+	}
+}
+
+func TestCheckRead_CredentialFile(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	// 在 hermesHome 下创建 auth.json 路径
+	authPath := dir + "/auth.json"
+
+	allowed, reason := fs.CheckRead(authPath)
+	if allowed {
+		t.Error("auth.json under hermesHome should be blocked for read")
+	}
+	if reason == "" {
+		t.Error("reason should not be empty for credential file")
+	}
+}
+
+func TestCheckRead_McpTokens(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	// 在 hermesHome 下创建 mcp-tokens 路径
+	tokenPath := dir + "/mcp-tokens/token.json"
+
+	allowed, reason := fs.CheckRead(tokenPath)
+	if allowed {
+		t.Error("mcp-tokens directory should be blocked for read")
+	}
+	if reason == "" {
+		t.Error("reason should not be empty for mcp-tokens")
+	}
+}
+
+func TestCheckRead_NonCredentialInHermesHome(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	// 普通文件不受凭证拒绝限制
+	safePath := dir + "/regular_file.txt"
+	allowed, _ := fs.CheckRead(safePath)
+	if !allowed {
+		t.Error("regular file under hermesHome should be allowed for read")
+	}
+}
+
+// ───────────────────────────── resolvePath 测试 ─────────────────────────────
+
+func TestResolvePath_ExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.Create(dir + "/test.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	resolved, err := resolvePath(dir + "/test.txt")
+	if err != nil {
+		t.Fatalf("resolvePath error: %v", err)
+	}
+	if resolved == "" {
+		t.Error("resolved path should not be empty")
+	}
+}
+
+func TestResolvePath_NonExistentFile(t *testing.T) {
+	resolved, err := resolvePath("/nonexistent/path/file.txt")
+	if err != nil {
+		t.Fatalf("resolvePath should not error for nonexistent file, got: %v", err)
+	}
+	// 不存在的文件应返回 abs 路径
+	if resolved == "" {
+		t.Error("resolved should return abs path for nonexistent file")
+	}
+}
+
+func TestResolvePath_RelativePath(t *testing.T) {
+	resolved, err := resolvePath("some/relative/path.txt")
+	if err != nil {
+		t.Fatalf("resolvePath error: %v", err)
+	}
+	// 相对路径应被转换为绝对路径
+	if resolved == "some/relative/path.txt" {
+		t.Error("relative path should be converted to absolute")
+	}
+}
+
+// ───────────────────────────── checkCredentialDenyRead 测试 ─────────────────────────────
+
+func TestCheckCredentialDenyRead_NoHermesPaths(t *testing.T) {
+	fs := NewFileSafetyChecker()
+	// 没有设置 hermesHome，凭证文件不在 hermesHome 下 → 应放行
+	reason := fs.checkCredentialDenyRead("/tmp/auth.json")
+	if reason != "" {
+		t.Errorf("credential file outside hermesHome should be allowed, got: %s", reason)
+	}
+}
+
+func TestCheckCredentialDenyRead_CredentialUnderHome(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	reason := fs.checkCredentialDenyRead(dir + "/auth.json")
+	if reason == "" {
+		t.Error("auth.json under hermesHome should be blocked")
+	}
+}
+
+func TestCheckCredentialDenyRead_CredentialOutsideHome(t *testing.T) {
+	dir := t.TempDir()
+	otherDir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	reason := fs.checkCredentialDenyRead(otherDir + "/auth.json")
+	if reason != "" {
+		t.Errorf("auth.json outside hermesHome should be allowed, got: %s", reason)
+	}
+}
+
+func TestCheckCredentialDenyRead_McpTokensUnderHome(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	reason := fs.checkCredentialDenyRead(dir + "/mcp-tokens/token.json")
+	if reason == "" {
+		t.Error("mcp-tokens under hermesHome should be blocked")
+	}
+}
+
+func TestCheckCredentialDenyRead_RegularFile(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	reason := fs.checkCredentialDenyRead(dir + "/regular.txt")
+	if reason != "" {
+		t.Errorf("regular file should be allowed, got: %s", reason)
+	}
+}
+
+// ───────────────────────────── checkHermesDenyWrite 测试 ─────────────────────────────
+
+func TestCheckHermesDenyWrite_ControlFile(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	reason := fs.checkHermesDenyWrite(dir + "/config.yaml")
+	if reason == "" {
+		t.Error("config.yaml under hermesHome should be blocked for write")
+	}
+}
+
+func TestCheckHermesDenyWrite_RegularFile(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	reason := fs.checkHermesDenyWrite(dir + "/output.txt")
+	if reason != "" {
+		t.Errorf("regular file should be allowed, got: %s", reason)
+	}
+}
+
+func TestCheckHermesDenyWrite_NoHermesHome(t *testing.T) {
+	fs := NewFileSafetyChecker()
+
+	reason := fs.checkHermesDenyWrite("/tmp/config.yaml")
+	if reason != "" {
+		t.Errorf("without hermesHome, control files should not be blocked, got: %s", reason)
+	}
+}
+
+func TestCheckHermesDenyWrite_McpTokensDir(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	reason := fs.checkHermesDenyWrite(dir + "/mcp-tokens/tok.json")
+	if reason == "" {
+		t.Error("mcp-tokens under hermesHome should be blocked for write")
+	}
+}
+
+func TestCheckHermesDenyWrite_ControlFileOutsideHome(t *testing.T) {
+	dir := t.TempDir()
+	otherDir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	reason := fs.checkHermesDenyWrite(otherDir + "/config.yaml")
+	if reason != "" {
+		t.Errorf("config.yaml outside hermesHome should be allowed, got: %s", reason)
+	}
+}
+
+// ───────────────────────────── SetAllowedRoot 测试 ─────────────────────────────
+
+func TestSetAllowedRoot_RealDir(t *testing.T) {
+	fs := NewFileSafetyChecker()
+	dir := t.TempDir()
+	fs.SetAllowedRoot(dir)
+	if fs.allowedRoot == "" {
+		t.Error("allowedRoot should be set after SetAllowedRoot")
+	}
+}
+
+func TestSetAllowedRoot_EmptyString(t *testing.T) {
+	fs := NewFileSafetyChecker()
+	fs.SetAllowedRoot("")
+	if fs.allowedRoot != "" {
+		t.Error("allowedRoot should remain empty with empty input")
+	}
+}
+
+func TestSetAllowedRoot_NonExistentPath(t *testing.T) {
+	fs := NewFileSafetyChecker()
+	fs.SetAllowedRoot("/nonexistent/dir/xyz")
+	if fs.allowedRoot == "" {
+		t.Error("allowedRoot should fall back to abs path")
+	}
+}
+
+// ───────────────────────────── CheckWrite + allowedRoot 测试 ─────────────────────────────
+
+func TestCheckWrite_AllowedRoot_PathInside(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetAllowedRoot(dir)
+
+	allowed, reason := fs.CheckWrite(dir+"/output.txt", 100)
+	if !allowed {
+		t.Errorf("path inside allowedRoot should be allowed, got: %s", reason)
+	}
+}
+
+func TestCheckWrite_AllowedRoot_PathOutside(t *testing.T) {
+	dir := t.TempDir()
+	otherDir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetAllowedRoot(dir)
+
+	allowed, reason := fs.CheckWrite(otherDir+"/output.txt", 100)
+	if allowed {
+		t.Error("path outside allowedRoot should be blocked")
+	}
+	if reason == "" {
+		t.Error("reason should not be empty when blocked")
+	}
+}
+
+func TestCheckWrite_AllowedRoot_TraversalAttempt(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetAllowedRoot(dir)
+
+	allowed, reason := fs.CheckWrite(dir+"/../../../etc/passwd", 100)
+	if allowed {
+		t.Error("path traversal attempt should be blocked")
+	}
+	if reason == "" {
+		t.Error("reason should not be empty for traversal attempt")
+	}
+}
+
+func TestCheckWrite_AllowedRoot_SubdirectoryAllowed(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetAllowedRoot(dir)
+
+	allowed, reason := fs.CheckWrite(dir+"/sub/dir/file.txt", 100)
+	if !allowed {
+		t.Errorf("subdirectory path should be allowed, got: %s", reason)
+	}
+}
+
+// ───────────────────────────── CheckWrite + checkHermesDenyWrite 集成测试 ─────────────────────────────
+
+func TestCheckWrite_HermesControlFile(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	allowed, reason := fs.CheckWrite(dir+"/config.yaml", 100)
+	if allowed {
+		t.Error("hermes control file config.yaml should be blocked")
+	}
+	if reason == "" {
+		t.Error("reason should not be empty for hermes control file")
+	}
+}
+
+func TestCheckWrite_HermesRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	allowed, reason := fs.CheckWrite(dir+"/regular.txt", 100)
+	if !allowed {
+		t.Errorf("regular file under hermesHome should be allowed, got: %s", reason)
+	}
+}
+
+func TestCheckWrite_HermesMcpTokens(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewFileSafetyChecker()
+	fs.SetHermesPaths(dir, dir)
+
+	allowed, reason := fs.CheckWrite(dir+"/mcp-tokens/tok.json", 100)
+	if allowed {
+		t.Error("mcp-tokens under hermesHome should be blocked for write")
+	}
+	if reason == "" {
+		t.Error("reason should not be empty for mcp-tokens write")
+	}
+}
+
+// ───────────────────────────── absOrResolvedPath 测试 ─────────────────────────────
+
+func TestAbsOrResolvedPath_ExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.Create(dir + "/test.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	result := absOrResolvedPath(dir + "/test.txt")
+	if result == "" {
+		t.Error("result should not be empty for existing file")
+	}
+}
+
+func TestAbsOrResolvedPath_NonExistentFile(t *testing.T) {
+	result := absOrResolvedPath("/nonexistent/path/file.txt")
+	if result == "" {
+		t.Error("result should fall back to abs path for nonexistent file")
+	}
+}
+
+func TestAbsOrResolvedPath_RelativePath(t *testing.T) {
+	result := absOrResolvedPath("some/relative/path.txt")
+	if result == "some/relative/path.txt" {
+		t.Error("relative path should be converted to absolute")
 	}
 }

@@ -27,6 +27,7 @@ import (
 type WeChatAdapter struct {
 	tokenMu     sync.Mutex         // token 访问锁
 	closeOnce   sync.Once          // 确保 msgCh 只关闭一次
+	mu          sync.RWMutex       // 保护 msgCh 发送/关闭
 	appID  string             // 公众号 AppID
 	secret string             // 公众号 AppSecret
 	token  string             // 服务器验证 Token (用于签名验证)
@@ -69,7 +70,9 @@ func (w *WeChatAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, erro
 // Disconnect 关闭消息通道。
 func (w *WeChatAdapter) Disconnect(ctx context.Context) error {
 	w.closeOnce.Do(func() {
+		w.mu.Lock()
 		close(w.msgCh)
+		w.mu.Unlock()
 	})
 	slog.Info("wechat adapter disconnected")
 	return nil
@@ -136,6 +139,7 @@ func (w *WeChatAdapter) SendDocument(ctx context.Context, chatID string, filePat
 }
 
 // ReceiveCallback 处理来自微信服务器的 XML 回调，转换为 MessageEvent。
+// 事件同时写入 msgCh 供 Connect() 消费者读取，并返回被动回复 XML。
 func (w *WeChatAdapter) ReceiveCallback(xmlBody []byte) (*MessageEvent, string, error) {
 	var wxMsg wechatXMLMessage
 	if err := xml.Unmarshal(xmlBody, &wxMsg); err != nil {
@@ -173,6 +177,15 @@ func (w *WeChatAdapter) ReceiveCallback(xmlBody []byte) (*MessageEvent, string, 
 		event.Text = "[不支持的消息类型: " + wxMsg.MsgType + "]"
 	}
 
+	// 推送到 msgCh 供 Connect() 返回的通道消费者读取
+	w.mu.RLock()
+	select {
+	case w.msgCh <- event:
+	default:
+		slog.Warn("wechat message channel full, dropping message")
+	}
+	w.mu.RUnlock()
+
 	// 生成被动回复 (自动回复)
 	replyXML := w.buildReplyXML(wxMsg.ToUserName, wxMsg.FromUserName)
 
@@ -194,7 +207,7 @@ func init() {
 	GetRegistry().Register(&AdapterEntry{
 		Platform: PlatformWeChat,
 		Name:     "WeChat",
-		Factory:  func() PlatformAdapter { return &WeChatAdapter{} },
+		Factory:  func() PlatformAdapter { return NewWeChatAdapter("", "", "") },
 	})
 }
 
@@ -250,7 +263,7 @@ func (w *WeChatAdapter) doAPI(ctx context.Context, method string, path string, b
 		bodyReader = bytes.NewReader(data)
 	}
 
-	apiURL := "https://api.weixin.qq.com" + path + "?access_token=" + token
+	apiURL := "https://api.weixin.qq.com" + path + "?access_token=" + url.QueryEscape(token)
 	req, err := http.NewRequestWithContext(ctx, method, apiURL, bodyReader)
 	if err != nil {
 		return &SendResult{Success: false, Error: err.Error()}, err
@@ -296,11 +309,12 @@ func (w *WeChatAdapter) doAPI(ctx context.Context, method string, path string, b
 // getAccessToken 获取 access_token (带缓存)。
 func (w *WeChatAdapter) getAccessToken(ctx context.Context) (string, error) {
 	w.tokenMu.Lock()
-	defer w.tokenMu.Unlock()
-
 	if w.accessToken != "" && time.Now().Before(w.tokenExpiry) {
-		return w.accessToken, nil
+		token := w.accessToken
+		w.tokenMu.Unlock()
+		return token, nil
 	}
+	w.tokenMu.Unlock()
 
 	vals := url.Values{
 		"grant_type": {"client_credential"},
@@ -333,15 +347,28 @@ func (w *WeChatAdapter) getAccessToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if result.ErrCode != 0 {
-		return "", fmt.Errorf("get access_token failed: %s", string(raw))
+		slog.Warn("[WeChat] get access_token failed", "errcode", result.ErrCode)
+		return "", fmt.Errorf("get access_token failed (errcode=%d)", result.ErrCode)
 	}
 
+	w.tokenMu.Lock()
 	w.accessToken = result.AccessToken
+	expiry := result.ExpiresIn
+	if expiry <= 0 {
+		expiry = 600
+	}
 	buffer := 60
-	if result.ExpiresIn < buffer { buffer = result.ExpiresIn / 2 }
-	w.tokenExpiry = time.Now().Add(time.Duration(result.ExpiresIn-buffer) * time.Second)
+	if expiry < buffer {
+		buffer = expiry / 2
+		if buffer <= 0 {
+			buffer = 1
+		}
+	}
+	w.tokenExpiry = time.Now().Add(time.Duration(expiry-buffer) * time.Second)
+	token := w.accessToken
+	w.tokenMu.Unlock()
 
-	return w.accessToken, nil
+	return token, nil
 }
 
 // ───────────────────────────── 微信消息类型 ─────────────────────────────

@@ -133,7 +133,7 @@ func (s *ThinkScrubber) processIdle(ch rune) string {
 
 	// 检查是否匹配开始标签的首字符
 	if firstRune(s.openTag) == ch {
-		if len(s.openTag) == 1 {
+		if utf8.RuneCountInString(s.openTag) == 1 {
 			// 标签只有一个字符 (极端情况), 直接进入思考内容
 			s.buffer = ""
 			s.state = stateInContent
@@ -152,21 +152,16 @@ func (s *ThinkScrubber) processIdle(ch rune) string {
 // processInTag 匹配开始标签: 逐字符比对, 失败则回吐缓冲。
 func (s *ThinkScrubber) processInTag(ch rune) string {
 	s.buffer += string(ch)
-	pos := len(s.buffer)
 
-	// 检查当前缓冲是否仍匹配开始标签前缀
-	if pos <= utf8.RuneCountInString(s.openTag) && string([]rune(s.openTag)[:pos]) == s.buffer {
-		if pos == len(s.openTag) {
-			// 完整匹配开始标签, 切换到思考内容状态
+	if strings.HasPrefix(s.openTag, s.buffer) {
+		if s.buffer == s.openTag {
 			s.buffer = ""
 			s.state = stateInContent
 			return ""
 		}
-		// 继续匹配下一个字符
 		return ""
 	}
 
-	// 匹配失败: 回吐缓冲中的所有字符
 	result := s.buffer
 	s.buffer = ""
 	s.state = stateIdle
@@ -179,7 +174,7 @@ func (s *ThinkScrubber) processInContent(ch rune) string {
 
 	// 检查是否匹配结束标签的首字符
 	if firstRune(s.closeTag) == ch {
-		if len(s.closeTag) == 1 {
+		if utf8.RuneCountInString(s.closeTag) == 1 {
 			// 标签只有一个字符, 直接结束
 			s.buffer = ""
 			s.state = stateIdle
@@ -201,21 +196,16 @@ func (s *ThinkScrubber) processInContent(ch rune) string {
 // processOutTag 匹配结束标签: 逐字符比对, 失败则将缓冲作为思考内容回吐。
 func (s *ThinkScrubber) processOutTag(ch rune) string {
 	s.buffer += string(ch)
-	pos := len(s.buffer)
 
-	// 检查当前缓冲是否仍匹配结束标签前缀
-	if pos <= utf8.RuneCountInString(s.closeTag) && string([]rune(s.closeTag)[:pos]) == s.buffer {
-		if pos == len(s.closeTag) {
-			// 完整匹配结束标签, 回到空闲状态
+	if strings.HasPrefix(s.closeTag, s.buffer) {
+		if s.buffer == s.closeTag {
 			s.buffer = ""
 			s.state = stateIdle
 			return ""
 		}
-		// 继续匹配下一个字符
 		return ""
 	}
 
-	// 匹配失败: 缓冲内容实际上是思考内容, 累积并通知
 	s.thinkContent.WriteString(s.buffer)
 	if s.onThink != nil {
 		s.onThink(s.buffer)

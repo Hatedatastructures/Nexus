@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -161,6 +163,9 @@ func (m *SessionManager) StartAutoSweep(ctx context.Context, interval, maxIdle t
 // 格式: "sess_" + 16 字节随机数据的十六进制表示。
 func newSessionID() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		slog.Error("crypto/rand read failed for session ID", "error", err)
+		return fmt.Sprintf("sess_fallback_%d_%d", time.Now().UnixNano(), time.Now().UnixMilli())
+	}
 	return "sess_" + hex.EncodeToString(b)
 }

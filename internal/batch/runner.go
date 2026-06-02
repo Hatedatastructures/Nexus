@@ -184,8 +184,14 @@ func (br *BatchRunner) Run(ctx context.Context, prompts []Prompt) (*BatchResult,
 			result.Completed++
 		}
 
-		data, _ := json.Marshal(traj)
-		w.Write(data)
+		data, err := json.Marshal(traj)
+		if err != nil {
+			slog.Warn("序列化轨迹失败", "err", err)
+			continue
+		}
+		if _, err := w.Write(data); err != nil {
+			slog.Warn("写入轨迹失败", "err", err)
+		}
 		w.WriteByte('\n')
 
 		// 记录到恢复映射
@@ -226,6 +232,9 @@ func (br *BatchRunner) loadExistingResults() (map[string]bool, error) {
 			if json.Unmarshal(scanner.Bytes(), &traj) == nil && traj.Error == "" {
 				results[contentHash(traj.Prompt)] = true
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			slog.Warn("读取轨迹文件出错", "path", path, "err", err)
 		}
 		f.Close()
 	}
@@ -294,6 +303,9 @@ func MergeJSONL(outputDir string) (string, int, error) {
 				w.WriteByte('\n')
 				total++
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			slog.Warn("读取轨迹文件出错", "path", path, "err", err)
 		}
 		f.Close()
 	}

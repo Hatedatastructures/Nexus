@@ -82,10 +82,16 @@ func (d *bbDeduplicator) isDuplicate(msgID string) bool {
 
 	// 清理过期条目
 	if len(d.msgIDs) > d.maxSize {
+		oldest := ""
+		oldestTime := time.Now()
 		for id, t := range d.msgIDs {
-			if time.Since(t) > 10*time.Minute {
-				delete(d.msgIDs, id)
+			if t.Before(oldestTime) {
+				oldestTime = t
+				oldest = id
 			}
+		}
+		if oldest != "" {
+			delete(d.msgIDs, oldest)
 		}
 	}
 
@@ -156,7 +162,6 @@ func (a *BlueBubblesAdapter) Disconnect(ctx context.Context) error {
 	a.connected = false
 	a.mu.Unlock()
 
-	a.closeOnce.Do(func() { close(a.msgCh) })
 	slog.Info("[BlueBubbles] disconnected")
 	return nil
 }
@@ -165,6 +170,7 @@ func (a *BlueBubblesAdapter) Disconnect(ctx context.Context) error {
 
 // pollLoop 轮询新消息。
 func (a *BlueBubblesAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) {
+	defer a.closeOnce.Do(func() { close(msgCh) })
 	ticker := time.NewTicker(bbPollInterval)
 	defer ticker.Stop()
 
@@ -224,7 +230,7 @@ func (a *BlueBubblesAdapter) fetchNewMessages(ctx context.Context) ([]*MessageEv
 	// 调用 BlueBubbles API 获取最近消息
 	params := "limit=50&withChats=true&sort=DESC"
 	if a.lastGUID != "" {
-		params += "&afterGuid=" + a.lastGUID
+		params += "&afterGuid=" + url.QueryEscape(a.lastGUID)
 	}
 
 	resp, err := a.apiRequest(ctx, "GET", "/api/v1/message?"+params, nil)
@@ -400,7 +406,7 @@ func (a *BlueBubblesAdapter) SendTyping(ctx context.Context, chatID string) erro
 	body := map[string]any{
 		"chatGuid": chatID,
 	}
-	path := fmt.Sprintf("/api/v1/chat/%s/typing", chatID)
+	path := "/api/v1/chat/" + url.PathEscape(chatID) + "/typing"
 	_, err := a.apiRequest(ctx, "POST", path, body)
 	return err
 }
@@ -582,7 +588,7 @@ func (a *BlueBubblesAdapter) apiRequest(ctx context.Context, method, path string
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var result map[string]any

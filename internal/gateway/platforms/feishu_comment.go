@@ -33,7 +33,9 @@ const (
 
 // FeishuCommentAdapter 飞书文档评论适配器。
 type FeishuCommentAdapter struct {
+	mu              sync.RWMutex       // 保护 msgCh 写入/关闭
 	tokenMu         sync.Mutex         // token 访问锁
+	closeOnce       sync.Once          // 确保 msgCh 只关闭一次
 	verificationToken string           // 事件订阅验证令牌
 	appID          string
 	appSecret      string
@@ -105,6 +107,13 @@ func (a *FeishuCommentAdapter) Connect(ctx context.Context) (<-chan *MessageEven
 
 func (a *FeishuCommentAdapter) Disconnect(ctx context.Context) error {
 	a.running = false
+	a.mu.Lock()
+	a.closeOnce.Do(func() {
+		if a.msgCh != nil {
+			close(a.msgCh)
+		}
+	})
+	a.mu.Unlock()
 	slog.Info("[Feishu Comment] disconnected")
 	return nil
 }
@@ -213,11 +222,13 @@ func (a *FeishuCommentAdapter) HandleEvent(w http.ResponseWriter, r *http.Reques
 		},
 	}
 
+	a.mu.RLock()
 	select {
-		case a.msgCh <- msgEvent:
-		default:
-			slog.Warn("[FeishuComment] message channel full, dropping message")
-		}
+	case a.msgCh <- msgEvent:
+	default:
+		slog.Warn("[FeishuComment] message channel full, dropping message")
+	}
+	a.mu.RUnlock()
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -234,7 +245,10 @@ func (a *FeishuCommentAdapter) refreshAccessToken(ctx context.Context) error {
 		"app_secret": a.appSecret,
 	}
 
-	jsonData, _ := json.Marshal(payload)
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("序列化请求体失败: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(jsonData))
 	if err != nil {
 		return err
@@ -264,66 +278,43 @@ func (a *FeishuCommentAdapter) refreshAccessToken(ctx context.Context) error {
 	}
 
 	a.accessToken = token
-	a.tokenExpiresAt = time.Now().Add(2 * time.Hour)
+	if expire, ok := result["expire"].(float64); ok && expire > 0 {
+		buffer := 60
+		if int(expire) < buffer {
+			buffer = int(expire) / 2
+		}
+		a.tokenExpiresAt = time.Now().Add(time.Duration(int(expire)-buffer) * time.Second)
+	} else {
+		a.tokenExpiresAt = time.Now().Add(110 * time.Minute) // 安全回退
+	}
 
 	return nil
 }
 
-// refreshAccessTokenLocked 在已持有 tokenMu 锁的情况下刷新 access_token。
-func (a *FeishuCommentAdapter) refreshAccessTokenLocked(ctx context.Context) {
-	apiURL := "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+// getOrRefreshToken 获取有效的 access_token，必要时刷新。
+// 不在锁内执行网络 I/O。
+func (a *FeishuCommentAdapter) getOrRefreshToken(ctx context.Context) string {
+	a.tokenMu.Lock()
+	if a.accessToken != "" && time.Now().Before(a.tokenExpiresAt) {
+		token := a.accessToken
+		a.tokenMu.Unlock()
+		return token
+	}
+	a.tokenMu.Unlock()
 
-	payload := map[string]string{
-		"app_id":     a.appID,
-		"app_secret": a.appSecret,
+	// 在锁外刷新 token
+	if err := a.refreshAccessToken(ctx); err != nil {
+		slog.Warn("[Feishu Comment] token refresh failed in getOrRefreshToken", "err", err)
 	}
 
-	jsonData, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(jsonData))
-	if err != nil {
-		slog.Warn("[Feishu Comment] refreshAccessTokenLocked: create request failed", "err", err)
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		slog.Warn("[Feishu Comment] refreshAccessTokenLocked: request failed", "err", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	var result map[string]any
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&result); err != nil {
-		slog.Warn("[Feishu Comment] refreshAccessTokenLocked: decode failed", "err", err)
-		return
-	}
-
-	if code, ok := result["code"].(float64); ok && code != 0 {
-		msg, _ := result["msg"].(string)
-		slog.Warn("[Feishu Comment] refreshAccessTokenLocked: API error", "msg", msg)
-		return
-	}
-
-	token, ok := result["tenant_access_token"].(string)
-	if !ok {
-		slog.Warn("[Feishu Comment] refreshAccessTokenLocked: no token in response")
-		return
-	}
-
-	a.accessToken = token
-	a.tokenExpiresAt = time.Now().Add(2 * time.Hour)
+	a.tokenMu.Lock()
+	token := a.accessToken
+	a.tokenMu.Unlock()
+	return token
 }
 
 func (a *FeishuCommentAdapter) replyComment(ctx context.Context, fileToken, commentID, content string) error {
-	a.tokenMu.Lock()
-	if time.Now().After(a.tokenExpiresAt) {
-		// 在同一锁内刷新 token
-		a.refreshAccessTokenLocked(ctx)
-	}
-	token := a.accessToken
-	a.tokenMu.Unlock()
+	token := a.getOrRefreshToken(ctx)
 
 	apiURL := fmt.Sprintf("https://open.feishu.cn/open-apis/drive/v1/files/%s/comments/%s/replies",
 		url.PathEscape(fileToken), url.PathEscape(commentID))
@@ -341,7 +332,10 @@ func (a *FeishuCommentAdapter) replyComment(ctx context.Context, fileToken, comm
 		},
 	}
 
-	jsonData, _ := json.Marshal(payload)
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("序列化请求体失败: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(jsonData))
 	if err != nil {
 		return err
@@ -384,6 +378,6 @@ func init() {
 	GetRegistry().Register(&AdapterEntry{
 		Platform: PlatformFeishu,
 		Name:     "Feishu Comment",
-		Factory:  func() PlatformAdapter { return &FeishuCommentAdapter{} },
+		Factory:  func() PlatformAdapter { return NewFeishuCommentAdapter(nil) },
 	})
 }

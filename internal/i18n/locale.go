@@ -2,7 +2,6 @@ package i18n
 
 import (
 	"fmt"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -20,28 +19,31 @@ import (
 func LoadLocale(data []byte) (map[string]string, error) {
 	result := make(map[string]string)
 
-	// 先尝试解析为 flat map[string]string
-	var flat map[string]string
-	if err := yaml.Unmarshal(data, &flat); err == nil {
-		// 检查是否所有值都是字符串（排除嵌套结构）
-		allFlat := true
-		for _, v := range flat {
-			if strings.Contains(v, ":") && !strings.Contains(v, " ") {
-				// 可能是嵌套结构的误解析，跳过
-			}
-			_ = v
-		}
-		if allFlat {
-			return flat, nil
+	// 先尝试解析为嵌套 map 以检测格式
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("解析 locale YAML 失败: %w", err)
+	}
+
+	// 检查是否所有值都是纯字符串 (flat 格式)
+	allFlat := true
+	for _, v := range raw {
+		if _, ok := v.(string); !ok {
+			allFlat = false
+			break
 		}
 	}
 
-	// 回退：解析为嵌套 map 并展平
-	var nested map[string]any
-	if err := yaml.Unmarshal(data, &nested); err != nil {
-		return nil, fmt.Errorf("解析 locale YAML 失败: %w", err)
+	if allFlat {
+		flat := make(map[string]string, len(raw))
+		for k, v := range raw {
+			flat[k] = v.(string)
+		}
+		return flat, nil
 	}
-	flattenMap("", nested, result)
+
+	// 嵌套 YAML 结构 — 展平为点分键
+	flattenMap("", raw, result)
 	return result, nil
 }
 

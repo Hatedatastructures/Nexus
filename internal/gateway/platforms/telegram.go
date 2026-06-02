@@ -33,6 +33,7 @@ type TelegramAdapter struct {
 	// 状态消息缓存: "chatID:statusKey" → messageID
 	statusMsgIDs map[string]string
 	statusMu     sync.Mutex
+	statusMsgMax     int
 }
 
 // NewTelegramAdapter 创建 Telegram 适配器。
@@ -40,10 +41,11 @@ type TelegramAdapter struct {
 func NewTelegramAdapter(token string) *TelegramAdapter {
 	return &TelegramAdapter{
 		token:         token,
-		client:        &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: 35 * time.Second},
 		baseURL:       "https://api.telegram.org/bot" + token,
 		msgCh:         make(chan *MessageEvent, 128),
 		statusMsgIDs:  make(map[string]string),
+		statusMsgMax: 1000,
 	}
 }
 
@@ -157,6 +159,12 @@ func (t *TelegramAdapter) SendOrUpdateStatus(ctx context.Context, chatID, status
 		t.statusMu.Lock()
 		t.statusMsgIDs[key] = result.MessageID
 		t.statusMu.Unlock()
+		if len(t.statusMsgIDs) > t.statusMsgMax {
+			for k := range t.statusMsgIDs {
+				delete(t.statusMsgIDs, k)
+				break
+			}
+		}
 	}
 	return nil
 }
@@ -288,12 +296,15 @@ func (t *TelegramAdapter) parseMessage(upd *update) *MessageEvent {
 		return nil
 	}
 
+	if msg.From == nil {
+		return nil
+	}
+
 	source := &SessionSource{
 		Platform: PlatformTelegram,
 		ChatID:   formatInt(msg.Chat.ID),
 		UserName: msg.From.Username,
 		UserID:   formatInt(msg.From.ID),
-		// 标记发送者是否为机器人
 	}
 
 	// 过滤机器人自身消息
@@ -422,7 +433,7 @@ type telegramMessage struct {
 	Date           int64            `json:"date"`
 	Text           string           `json:"text"`
 	Caption        string           `json:"caption"`
-	From           telegramUser     `json:"from"`
+	From           *telegramUser    `json:"from"`
 	Chat           telegramChat     `json:"chat"`
 	Photo          []telegramPhoto  `json:"photo"`
 	Voice          *telegramVoice   `json:"voice"`
@@ -483,7 +494,7 @@ func (t *TelegramAdapter) Configure(settings map[string]any) error {
 		return fmt.Errorf("telegram 平台缺少 token 配置")
 	}
 	t.token = token
-	t.client = &http.Client{Timeout: 30 * time.Second}
+	t.client = &http.Client{Timeout: 35 * time.Second}
 	t.baseURL = "https://api.telegram.org/bot" + token
 	t.msgCh = make(chan *MessageEvent, 128)
 	t.statusMsgIDs = make(map[string]string)

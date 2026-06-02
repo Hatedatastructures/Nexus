@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -63,7 +64,7 @@ func NewJsonlTelemetrySink(path string) (*JsonlTelemetrySink, error) {
 		return nil, err
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +84,9 @@ func (s *JsonlTelemetrySink) Record(event *Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_ = s.encoder.Encode(event)
+	if err := s.encoder.Encode(event); err != nil {
+		slog.Warn("telemetry encode failed", "err", err)
+	}
 	s.count++
 }
 

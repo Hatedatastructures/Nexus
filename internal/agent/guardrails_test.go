@@ -181,3 +181,89 @@ func TestGuardrailsWindowSize(t *testing.T) {
 		t.Error("窗口内第 4 次调用应被阻止")
 	}
 }
+
+// ───────────────────────── Record 函数测试 (向后兼容) ─────────────────────────
+
+// TestGuardrailsRecord_Basic 验证 Record 基本记录功能。
+func TestGuardrailsRecord_Basic(t *testing.T) {
+	g := NewToolCallGuardrails()
+
+	g.Record("tool_a", map[string]any{"k": "v1"})
+	g.Record("tool_b", map[string]any{"k": "v2"})
+
+	if len(g.history) != 2 {
+		t.Fatalf("history length = %d, want 2", len(g.history))
+	}
+	if g.history[0].ToolName != "tool_a" {
+		t.Errorf("history[0].ToolName = %q, want tool_a", g.history[0].ToolName)
+	}
+	if g.history[1].ToolName != "tool_b" {
+		t.Errorf("history[1].ToolName = %q, want tool_b", g.history[1].ToolName)
+	}
+}
+
+// TestGuardrailsRecord_ConsecutiveDuplicates 验证 Record 更新连续重复计数。
+func TestGuardrailsRecord_ConsecutiveDuplicates(t *testing.T) {
+	g := NewToolCallGuardrails()
+	args := map[string]any{"path": "/tmp/file"}
+
+	g.Record("tool", args)
+	if g.consecutiveDuplicates != 1 {
+		t.Errorf("after first Record, consecutiveDuplicates = %d, want 1", g.consecutiveDuplicates)
+	}
+
+	g.Record("tool", args)
+	if g.consecutiveDuplicates != 2 {
+		t.Errorf("after second Record, consecutiveDuplicates = %d, want 2", g.consecutiveDuplicates)
+	}
+
+	// 不同参数应重置计数
+	g.Record("tool", map[string]any{"path": "/other"})
+	if g.consecutiveDuplicates != 1 {
+		t.Errorf("after different args, consecutiveDuplicates = %d, want 1", g.consecutiveDuplicates)
+	}
+}
+
+// TestGuardrailsRecord_WindowTrimsHistory 验证 Record 维护滑动窗口大小。
+func TestGuardrailsRecord_WindowTrimsHistory(t *testing.T) {
+	g := NewToolCallGuardrails()
+	g.WithWindowSize(3)
+
+	for i := 0; i < 5; i++ {
+		g.Record("tool", map[string]any{"i": itoa(i)})
+	}
+
+	if len(g.history) != 3 {
+		t.Fatalf("history length = %d, want 3 (trimmed to window size)", len(g.history))
+	}
+}
+
+// TestGuardrailsRecord_NilArgs 验证 Record 处理 nil 参数。
+func TestGuardrailsRecord_NilArgs(t *testing.T) {
+	g := NewToolCallGuardrails()
+
+	g.Record("tool", nil)
+	if g.lastArgsJSON != "{}" {
+		t.Errorf("nil args should serialize to {}, got %q", g.lastArgsJSON)
+	}
+	if len(g.history) != 1 {
+		t.Fatalf("history length = %d, want 1", len(g.history))
+	}
+}
+
+// TestGuardrailsRecord_DifferentToolResetsCount 验证不同工具名重置连续计数。
+func TestGuardrailsRecord_DifferentToolResetsCount(t *testing.T) {
+	g := NewToolCallGuardrails()
+	args := map[string]any{"x": 1}
+
+	g.Record("tool_a", args)
+	g.Record("tool_a", args)
+	if g.consecutiveDuplicates != 2 {
+		t.Fatalf("consecutiveDuplicates = %d, want 2", g.consecutiveDuplicates)
+	}
+
+	g.Record("tool_b", args)
+	if g.consecutiveDuplicates != 1 {
+		t.Errorf("different tool should reset consecutiveDuplicates to 1, got %d", g.consecutiveDuplicates)
+	}
+}

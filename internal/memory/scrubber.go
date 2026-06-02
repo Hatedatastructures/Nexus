@@ -66,11 +66,12 @@ func (s *StreamingScrubber) Process(delta string) string {
 	buf := s.buf + delta
 	s.buf = ""
 	var out []string
+	lowerBuf := strings.ToLower(buf)
 
 	for len(buf) > 0 {
 		if s.inSpan {
 			// 在标签内 — 查找关闭标签
-			idx := strings.Index(strings.ToLower(buf), closeTag)
+			idx := strings.Index(lowerBuf, closeTag)
 			if idx == -1 {
 				// 关闭标签不在当前块中 — 保留潜在的部分关闭标签尾部
 				held := s.maxPartialSuffix(buf, closeTag)
@@ -82,10 +83,11 @@ func (s *StreamingScrubber) Process(delta string) string {
 			}
 			// 找到关闭标签 — 跳过标签内容 + 标签本身，继续
 			buf = buf[idx+len(closeTag):]
+			lowerBuf = lowerBuf[idx+len(closeTag):]
 			s.inSpan = false
 		} else {
 			// 不在标签内 — 查找开启标签
-			idx := strings.Index(strings.ToLower(buf), openTag)
+			idx := strings.Index(lowerBuf, openTag)
 			if idx == -1 {
 				// 未找到开启标签 — 保留潜在的部分开启标签尾部
 				held := s.maxPartialSuffix(buf, openTag)
@@ -102,6 +104,7 @@ func (s *StreamingScrubber) Process(delta string) string {
 				out = append(out, buf[:idx])
 			}
 			buf = buf[idx+len(openTag):]
+			lowerBuf = lowerBuf[idx+len(openTag):]
 			s.inSpan = true
 		}
 	}

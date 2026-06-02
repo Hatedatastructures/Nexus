@@ -191,6 +191,7 @@ func getSkillDetail(name string) string {
 	var found []byte
 	filepath.WalkDir(skillsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
+			slog.Warn("skill: skip inaccessible path", "path", path, "error", err)
 			return nil
 		}
 		if d.IsDir() && d.Name() == name {

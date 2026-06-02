@@ -49,7 +49,7 @@ func init() {
 	GetRegistry().Register(&AdapterEntry{
 		Platform: PlatformMatrix,
 		Name:     "Matrix",
-		Factory:  func() PlatformAdapter { return &MatrixAdapter{} },
+		Factory:  func() PlatformAdapter { return NewMatrixAdapter("", "", "") },
 	})
 }
 
@@ -91,7 +91,7 @@ func (m *MatrixAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, erro
 // Disconnect 停止同步循环。
 func (m *MatrixAdapter) Disconnect(ctx context.Context) error {
 	m.shutdownOnce.Do(func() { close(m.shutdown) })
-	m.closeOnce.Do(func() { close(m.msgCh) })
+	// syncLoop 退出时负责关闭 msgCh，这里不再重复关闭
 	slog.Info("matrix adapter disconnected")
 	return nil
 }
@@ -99,12 +99,13 @@ func (m *MatrixAdapter) Disconnect(ctx context.Context) error {
 // Send 发送消息到 Matrix 房间。
 func (m *MatrixAdapter) Send(ctx context.Context, chatID, content string, opts *SendOptions) (*SendResult, error) {
 	eventType := "m.room.message"
+	txnID := generateCryptoID()
 	body := map[string]any{
 		"msgtype": "m.text",
 		"body":    content,
 	}
 
-	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/%s", url.PathEscape(chatID), eventType)
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/%s/%s", url.PathEscape(chatID), eventType, txnID)
 	resp, err := m.doAPI(ctx, "PUT", path, body)
 	if err != nil {
 		return &SendResult{Success: false, Error: err.Error()}, err
@@ -254,7 +255,7 @@ func (m *MatrixAdapter) doSync(ctx context.Context, since string, timeout uint) 
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("matrix sync error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("matrix sync error %d", resp.StatusCode)
 	}
 
 	var sr syncResponse
@@ -267,6 +268,8 @@ func (m *MatrixAdapter) doSync(ctx context.Context, since string, timeout uint) 
 
 // syncLoop 长轮询同步循环。
 func (m *MatrixAdapter) syncLoop(ctx context.Context) {
+	defer m.closeOnce.Do(func() { close(m.msgCh) })
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -283,7 +286,13 @@ func (m *MatrixAdapter) syncLoop(ctx context.Context) {
 		sr, err := m.doSync(ctx, token, 30000)
 		if err != nil {
 			slog.Warn("matrix sync failed", "err", err)
-			time.Sleep(5 * time.Second)
+			select {
+			case <-ctx.Done():
+				return
+			case <-m.shutdown:
+				return
+			case <-time.After(5 * time.Second):
+			}
 			continue
 		}
 
@@ -369,7 +378,7 @@ func (m *MatrixAdapter) handleRoomEvent(ctx context.Context, roomID string, even
 		MediaURLs:   mediaURLs,
 		ReplyToMsgID: replyToMsgID,
 		ReplyToText: replyToText,
-		Timestamp:   time.Now(),
+		Timestamp:   time.UnixMilli(event.OriginServerTS),
 		Source: &SessionSource{
 			Platform: PlatformMatrix,
 			ChatID:   roomID,
@@ -416,7 +425,7 @@ func (m *MatrixAdapter) doAPI(ctx context.Context, method, path string, body any
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("matrix API error %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("matrix API error %d", resp.StatusCode)
 	}
 
 	var apiResp matrixAPIResponse

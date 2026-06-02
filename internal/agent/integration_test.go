@@ -104,6 +104,10 @@ func TestConversationWithApproval(t *testing.T) {
 // 其中审批检查逻辑与 executeParallel 完全一致。
 // 测试混合安全/非安全命令，验证拒绝和放行行为正确。
 func TestConversationParallelApproval(t *testing.T) {
+	// 重置全局终端配置，确保 terminal 工具在无沙箱环境下返回"终端环境未配置"。
+	// 之前的测试可能通过 SetTerminalConfig 设置了真实的沙箱环境，导致本测试行为异常。
+	tool.SetTerminalConfig(nil, nil)
+
 	mock := &testutil.MockProvider{}
 	var callCount int32
 

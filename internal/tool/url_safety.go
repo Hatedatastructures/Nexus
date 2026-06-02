@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 )
 
 // ───────────────────────────── 常量与配置 ─────────────────────────────
@@ -35,23 +36,31 @@ type URLSafetyConfig struct {
 
 // 包级 URL 安全检查器单例，用于中间件模式的主动拦截。
 // 在代理初始化时通过 SetURLSafetyConfig() 设置。
-var globalURLSafety *URLSafetyChecker
+var (
+	globalURLSafety     *URLSafetyChecker
+	globalURLSafetyMu   sync.RWMutex
+)
 
 // SetURLSafetyConfig 设置全局 URL 安全检查器。
 // 应在代理启动时调用，在所有需要 URL 安全检查的工具 Execute 调用之前。
 func SetURLSafetyConfig(checker *URLSafetyChecker) {
+	globalURLSafetyMu.Lock()
+	defer globalURLSafetyMu.Unlock()
 	globalURLSafety = checker
 }
 
 // CheckURLSafety 使用全局检查器检查给定 URL 是否安全。
-// 返回 (是否安全, 原因说明)。若全局检查器未初始化，则默认安全。
+// 返回 (是否安全, 原因说明)。若全局检查器未初始化，则默认拒绝 (fail-closed)。
 // 供 web/browser 等工具在执行 HTTP 请求前调用。
 func CheckURLSafety(rawURL string) (bool, string) {
-	if globalURLSafety == nil {
+	globalURLSafetyMu.RLock()
+	checker := globalURLSafety
+	globalURLSafetyMu.RUnlock()
+	if checker == nil {
 		slog.Warn("[URL Safety] 检查器未初始化，拒绝所有 URL")
 		return false, "URL 安全检查器未初始化"
 	}
-	return globalURLSafety.IsSafeURL(rawURL)
+	return checker.IsSafeURL(rawURL)
 }
 
 // ───────────────────────────── URL 安全检查器 ─────────────────────────────
@@ -243,12 +252,14 @@ func (t *URLSafetyTool) Execute(ctx context.Context, args map[string]any) (strin
 
 	safe, reason := t.checker.IsSafeURL(rawURL)
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"url":    rawURL,
 		"safe":   safe,
 		"reason": reason,
 	})
-
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 

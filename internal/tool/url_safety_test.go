@@ -286,7 +286,7 @@ func TestIsSafeURLAllowPrivate(t *testing.T) {
 
 // ───────────────────────────── CheckURLSafety 全局函数测试 ─────────────────────────────
 
-// TestCheckURLSafetyDefaultSafe 测试全局检查器未初始化时默认返回安全。
+// TestCheckURLSafetyDefaultSafe 测试全局检查器未初始化时默认拒绝 (fail-closed)。
 func TestCheckURLSafetyDefaultSafe(t *testing.T) {
 	// 保存原始值，测试后恢复
 	original := globalURLSafety
@@ -294,8 +294,8 @@ func TestCheckURLSafetyDefaultSafe(t *testing.T) {
 	defer func() { globalURLSafety = original }()
 
 	safe, reason := CheckURLSafety("http://169.254.169.254/latest/meta-data/")
-	if !safe {
-		t.Errorf("全局检查器未初始化时 CheckURLSafety 应返回 safe=true, 但返回了 false, reason: %s", reason)
+	if safe {
+		t.Errorf("全局检查器未初始化时 CheckURLSafety 应返回 safe=false (fail-closed), 但返回了 true, reason: %s", reason)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -312,7 +313,11 @@ func (t *HomeAssistantTool) callAPI(ctx context.Context, method string, endpoint
 
 	var bodyBytes []byte
 	if body != nil {
-		bodyBytes, _ = json.Marshal(body)
+		var marshalErr error
+		bodyBytes, marshalErr = json.Marshal(body)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("序列化请求体失败: %w", marshalErr)
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(bodyBytes))
@@ -335,7 +340,8 @@ func (t *HomeAssistantTool) callAPI(ctx context.Context, method string, endpoint
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		slog.Warn("homeassistant API error response", "status", resp.StatusCode, "body", string(respBody))
+		return nil, fmt.Errorf("Home Assistant API error (HTTP %d)", resp.StatusCode)
 	}
 
 	// 尝试解析为 JSON

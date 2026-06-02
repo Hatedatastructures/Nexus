@@ -142,8 +142,10 @@ func (e *SSHEnvironment) ExecuteBackground(ctx context.Context, command string, 
 	}
 
 	handle := &OSProcessHandle{
-		cmd:    cmd,
-		process: cmd.Process,
+		cmd:       cmd,
+		process:   cmd.Process,
+		stdoutBuf: &stdout,
+		stderrBuf: &stderr,
 	}
 
 	slog.Info("SSH background process started", "host", e.host)

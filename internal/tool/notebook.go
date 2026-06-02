@@ -4,6 +4,7 @@ package tool
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -150,7 +151,7 @@ func (t *NotebookEditTool) Execute(ctx context.Context, args map[string]any) (st
 		}
 		newCell := notebookCell{
 			CellType: cellType,
-			ID:       fmt.Sprintf("cell-%d", time.Now().UnixNano()),
+			ID:       generateCellID(),
 			Source:   sourceToLines(newSource),
 		}
 		if cellID == "" {
@@ -186,12 +187,15 @@ func (t *NotebookEditTool) Execute(ctx context.Context, args map[string]any) (st
 		return ToolError(fmt.Sprintf("写回 notebook 文件失败: %v", err)), nil
 	}
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output":       fmt.Sprintf("notebook 编辑成功: %s (模式: %s)", notebookPath, editMode),
 		"notebook_path": notebookPath,
 		"edit_mode":    editMode,
 		"cell_count":   len(nb.Cells),
 	})
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
@@ -228,6 +232,15 @@ func sourceToLines(source string) []string {
 		}
 	}
 	return result
+}
+
+// generateCellID 生成随机的 notebook 单元格 ID。
+func generateCellID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("cell-%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("cell-%x", b)
 }
 
 // ───────────────────────────── init 注册 ─────────────────────────────

@@ -311,7 +311,11 @@ func (m *JobManager) GetDueJobs(ctx context.Context) ([]*Job, error) {
 
 	// 批量更新快进的作业
 	if len(needsUpdate) > 0 {
-		allJobs, _ := m.loadAll()
+		allJobs, err := m.loadAll()
+		if err != nil {
+			slog.Warn("Cron: loadAll for batch update failed", "error", err)
+			return due, nil
+		}
 		for _, updated := range needsUpdate {
 			for i, j := range allJobs {
 				if j.ID == updated.ID {
@@ -546,7 +550,10 @@ func parseDuration(s string) (int, error) {
 		return 0, fmt.Errorf("无效的持续时间: '%s'。格式: '30m', '2h', '1d'", s)
 	}
 
-	value, _ := strconv.Atoi(matches[1])
+	value, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, fmt.Errorf("无效的数字: '%s': %w", matches[1], err)
+	}
 	unit := matches[2][0] // 首字符: m, h, d
 
 	multipliers := map[byte]int{
@@ -555,7 +562,11 @@ func parseDuration(s string) (int, error) {
 		'd': 1440,
 	}
 
-	return value * multipliers[unit], nil
+	mult, ok := multipliers[unit]
+	if !ok {
+		return 0, fmt.Errorf("不支持的时间单位: '%c'", unit)
+	}
+	return value * mult, nil
 }
 
 // nextCronTime 计算 cron 表达式的下一个触发时间。
@@ -565,7 +576,7 @@ func nextCronTime(expr string, from time.Time) time.Time {
 	// 生产环境建议集成 robfig/cron 库，但当前按用户要求自实现
 	fields := strings.Fields(expr)
 	if len(fields) < 5 {
-		return from // 无效的 cron 表达式
+		return from.Add(24 * time.Hour) // 无效的 cron 表达式，兜底 24 小时后
 	}
 
 	maxIterations := 366 * 24 * 60 // 1 年
@@ -684,6 +695,29 @@ func advanceToNext(job *Job, now time.Time) *Job {
 	}
 
 	return &updated
+}
+
+// PersistJobStatus 持久化作业执行状态到磁盘。
+// 只更新 LastRunAt, LastStatus, LastError 字段，不改变调度配置。
+func (m *JobManager) PersistJobStatus(ctx context.Context, job *Job) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	jobs, err := m.loadAll()
+	if err != nil {
+		return fmt.Errorf("读取作业列表失败: %w", err)
+	}
+
+	for i, existing := range jobs {
+		if existing.ID == job.ID {
+			jobs[i].LastRunAt = job.LastRunAt
+			jobs[i].LastStatus = job.LastStatus
+			jobs[i].LastError = job.LastError
+			return m.saveAll(jobs)
+		}
+	}
+
+	return fmt.Errorf("作业 '%s' 不存在", job.ID)
 }
 
 // generateJobID 使用加密安全的随机数生成 12 字符十六进制作业 ID。

@@ -107,10 +107,10 @@ func (c *Curator) SaveState() error {
 		return err
 	}
 	tmp := c.stateFile + ".tmp"
-		if err := os.WriteFile(tmp, data, 0644); err != nil {
-			return err
-		}
-		return os.Rename(tmp, c.stateFile)
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, c.stateFile)
 }
 
 // ───────────────────────────── 策展逻辑 ─────────────────────────────
@@ -278,7 +278,7 @@ func (c *Curator) WriteRunReport(outputDir string, result *ReviewResult) error {
 		b.WriteString(fmt.Sprintf("## 摘要\n\n%s\n", result.Summary))
 	}
 
-	return os.WriteFile(reportPath, []byte(b.String()), 0644)
+	return os.WriteFile(reportPath, []byte(b.String()), 0600)
 }
 
 // GetSkillsByState 按状态获取技能列表。

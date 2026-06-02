@@ -193,13 +193,16 @@ func (t *CodeExecuteTool) Execute(ctx context.Context, args map[string]any) (str
 		"outputSize", len(output),
 	)
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output":      output,
 		"exit_code":   exitCode,
 		"language":    language,
 		"duration":    duration.String(),
 		"interrupted": interrupted,
 	})
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 
 	return string(result), nil
 }

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,7 @@ import (
 // 通过 OpenAI Whisper API 或兼容端点，将音频文件转录为文本。
 type TranscriptionTool struct {
 	client *http.Client
+	once   sync.Once
 }
 
 // Name 返回工具名称。
@@ -143,9 +145,9 @@ func (t *TranscriptionTool) Execute(ctx context.Context, args map[string]any) (s
 
 // transcribe 调用 Whisper API 转录音频。
 func (t *TranscriptionTool) transcribe(ctx context.Context, model, audioPath, language, responseFormat string, temperature float64) (string, error) {
-	if t.client == nil {
-		t.client = &http.Client{Timeout: 300 * time.Second} // Whisper 转录可能需要较长时间
-	}
+	t.once.Do(func() {
+		t.client = &http.Client{Timeout: 300 * time.Second}
+	})
 
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -218,7 +220,8 @@ func (t *TranscriptionTool) transcribe(ctx context.Context, model, audioPath, la
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		slog.Warn("transcription API error response", "status", resp.StatusCode, "body", string(respBody))
+		return "", fmt.Errorf("语音转录 API 返回错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	// 解析响应 (text 格式直接返回文本，json 格式解析)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -100,12 +101,15 @@ func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (string, er
 	}
 
 	if len(matches) == 0 {
-		result, _ := json.Marshal(map[string]any{
+		result, err := json.Marshal(map[string]any{
 			"output":  fmt.Sprintf("在 %s 中未找到匹配 '%s' 的文件", searchRoot, pattern),
 			"pattern": pattern,
 			"path":    searchRoot,
 			"files":   []string{},
 		})
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 		return string(result), nil
 	}
 
@@ -136,7 +140,7 @@ func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (string, er
 		output += " (结果已截断，仅显示前 100 个)"
 	}
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output":    output,
 		"pattern":   pattern,
 		"path":      searchRoot,
@@ -144,6 +148,9 @@ func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (string, er
 		"total":     len(relPaths),
 		"truncated": truncated,
 	})
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 
 	return string(result), nil
 }
@@ -246,6 +253,7 @@ func globRecursive(root, pattern string) ([]string, error) {
 			// pattern 是 ** (匹配所有文件)
 			err = filepath.Walk(searchDir, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
+					slog.Warn("glob: skip inaccessible path", "path", path, "error", err)
 					return nil
 				}
 				if !info.IsDir() {
@@ -258,6 +266,7 @@ func globRecursive(root, pattern string) ([]string, error) {
 			suffixPattern := suffix
 			err = filepath.Walk(searchDir, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
+					slog.Warn("glob: skip inaccessible path", "path", path, "error", err)
 					return nil
 				}
 				if info.IsDir() {

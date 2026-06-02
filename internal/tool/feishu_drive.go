@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"bytes"
 	"strings"
 	"sync"
 	"time"
@@ -25,15 +26,22 @@ type FeishuDriveClient interface {
 }
 
 // 全局飞书云盘客户端
-var globalFeishuDriveClient FeishuDriveClient
+var (
+	globalFeishuDriveClient   FeishuDriveClient
+	globalFeishuDriveClientMu sync.RWMutex
+)
 
 // SetFeishuDriveClient 设置全局飞书云盘客户端。
 func SetFeishuDriveClient(client FeishuDriveClient) {
+	globalFeishuDriveClientMu.Lock()
 	globalFeishuDriveClient = client
+	globalFeishuDriveClientMu.Unlock()
 }
 
 // GetFeishuDriveClient 获取当前飞书云盘客户端。
 func GetFeishuDriveClient() FeishuDriveClient {
+	globalFeishuDriveClientMu.RLock()
+	defer globalFeishuDriveClientMu.RUnlock()
 	return globalFeishuDriveClient
 }
 
@@ -73,7 +81,10 @@ func (c *DefaultFeishuDriveClient) getTenantAccessToken(ctx context.Context) (st
 		"app_id":     c.appID,
 		"app_secret": c.appSecret,
 	}
-	bodyBytes, _ := json.Marshal(body)
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+	return "", fmt.Errorf("序列化请求体失败: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		c.baseURL+"/open-apis/auth/v3/tenant_access_token/internal",
@@ -155,16 +166,17 @@ func (c *DefaultFeishuDriveClient) Request(ctx context.Context, method, uri stri
 		return nil, err
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("飞书 API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
-	}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			slog.Warn("feishu drive API error response", "status", resp.StatusCode, "body", string(respBody))
+			return nil, fmt.Errorf("飞书 API 错误 (HTTP %d)", resp.StatusCode)
+		}
 
 	return respBody, nil
 }
 
 // bytesReader2 创建 bytes Reader。
 func bytesReader2(data []byte) io.Reader {
-	return strings.NewReader(string(data))
+	return bytes.NewReader(data)
 }
 
 // ───────────────────────────── 工具可用性检查 ─────────────────────────────
@@ -253,13 +265,10 @@ func (t *FeishuDriveListCommentsTool) Execute(ctx context.Context, args map[stri
 	}
 
 	isWhole, _ := args["is_whole"].(bool)
-	pageSize, _ := args["page_size"].(int)
-	if pageSize == 0 {
-		pageSize = 100
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
+	pageSize := 100
+		if v, ok := args["page_size"].(float64); ok && v > 0 && v <= 100 {
+			pageSize = int(v)
+		}
 	pageToken, _ := args["page_token"].(string)
 
 	client, err := getDriveClient(ctx)
@@ -366,13 +375,10 @@ func (t *FeishuDriveListRepliesTool) Execute(ctx context.Context, args map[strin
 	if fileType == "" {
 		fileType = "docx"
 	}
-	pageSize, _ := args["page_size"].(int)
-	if pageSize == 0 {
-		pageSize = 100
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
+		pageSize := 100
+		if v, ok := args["page_size"].(float64); ok && v > 0 && v <= 100 {
+			pageSize = int(v)
+		}
 	pageToken, _ := args["page_token"].(string)
 
 	client, err := getDriveClient(ctx)
@@ -496,7 +502,10 @@ func (t *FeishuDriveReplyCommentTool) Execute(ctx context.Context, args map[stri
 			},
 		},
 	}
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+		if err != nil {
+			return ToolError(fmt.Sprintf("序列化请求体失败: %v", err)), nil
+		}
 
 	respBody, err := client.Request(ctx, "POST",
 		"/open-apis/drive/v1/files/:file_token/comments/:comment_id/replies",
@@ -598,7 +607,10 @@ func (t *FeishuDriveAddCommentTool) Execute(ctx context.Context, args map[string
 			},
 		},
 	}
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+		if err != nil {
+			return ToolError(fmt.Sprintf("序列化请求体失败: %v", err)), nil
+		}
 
 	respBody, err := client.Request(ctx, "POST",
 		"/open-apis/drive/v1/files/:file_token/new_comments",

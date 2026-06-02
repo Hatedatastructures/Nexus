@@ -333,10 +333,13 @@ func (t *TodoTool) handleCreate(args map[string]any, store *TodoStore) (string, 
 	}
 
 	slog.Info("todo items created", "count", len(created))
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output":  fmt.Sprintf("已创建 %d 个待办项", len(created)),
 		"created": created,
 	})
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
@@ -387,10 +390,13 @@ func (t *TodoTool) handleUpdate(args map[string]any, store *TodoStore) (string, 
 	}
 
 	slog.Info("todo items updated", "count", len(results))
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output":  fmt.Sprintf("已更新 %d 个待办项", len(results)),
 		"updated": results,
 	})
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
@@ -426,20 +432,26 @@ func (t *TodoTool) handleDelete(args map[string]any, store *TodoStore) (string, 
 	}
 
 	slog.Info("todo items deleted", "count", len(results))
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output":  fmt.Sprintf("已删除 %d 个待办项", len(ids)),
 		"deleted": results,
 	})
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
 // handleList 处理列表操作。
 func (t *TodoTool) handleList(store *TodoStore) (string, error) {
 	items := store.List()
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output": fmt.Sprintf("共 %d 个待办项", len(items)),
 		"items":  items,
 	})
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
@@ -503,10 +515,13 @@ func (t *TodoTool) handleDependencyOp(args map[string]any, store *TodoStore, op 
 		results = append(results, map[string]any{"id": id, "targets": targets, "status": "updated"})
 	}
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output":  fmt.Sprintf("已更新 %d 个依赖关系", len(results)),
 		"results": results,
 	})
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 

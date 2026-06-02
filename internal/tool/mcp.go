@@ -127,7 +127,15 @@ func callMCPTool(ctx context.Context, endpoint, toolName string, toolArgs map[st
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{
+		Timeout: 60 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if safe, reason := CheckURLSafety(req.URL.String()); !safe {
+				return fmt.Errorf("重定向目标不安全: %s", reason)
+			}
+			return nil
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("HTTP 请求失败: %w", err)
@@ -140,7 +148,7 @@ func callMCPTool(ctx context.Context, endpoint, toolName string, toolArgs map[st
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("MCP 服务器返回错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var rpcResp struct {

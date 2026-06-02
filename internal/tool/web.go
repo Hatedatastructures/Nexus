@@ -14,15 +14,30 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
 // ───────────────────────────── 网页搜索工具 ─────────────────────────────
 
+
+// newSafeHTTPClient creates an HTTP client that validates redirect URLs for SSRF protection.
+func newSafeHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if safe, _ := CheckURLSafety(req.URL.String()); !safe {
+				return fmt.Errorf("redirect to unsafe URL blocked: %s", req.URL.String())
+			}
+			return nil
+		},
+	}
+}
 // WebSearchTool 实现网页搜索功能。
 // 支持通过环境变量选择搜索后端。
 type WebSearchTool struct {
 	client *http.Client
+	once   sync.Once
 }
 
 // Name 返回工具名称。
@@ -88,9 +103,10 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (strin
 		}
 	}
 
-	if t.client == nil {
-		t.client = &http.Client{Timeout: 30 * time.Second}
-	}
+	// 确保 HTTP 客户端已初始化（并发安全）
+	t.once.Do(func() {
+		t.client = newSafeHTTPClient(30 * time.Second)
+	})
 
 	// 尝试搜索后端 (按优先级)
 	var results []map[string]any
@@ -130,31 +146,37 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (strin
 		return ToolError(fmt.Sprintf("搜索失败: %v", err)), nil
 	}
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"query":   query,
 		"results": results,
 		"count":   len(results),
 	})
 
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
 // searchTavily 使用 Tavily API 进行搜索。
 func (t *WebSearchTool) searchTavily(ctx context.Context, apiKey, query string, numResults int) ([]map[string]any, error) {
 	reqBody := map[string]any{
-		"api_key":        apiKey,
 		"query":          query,
 		"max_results":    numResults,
 		"search_depth":   "basic",
 		"include_answer": true,
 	}
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求体失败: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.tavily.com/search", bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	resp, err := t.client.Do(req)
 	if err != nil {
@@ -164,7 +186,8 @@ func (t *WebSearchTool) searchTavily(ctx context.Context, apiKey, query string, 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, fmt.Errorf("Tavily API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+		slog.Warn("Tavily API error response", "status", resp.StatusCode, "body", string(body))
+		return nil, fmt.Errorf("Tavily API 返回错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var result struct {
@@ -208,7 +231,10 @@ func (t *WebSearchTool) searchExa(ctx context.Context, apiKey, query string, num
 			},
 		},
 	}
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求体失败: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.exa.ai/search", bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -225,7 +251,8 @@ func (t *WebSearchTool) searchExa(ctx context.Context, apiKey, query string, num
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, fmt.Errorf("Exa API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+		slog.Warn("Exa API error response", "status", resp.StatusCode, "body", string(body))
+		return nil, fmt.Errorf("Exa API 返回错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var result struct {
@@ -257,7 +284,10 @@ func (t *WebSearchTool) searchFirecrawl(ctx context.Context, apiKey, query strin
 		"pageOptions":  map[string]any{"onlyMainContent": true},
 		"searchOptions": map[string]any{"limit": numResults},
 	}
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求体失败: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.firecrawl.dev/v1/search", bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -274,7 +304,8 @@ func (t *WebSearchTool) searchFirecrawl(ctx context.Context, apiKey, query strin
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, fmt.Errorf("Firecrawl API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+		slog.Warn("Firecrawl API error response", "status", resp.StatusCode, "body", string(body))
+		return nil, fmt.Errorf("Firecrawl API 返回错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var result struct {
@@ -307,7 +338,10 @@ func (t *WebSearchTool) searchParallel(ctx context.Context, apiKey, query string
 		"limit":  numResults,
 		"depth":  "basic",
 	}
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求体失败: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.parallel.ai/v1/search", bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -324,7 +358,8 @@ func (t *WebSearchTool) searchParallel(ctx context.Context, apiKey, query string
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, fmt.Errorf("Parallel API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+		slog.Warn("Parallel API error response", "status", resp.StatusCode, "body", string(body))
+		return nil, fmt.Errorf("Parallel API 返回错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var result struct {
@@ -354,6 +389,7 @@ func (t *WebSearchTool) searchParallel(ctx context.Context, apiKey, query string
 // WebCrawlTool 实现带指令的网页爬取功能。
 type WebCrawlTool struct {
 	client *http.Client
+	once   sync.Once
 }
 
 // Name 返回工具名称。
@@ -430,9 +466,10 @@ func (t *WebCrawlTool) Execute(ctx context.Context, args map[string]any) (string
 		return ToolError("爬取功能需要 FIRECRAWL_API_KEY 环境变量"), nil
 	}
 
-	if t.client == nil {
-		t.client = &http.Client{Timeout: 120 * time.Second}
-	}
+	// 确保 HTTP 客户端已初始化（并发安全）
+	t.once.Do(func() {
+		t.client = newSafeHTTPClient(120 * time.Second)
+	})
 
 	// 使用 Firecrawl 的 crawl 端点
 	reqBody := map[string]any{
@@ -443,7 +480,10 @@ func (t *WebCrawlTool) Execute(ctx context.Context, args map[string]any) (string
 			"onlyMainContent":   true,
 		},
 	}
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+	return ToolError(fmt.Sprintf("序列化请求体失败: %v", err)), nil
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.firecrawl.dev/v1/crawl", bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -482,13 +522,16 @@ func (t *WebCrawlTool) Execute(ctx context.Context, args map[string]any) (string
 		})
 	}
 
-	output, _ := json.Marshal(map[string]any{
+	output, err := json.Marshal(map[string]any{
 		"url":          targetURL,
 		"instructions": instructions,
 		"pages_crawled": len(pages),
 		"total":        result.Total,
 		"pages":        pages,
 	})
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 
 	return string(output), nil
 }
@@ -500,6 +543,7 @@ func (t *WebCrawlTool) Execute(ctx context.Context, args map[string]any) (string
 // 标记为异步工具 (is_async=true) 以支持长时间运行的提取操作。
 type WebExtractTool struct {
 	client *http.Client
+	once   sync.Once
 }
 
 // Name 返回工具名称。
@@ -584,9 +628,10 @@ func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (stri
 		format = "html"
 	}
 
-	if t.client == nil {
-		t.client = &http.Client{Timeout: 30 * time.Second}
-	}
+	// 确保 HTTP 客户端已初始化（并发安全）
+	t.once.Do(func() {
+		t.client = newSafeHTTPClient(30 * time.Second)
+	})
 
 	var results []map[string]any
 	for _, targetURL := range urls {
@@ -627,12 +672,15 @@ func (t *WebExtractTool) Execute(ctx context.Context, args map[string]any) (stri
 		})
 	}
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"extracted": len(results),
 		"total":     len(urls),
 		"format":    format,
 		"results":   results,
 	})
+		if err != nil {
+			return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+		}
 
 	return string(result), nil
 }

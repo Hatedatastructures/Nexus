@@ -5,6 +5,7 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -168,7 +169,7 @@ func (s *MCPServer) handleToolCall(ctx context.Context, params map[string]any) (
 		return nil, fmt.Errorf("工具注册中心未初始化")
 	}
 
-	result, err := s.registry.Dispatch(name, args)
+	result, err := s.registry.Dispatch(ctx, name, args)
 	if err != nil {
 		return nil, fmt.Errorf("工具 %q 执行失败: %v", name, err)
 	}
@@ -187,10 +188,18 @@ func (s *MCPServer) handleToolCall(ctx context.Context, params map[string]any) (
 // ───────────────────────────── stdin/stdout 循环 ─────────────────────────────
 
 // RunStdioLoop 从 stdin 读取请求，处理并写入 stdout。
+// 支持 NEXUS_MCP_AUTH_TOKEN 环境变量进行认证。
 func (s *MCPServer) RunStdioLoop(ctx context.Context) error {
+	authToken := os.Getenv("NEXUS_MCP_AUTH_TOKEN")
+	if authToken == "" {
+		slog.Warn("MCP server running without authentication — set NEXUS_MCP_AUTH_TOKEN for security")
+	}
+
 	reader := bufio.NewReader(os.Stdin)
 	writer := bufio.NewWriter(os.Stdout)
 	defer writer.Flush()
+
+	authenticated := authToken == ""
 
 	for {
 		select {
@@ -216,6 +225,27 @@ func (s *MCPServer) RunStdioLoop(ctx context.Context) error {
 		if err := json.Unmarshal([]byte(line), &req); err != nil {
 			resp := errorResponse(nil, ErrParse, fmt.Sprintf("JSON 解析失败: %v", err))
 			writeResponse(writer, resp)
+			continue
+		}
+
+		// 认证检查
+		if !authenticated {
+			if req.Method != "auth" {
+				writeResponse(writer, errorResponse(req.ID, ErrUnauthorized, "需要先进行认证"))
+				continue
+			}
+			token, _ := req.Params["token"].(string)
+			if subtle.ConstantTimeCompare([]byte(token), []byte(authToken)) != 1 {
+				writeResponse(writer, errorResponse(req.ID, ErrUnauthorized, "认证失败"))
+				continue
+			}
+			authenticated = true
+			writeResponse(writer, &JSONRPCResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result:  map[string]any{"status": "authenticated"},
+			})
+			slog.Info("MCP client authenticated successfully")
 			continue
 		}
 
@@ -259,6 +289,6 @@ type EmptyToolRegistry struct{}
 
 func (e *EmptyToolRegistry) ListTools() []string          { return nil }
 func (e *EmptyToolRegistry) GetSchema(string) (*ToolSchema, bool) { return nil, false }
-func (e *EmptyToolRegistry) Dispatch(string, map[string]any) (string, error) {
+func (e *EmptyToolRegistry) Dispatch(context.Context, string, map[string]any) (string, error) {
 	return `{"error": "no tools registered"}`, nil
 }

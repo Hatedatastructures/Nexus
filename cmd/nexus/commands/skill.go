@@ -1,7 +1,9 @@
 package commands
 
 import (
+	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -135,16 +137,38 @@ func extractSkillName(url string) string {
 func isGitURL(url string) bool {
 	return strings.HasPrefix(url, "git@") ||
 		strings.HasSuffix(url, ".git") ||
-		(strings.HasPrefix(url, "https://github.com") && !strings.HasSuffix(url, ".md"))
+		(strings.HasPrefix(url, "https://github.com/") && !strings.HasSuffix(url, ".md"))
 }
 
-func cloneGitRepo(url, targetDir string) error {
+func cloneGitRepo(repoURL, targetDir string) error {
 	// 检查 git 是否在 PATH 中
 	if _, err := exec.LookPath("git"); err != nil {
 		return fmt.Errorf("系统未安装 git，无法克隆仓库")
 	}
 
-	cmd := exec.Command("git", "clone", "--depth", "1", url, targetDir)
+	// 协议白名单
+	if !strings.HasPrefix(repoURL, "https://") && !strings.HasPrefix(repoURL, "git@") {
+		return fmt.Errorf("仅支持 https:// 和 git@ 协议的仓库地址")
+	}
+
+	// 主机白名单
+	u, err := url.Parse(repoURL)
+	if err != nil {
+		return fmt.Errorf("无效的仓库地址: %w", err)
+	}
+	if !tool.IsAllowedGitHost(u.Hostname()) {
+		return fmt.Errorf("不允许的主机: %s", u.Hostname())
+	}
+
+	// SSRF 防御
+	if safe, reason := tool.CheckURLSafety(repoURL); !safe {
+		return fmt.Errorf("URL 安全检查失败: %s", reason)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", repoURL, targetDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git clone 失败: %v\n%s", err, string(output))
 	}

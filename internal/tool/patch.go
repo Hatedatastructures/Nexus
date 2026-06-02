@@ -139,14 +139,24 @@ func parseSinglePatch(content string) (PatchOperation, error) {
 
 // ───────────────────────────── 沙箱路径解析 ─────────────────────────────
 
-// resolvePatchPath 当 env 非 nil 时，将相对路径约束到沙箱工作目录。
+// resolvePatchPath 将相对路径约束到沙箱工作目录 (当 env 非 nil 时)。
 // 同时解析 symlink 确保路径未逃逸。
+// 即使 env 为 nil 也拒绝绝对路径和路径遍历。
 func resolvePatchPath(path string, env sandbox.Environment) (string, error) {
+	// 绝对路径和路径遍历检查 — 无论 env 是否为 nil 都必须执行
+	cleaned := filepath.Clean(path)
+	if filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("不允许使用绝对路径: %s", path)
+	}
+	if strings.HasPrefix(cleaned, "..") {
+		return "", fmt.Errorf("不允许路径遍历: %s", path)
+	}
+
 	var resolved string
 	if env != nil && env.CWD() != "" {
-		resolved = filepath.Join(env.CWD(), path)
+		resolved = filepath.Join(env.CWD(), cleaned)
 	} else {
-		resolved = path
+		resolved = cleaned
 	}
 
 	// 解析 symlink 获取真实路径
@@ -155,7 +165,6 @@ func resolvePatchPath(path string, env sandbox.Environment) (string, error) {
 		if !os.IsNotExist(err) {
 			return "", fmt.Errorf("解析符号链接失败: %w", err)
 		}
-		// 文件尚不存在，检查父目录
 		parentDir := filepath.Dir(resolved)
 		realParent, evalErr := filepath.EvalSymlinks(parentDir)
 		if evalErr != nil {
@@ -292,17 +301,7 @@ func fuzzyReplace(content, oldText, newText string, maxReplacements int) string 
 	// 1. 精确匹配
 	if strings.Contains(content, oldText) {
 		if maxReplacements > 0 {
-			count := 0
-			result := content
-			for {
-				idx := strings.Index(result, oldText)
-				if idx == -1 || count >= maxReplacements {
-					break
-				}
-				result = result[:idx] + newText + result[idx+len(oldText):]
-				count++
-			}
-			return result
+			return strings.Replace(content, oldText, newText, maxReplacements)
 		}
 		return strings.ReplaceAll(content, oldText, newText)
 	}
@@ -311,17 +310,7 @@ func fuzzyReplace(content, oldText, newText string, maxReplacements int) string 
 	trimmedOld := strings.TrimSpace(oldText)
 	if trimmedOld != "" && strings.Contains(content, trimmedOld) {
 		if maxReplacements > 0 {
-			count := 0
-			result := content
-			for {
-				idx := strings.Index(result, trimmedOld)
-				if idx == -1 || count >= maxReplacements {
-					break
-				}
-				result = result[:idx] + newText + result[idx+len(trimmedOld):]
-				count++
-			}
-			return result
+			return strings.Replace(content, trimmedOld, newText, maxReplacements)
 		}
 		return strings.ReplaceAll(content, trimmedOld, newText)
 	}

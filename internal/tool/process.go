@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -171,9 +174,26 @@ func (t *ProcessTool) processStatus(pid int) (string, error) {
 }
 
 func (t *ProcessTool) killProcess(pid int) (string, error) {
+	// 安全检查: 拒绝终止系统关键进程
+	if pid <= 1 {
+		return ToolError(fmt.Sprintf("拒绝终止系统进程 PID: %d", pid)), nil
+	}
+	if pid == os.Getpid() {
+		return ToolError("拒绝终止当前进程"), nil
+	}
+	if pid == os.Getppid() {
+		return ToolError("拒绝终止父进程"), nil
+	}
+	if runtime.GOOS == "windows" && pid < 100 {
+		return ToolError(fmt.Sprintf("拒绝终止系统进程 PID: %d (Windows PID < 100)", pid)), nil
+	}
+	if runtime.GOOS == "linux" && pid < 100 {
+		return ToolError(fmt.Sprintf("拒绝终止系统守护进程 PID: %d (Linux PID < 100)", pid)), nil
+	}
+
 	proc := GetProcess(pid)
 	if proc == nil {
-		return ToolError(fmt.Sprintf("未找到进程 PID: %d", pid)), nil
+		return ToolError(fmt.Sprintf("未找到进程 PID: %d (仅允许终止由 Nexus 启动的进程)", pid)), nil
 	}
 
 	// 尝试终止进程
@@ -197,6 +217,16 @@ func (t *ProcessTool) killProcess(pid int) (string, error) {
 }
 
 func isProcessRunning(pid int) bool {
+	if runtime.GOOS == "windows" {
+		// Windows 上 os.FindProcess + Signal(nil) 不可靠
+		// 使用 tasklist 命令检查进程是否存在
+		cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH")
+		output, err := cmd.Output()
+		if err != nil {
+			return false
+		}
+		return strings.Contains(string(output), fmt.Sprintf("%d", pid))
+	}
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		return false

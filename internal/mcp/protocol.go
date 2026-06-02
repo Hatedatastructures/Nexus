@@ -3,7 +3,10 @@
 // 用于 Nexus Agent 的 ACP (Agent Control Protocol) 入口。
 package mcp
 
-import "sync/atomic"
+import (
+	"context"
+	"sync/atomic"
+)
 
 // ───────────────────────────── JSON-RPC 2.0 类型 ─────────────────────────────
 
@@ -46,11 +49,12 @@ type RPCError struct {
 
 // 标准 JSON-RPC 2.0 错误码
 const (
-	ErrParse     = -32700 // 解析错误
-	ErrInvalid   = -32600 // 无效请求
-	ErrNotFound  = -32601 // 方法不存在
-	ErrBadParams = -32602 // 参数无效
-	ErrInternal  = -32603 // 内部错误
+	ErrParse        = -32700 // 解析错误
+	ErrInvalid      = -32600 // 无效请求
+	ErrNotFound     = -32601 // 方法不存在
+	ErrBadParams    = -32602 // 参数无效
+	ErrInternal     = -32603 // 内部错误
+	ErrUnauthorized = -32001 // 未认证
 )
 
 // ───────────────────────────── MCP 协议类型 ─────────────────────────────
@@ -86,7 +90,7 @@ type ToolRegistry interface {
 	// GetSchema 返回指定工具的 Schema
 	GetSchema(name string) (*ToolSchema, bool)
 	// Dispatch 执行指定工具
-	Dispatch(name string, args map[string]any) (string, error)
+	Dispatch(ctx context.Context, name string, args map[string]any) (string, error)
 }
 
 // ToolSchema 是从工具注册中心获取的工具 Schema。

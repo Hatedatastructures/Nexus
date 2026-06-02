@@ -152,7 +152,8 @@ func ScanSkill(dir string) (*ScanResult, error) {
 
 	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // 跳过无法访问的文件
+			slog.Warn("skills_guard: skip inaccessible path", "path", path, "error", err)
+			return nil
 		}
 
 		// 跳过目录和隐藏文件
@@ -202,6 +203,7 @@ func ScanSkill(dir string) (*ScanResult, error) {
 		// 读取并扫描文件内容
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
+			slog.Warn("skills_guard: skip unreadable file", "path", path, "error", readErr)
 			return nil
 		}
 
@@ -274,23 +276,24 @@ func determineVerdict(findings []Finding) string {
 	return "warn"
 }
 
+// textFileExts 文本文件的扩展名集合。
+var textFileExts = map[string]bool{
+	".go": true, ".py": true, ".js": true, ".ts": true,
+	".sh": true, ".bash": true, ".zsh": true, ".fish": true,
+	".yaml": true, ".yml": true, ".json": true, ".toml": true,
+	".xml": true, ".html": true, ".css": true, ".md": true,
+	".txt": true, ".cfg": true, ".conf": true, ".ini": true,
+	".rb": true, ".rs": true, ".java": true, ".c": true,
+	".cpp": true, ".h": true, ".hpp": true, ".cs": true,
+	".php": true, ".sql": true, ".r": true, ".lua": true,
+	".pl": true, ".swift": true, ".kt": true, ".dart": true,
+	".vue": true, ".jsx": true, ".tsx": true, ".svelte": true,
+}
+
 // isTextFile 检查文件扩展名是否为文本文件类型。
 func isTextFile(path string) bool {
-	textExts := map[string]bool{
-		".go":   true, ".py":   true, ".js":   true, ".ts":   true,
-		".sh":   true, ".bash": true, ".zsh":  true, ".fish": true,
-		".yaml": true, ".yml":  true, ".json": true, ".toml": true,
-		".xml":  true, ".html": true, ".css":  true, ".md":   true,
-		".txt":  true, ".cfg":  true, ".conf": true, ".ini":  true,
-		".rb":   true, ".rs":   true, ".java": true, ".c":    true,
-		".cpp":  true, ".h":    true, ".hpp":  true, ".cs":   true,
-		".php":  true, ".sql":  true, ".r":    true, ".lua":  true,
-		".pl":   true, ".swift": true, ".kt":  true, ".dart": true,
-		".vue":  true, ".jsx":  true, ".tsx":  true, ".svelte": true,
-	}
-
 	ext := strings.ToLower(filepath.Ext(path))
-	return textExts[ext]
+	return textFileExts[ext]
 }
 
 // ───────────────────────────── 技能扫描工具 ─────────────────────────────

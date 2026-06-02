@@ -16,12 +16,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
 // VideoGenerateTool 通过外部 API 根据文本描述生成视频。
 type VideoGenerateTool struct {
 	client *http.Client
+	once   sync.Once
 }
 
 func (t *VideoGenerateTool) Name() string { return "video_generate" }
@@ -99,9 +101,9 @@ func (t *VideoGenerateTool) Execute(ctx context.Context, args map[string]any) (s
 
 // generate 调用视频生成 API。
 func (t *VideoGenerateTool) generate(ctx context.Context, prompt string, duration int, resolution, style string) (map[string]any, error) {
-	if t.client == nil {
+	t.once.Do(func() {
 		t.client = &http.Client{Timeout: 300 * time.Second}
-	}
+	})
 
 	apiKey := os.Getenv("VIDEO_GEN_API_KEY")
 	if apiKey == "" {
@@ -150,7 +152,8 @@ func (t *VideoGenerateTool) generate(ctx context.Context, prompt string, duratio
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		slog.Warn("video generation API error response", "status", resp.StatusCode, "body", string(respBody))
+		return nil, fmt.Errorf("视频生成 API 返回错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var apiResp map[string]any

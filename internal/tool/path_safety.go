@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 // ───────────────────────────── 敏感路径常量 ─────────────────────────────
@@ -69,13 +70,35 @@ var nexusControlDirs = []string{
 
 // ───────────────────────────── 路径检查函数 ─────────────────────────────
 
-// getHomeDir 获取用户 home 目录。
-func getHomeDir() string {
+// homeDirCache 缓存 home 目录，避免重复系统调用。
+var (
+	homeDirMu    sync.RWMutex
+	homeDirCache string
+)
+
+func getHomeDirCached() string {
+	homeDirMu.RLock()
+	cached := homeDirCache
+	homeDirMu.RUnlock()
+	if cached != "" {
+		return cached
+	}
+	homeDirMu.Lock()
+	defer homeDirMu.Unlock()
+	if homeDirCache != "" {
+		return homeDirCache
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
+	homeDirCache = home
 	return home
+}
+
+// getHomeDir 获取用户 home 目录。
+func getHomeDir() string {
+	return getHomeDirCached()
 }
 
 // getNexusHome 获取 Nexus home 目录。
@@ -92,20 +115,20 @@ func getNexusHome() string {
 func IsBlockedWritePath(path string) error {
 	resolved, err := filepath.Abs(path)
 	if err != nil {
-		return nil
+		return fmt.Errorf("无法解析路径: %s: %w", path, err)
 	}
 
 	// 解析 symlink
 	realPath, err := filepath.EvalSymlinks(resolved)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			return nil
+			return fmt.Errorf("无法解析符号链接: %s: %w", path, err)
 		}
 		// 文件不存在时解析父目录
 		parent := filepath.Dir(resolved)
 		realParent, evalErr := filepath.EvalSymlinks(parent)
 		if evalErr != nil {
-			return nil
+			return fmt.Errorf("无法解析父目录符号链接: %s: %w", parent, evalErr)
 		}
 		realPath = filepath.Join(realParent, filepath.Base(resolved))
 	}
@@ -167,19 +190,19 @@ func IsBlockedWritePath(path string) error {
 func IsBlockedReadPath(path string) error {
 	resolved, err := filepath.Abs(path)
 	if err != nil {
-		return nil
+		return fmt.Errorf("无法解析路径: %s: %w", path, err)
 	}
 
 	// 解析 symlink
 	realPath, err := filepath.EvalSymlinks(resolved)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			return nil
+			return fmt.Errorf("无法解析符号链接: %s: %w", path, err)
 		}
 		parent := filepath.Dir(resolved)
 		realParent, evalErr := filepath.EvalSymlinks(parent)
 		if evalErr != nil {
-			return nil
+			return fmt.Errorf("无法解析父目录符号链接: %s: %w", parent, evalErr)
 		}
 		realPath = filepath.Join(realParent, filepath.Base(resolved))
 	}

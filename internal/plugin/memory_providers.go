@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,11 +26,11 @@ import (
 // HonchoProvider 通过 Honcho API 提供对话记忆功能。
 type HonchoProvider struct {
 	memory.BaseProvider
-	client   *http.Client
-	baseURL  string
-	apiKey   string
-	appID    string
-	userID   string
+	client  *http.Client
+	baseURL string
+	apiKey  string
+	appID   string
+	userID  string
 }
 
 // NewHonchoProvider 创建 Honcho 内存提供者。
@@ -55,16 +58,18 @@ func (p *HonchoProvider) SystemPromptBlock() string {
 }
 
 func (p *HonchoProvider) SyncTurn(ctx context.Context, userContent, assistantContent string) error {
-	// 同步对话轮次到 Honcho
 	messages := []map[string]string{
 		{"role": "user", "content": userContent},
 		{"role": "assistant", "content": assistantContent},
 	}
-	body, _ := json.Marshal(map[string]any{
-		"app_id":    p.appID,
-		"user_id":   p.userID,
-		"messages":  messages,
+	body, err := json.Marshal(map[string]any{
+		"app_id":   p.appID,
+		"user_id":  p.userID,
+		"messages": messages,
 	})
+	if err != nil {
+		return fmt.Errorf("serialize honcho request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		fmt.Sprintf("%s/v1/conversations", p.baseURL),
@@ -82,8 +87,8 @@ func (p *HonchoProvider) SyncTurn(ctx context.Context, userContent, assistantCon
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("Honcho API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("Honcho API 返回 HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 	io.Copy(io.Discard, resp.Body)
 
@@ -108,14 +113,17 @@ func (p *HonchoProvider) Prefetch(ctx context.Context, query string) (string, er
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return "", fmt.Errorf("Honcho API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return "", fmt.Errorf("Honcho API 返回 HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result struct {
 		Context string `json:"context"`
 	}
-	json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result); err != nil {
+		slog.Warn("honcho prefetch: decode response failed", "error", err)
+		return "", nil
+	}
 	return result.Context, nil
 }
 
@@ -160,13 +168,16 @@ func (p *Mem0Provider) SystemPromptBlock() string {
 }
 
 func (p *Mem0Provider) SyncTurn(ctx context.Context, userContent, assistantContent string) error {
-	body, _ := json.Marshal(map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"messages": []map[string]string{
 			{"role": "user", "content": userContent},
 			{"role": "assistant", "content": assistantContent},
 		},
 		"user_id": p.userID,
 	})
+	if err != nil {
+		return fmt.Errorf("serialize mem0 request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		fmt.Sprintf("%s/memories/", p.baseURL),
@@ -184,8 +195,8 @@ func (p *Mem0Provider) SyncTurn(ctx context.Context, userContent, assistantConte
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("Mem0 API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("Mem0 API 返回 HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 	io.Copy(io.Discard, resp.Body)
 
@@ -193,10 +204,13 @@ func (p *Mem0Provider) SyncTurn(ctx context.Context, userContent, assistantConte
 }
 
 func (p *Mem0Provider) Prefetch(ctx context.Context, query string) (string, error) {
-	body, _ := json.Marshal(map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"query":   query,
 		"user_id": p.userID,
 	})
+	if err != nil {
+		return "", fmt.Errorf("serialize mem0 search request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		fmt.Sprintf("%s/memories/search/", p.baseURL),
@@ -214,8 +228,8 @@ func (p *Mem0Provider) Prefetch(ctx context.Context, query string) (string, erro
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return "", fmt.Errorf("Mem0 API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return "", fmt.Errorf("Mem0 API 返回 HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result struct {
@@ -223,7 +237,10 @@ func (p *Mem0Provider) Prefetch(ctx context.Context, query string) (string, erro
 			Memory string `json:"memory"`
 		} `json:"memories"`
 	}
-	json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result); err != nil {
+		slog.Warn("mem0 prefetch: decode response failed", "error", err)
+		return "", nil
+	}
 
 	var memories []string
 	for _, m := range result.Memories {
@@ -271,12 +288,14 @@ func (p *SupermemoryProvider) Initialize(ctx context.Context, sessionID string) 
 func (p *SupermemoryProvider) SystemPromptBlock() string { return "" }
 
 func (p *SupermemoryProvider) SyncTurn(ctx context.Context, userContent, assistantContent string) error {
-	// Supermemory 通过添加记忆 API 同步对话轮次
 	content := fmt.Sprintf("User: %s\nAssistant: %s", userContent, assistantContent)
-	body, _ := json.Marshal(map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"content":  content,
 		"metadata": map[string]string{"user_id": p.userID},
 	})
+	if err != nil {
+		return fmt.Errorf("serialize supermemory request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		fmt.Sprintf("%s/memories", p.baseURL),
@@ -302,11 +321,13 @@ func (p *SupermemoryProvider) SyncTurn(ctx context.Context, userContent, assista
 }
 
 func (p *SupermemoryProvider) Prefetch(ctx context.Context, query string) (string, error) {
-	// Supermemory 通过搜索记忆 API 检索相关记忆
-	body, _ := json.Marshal(map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"q":       query,
 		"user_id": p.userID,
 	})
+	if err != nil {
+		return "", fmt.Errorf("serialize supermemory search request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		fmt.Sprintf("%s/search", p.baseURL),
@@ -334,6 +355,7 @@ func (p *SupermemoryProvider) Prefetch(ctx context.Context, query string) (strin
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&result); err != nil {
+		slog.Warn("supermemory prefetch: decode response failed", "error", err)
 		return "", nil
 	}
 
@@ -371,6 +393,27 @@ func NewHolographicProvider() *HolographicProvider {
 
 func (p *HolographicProvider) Name() string { return "holographic" }
 
+// safeUserIDRe 仅允许安全字符 [a-zA-Z0-9_-]。
+var safeUserIDRe = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
+
+// sanitizeUserID 清洗 userID，仅保留安全字符并验证路径不逃逸 baseDir。
+func sanitizeUserID(userID, baseDir string) (string, error) {
+	clean := safeUserIDRe.ReplaceAllString(userID, "_")
+	path := filepath.Join(baseDir, clean+".jsonl")
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("路径解析失败: %w", err)
+	}
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", fmt.Errorf("基础路径解析失败: %w", err)
+	}
+	if !strings.HasPrefix(absPath, absBase+string(filepath.Separator)) {
+		return "", fmt.Errorf("userID 路径穿越检测")
+	}
+	return absPath, nil
+}
+
 func (p *HolographicProvider) Initialize(ctx context.Context, sessionID string) error {
 	p.userID = sessionID
 	return os.MkdirAll(p.baseDir, 0755)
@@ -379,9 +422,11 @@ func (p *HolographicProvider) Initialize(ctx context.Context, sessionID string) 
 func (p *HolographicProvider) SystemPromptBlock() string { return "" }
 
 func (p *HolographicProvider) SyncTurn(ctx context.Context, userContent, assistantContent string) error {
-	// 追加到本地文件
-	path := fmt.Sprintf("%s/%s.jsonl", p.baseDir, p.userID)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	path, err := sanitizeUserID(p.userID, p.baseDir)
+	if err != nil {
+		return fmt.Errorf("userID 清洗失败: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -391,15 +436,20 @@ func (p *HolographicProvider) SyncTurn(ctx context.Context, userContent, assista
 		"user":      userContent,
 		"assistant": assistantContent,
 	}
-	data, _ := json.Marshal(entry)
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("serialize holographic entry: %w", err)
+	}
 	data = append(data, '\n')
 	f.Write(data)
 	return nil
 }
 
 func (p *HolographicProvider) Prefetch(ctx context.Context, query string) (string, error) {
-	// 读取 JSONL 文件，按关键词匹配检索相关记忆
-	path := fmt.Sprintf("%s/%s.jsonl", p.baseDir, p.userID)
+	path, err := sanitizeUserID(p.userID, p.baseDir)
+	if err != nil {
+		return "", fmt.Errorf("userID 清洗失败: %w", err)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -423,7 +473,6 @@ func (p *HolographicProvider) Prefetch(ctx context.Context, query string) (strin
 			continue
 		}
 
-		// 简单关键词匹配: 检查查询词是否出现在用户或助手内容中
 		for _, v := range entry {
 			if strings.Contains(strings.ToLower(v), queryLower) {
 				matches = append(matches, fmt.Sprintf("- User: %s\n  Assistant: %s", entry["user"], entry["assistant"]))
@@ -436,7 +485,6 @@ func (p *HolographicProvider) Prefetch(ctx context.Context, query string) (strin
 		return "", nil
 	}
 
-	// 限制返回数量
 	if len(matches) > 10 {
 		matches = matches[:10]
 	}
@@ -456,10 +504,10 @@ type MemoryProviderFactory func() memory.Provider
 
 // providerRegistry 内存提供者注册表。
 var providerRegistry = map[string]MemoryProviderFactory{
-	"honcho":       func() memory.Provider { return NewHonchoProvider() },
-	"mem0":         func() memory.Provider { return NewMem0Provider() },
-	"supermemory":  func() memory.Provider { return NewSupermemoryProvider() },
-	"holographic":  func() memory.Provider { return NewHolographicProvider() },
+	"honcho":      func() memory.Provider { return NewHonchoProvider() },
+	"mem0":        func() memory.Provider { return NewMem0Provider() },
+	"supermemory": func() memory.Provider { return NewSupermemoryProvider() },
+	"holographic": func() memory.Provider { return NewHolographicProvider() },
 }
 
 // CreateMemoryProvider 根据名称创建内存提供者。
@@ -486,12 +534,9 @@ func joinMemories(memories []string) string {
 	if len(memories) == 0 {
 		return ""
 	}
-	result := ""
+	parts := make([]string, len(memories))
 	for i, m := range memories {
-		if i > 0 {
-			result += "\n"
-		}
-		result += "- " + m
+		parts[i] = "- " + m
 	}
-	return result
+	return strings.Join(parts, "\n")
 }

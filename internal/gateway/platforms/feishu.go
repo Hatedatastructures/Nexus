@@ -28,6 +28,7 @@ type FeishuAdapter struct {
 	tokenMu           sync.Mutex         // token 访问锁
 	verificationToken string             // 事件订阅验证令牌
 	closeOnce         sync.Once          // 确保 msgCh 只关闭一次
+	mu                sync.RWMutex       // 保护 msgCh 发送/关闭
 	appID       string             // 应用 App ID
 	appSecret   string             // 应用 App Secret
 	client      *http.Client       // HTTP 客户端
@@ -72,7 +73,9 @@ func (f *FeishuAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, erro
 // Disconnect 关闭消息通道。
 func (f *FeishuAdapter) Disconnect(ctx context.Context) error {
 	f.closeOnce.Do(func() {
+		f.mu.Lock()
 		close(f.msgCh)
+		f.mu.Unlock()
 	})
 	slog.Info("feishu adapter disconnected")
 	return nil
@@ -80,7 +83,10 @@ func (f *FeishuAdapter) Disconnect(ctx context.Context) error {
 
 // Send 发送文本消息。
 func (f *FeishuAdapter) Send(ctx context.Context, chatID string, content string, opts *SendOptions) (*SendResult, error) {
-	contentJSON, _ := json.Marshal(map[string]string{"text": content})
+	contentJSON, err := json.Marshal(map[string]string{"text": content})
+	if err != nil {
+		return nil, fmt.Errorf("序列化消息内容失败: %w", err)
+	}
 	body := map[string]any{
 		"receive_id": chatID,
 		"msg_type":   "text",
@@ -130,7 +136,7 @@ func (f *FeishuAdapter) SendImage(ctx context.Context, chatID string, imageURL s
 	body := map[string]any{
 		"receive_id": chatID,
 		"msg_type":   "image",
-		"content":    fmt.Sprintf(`{"image_key":"%s"}`, imageURL),
+		"content":    fmt.Sprintf(`{"image_key":"%s"}`, escapeJSON(imageURL)),
 	}
 	return f.doAPI(ctx, "POST", "/open-apis/im/v1/messages?receive_id_type=chat_id", body)
 }
@@ -140,7 +146,7 @@ func (f *FeishuAdapter) SendVoice(ctx context.Context, chatID string, audioPath 
 	body := map[string]any{
 		"receive_id": chatID,
 		"msg_type":   "audio",
-		"content":    fmt.Sprintf(`{"file_key":"%s"}`, audioPath),
+		"content":    fmt.Sprintf(`{"file_key":"%s"}`, escapeJSON(audioPath)),
 	}
 	return f.doAPI(ctx, "POST", "/open-apis/im/v1/messages?receive_id_type=chat_id", body)
 }
@@ -150,7 +156,7 @@ func (f *FeishuAdapter) SendVideo(ctx context.Context, chatID string, videoPath 
 	body := map[string]any{
 		"receive_id": chatID,
 		"msg_type":   "media",
-		"content":    fmt.Sprintf(`{"file_key":"%s","image_key":"%s"}`, videoPath, videoPath),
+		"content":    fmt.Sprintf(`{"file_key":"%s","image_key":"%s"}`, escapeJSON(videoPath), escapeJSON(videoPath)),
 	}
 	return f.doAPI(ctx, "POST", "/open-apis/im/v1/messages?receive_id_type=chat_id", body)
 }
@@ -160,7 +166,7 @@ func (f *FeishuAdapter) SendDocument(ctx context.Context, chatID string, filePat
 	body := map[string]any{
 		"receive_id": chatID,
 		"msg_type":   "file",
-		"content":    fmt.Sprintf(`{"file_key":"%s"}`, filePath),
+		"content":    fmt.Sprintf(`{"file_key":"%s"}`, escapeJSON(filePath)),
 	}
 	return f.doAPI(ctx, "POST", "/open-apis/im/v1/messages?receive_id_type=chat_id", body)
 }
@@ -191,7 +197,10 @@ func (f *FeishuAdapter) ReceiveEvent(payload []byte) ([]byte, error) {
 		Challenge string `json:"challenge"`
 	}
 	if err := json.Unmarshal(payload, &challengeReq); err == nil && challengeReq.Type == "url_verification" {
-		resp, _ := json.Marshal(map[string]string{"challenge": challengeReq.Challenge})
+		resp, err := json.Marshal(map[string]string{"challenge": challengeReq.Challenge})
+		if err != nil {
+			return nil, fmt.Errorf("序列化挑战响应失败: %w", err)
+		}
 		return resp, nil
 	}
 	return nil, f.receiveEventInternal(payload)
@@ -211,7 +220,10 @@ func (f *FeishuAdapter) ReceiveEventWithVerification(payload []byte, timestamp, 
 		if f.verificationToken != "" && challengeReq.Token != f.verificationToken {
 			return nil, fmt.Errorf("url_verification token 验证失败")
 		}
-		resp, _ := json.Marshal(map[string]string{"challenge": challengeReq.Challenge})
+		resp, err := json.Marshal(map[string]string{"challenge": challengeReq.Challenge})
+		if err != nil {
+			return nil, fmt.Errorf("序列化挑战响应失败: %w", err)
+		}
 		return resp, nil
 	}
 
@@ -299,11 +311,13 @@ func (f *FeishuAdapter) receiveEventInternal(payload []byte) error {
 		eventMsg.Text = "[不支持的消息类型: " + msgType + "]"
 	}
 
+	f.mu.RLock()
 	select {
 	case f.msgCh <- eventMsg:
 	default:
 		slog.Warn("feishu message channel full, dropping message")
 	}
+	f.mu.RUnlock()
 	return nil
 }
 
@@ -313,7 +327,7 @@ func init() {
 	GetRegistry().Register(&AdapterEntry{
 		Platform: PlatformFeishu,
 		Name:     "Feishu",
-		Factory:  func() PlatformAdapter { return &FeishuAdapter{} },
+		Factory:  func() PlatformAdapter { return NewFeishuAdapter("", "") },
 	})
 }
 
@@ -394,17 +408,22 @@ func (f *FeishuAdapter) doAPI(ctx context.Context, method string, path string, b
 // getTenantToken 获取 tenant_access_token (带缓存)。
 func (f *FeishuAdapter) getTenantToken(ctx context.Context) (string, error) {
 	f.tokenMu.Lock()
-	defer f.tokenMu.Unlock()
-
 	if f.tenantToken != "" && time.Now().Before(f.tokenExpiry) {
-		return f.tenantToken, nil
+		token := f.tenantToken
+		f.tokenMu.Unlock()
+		return token, nil
 	}
+	f.tokenMu.Unlock()
 
+	// HTTP 调用在锁外执行，避免阻塞其他 API 调用
 	body := map[string]string{
 		"app_id":     f.appID,
 		"app_secret": f.appSecret,
 	}
-	data, _ := json.Marshal(body)
+	data, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("序列化请求失败: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		"https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
@@ -435,15 +454,19 @@ func (f *FeishuAdapter) getTenantToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if result.Code != 0 {
-		return "", fmt.Errorf("get tenant_access_token failed: %s", string(raw))
+		slog.Warn("[Feishu] get tenant_access_token failed", "code", result.Code)
+		return "", fmt.Errorf("get tenant_access_token failed (code=%d)", result.Code)
 	}
 
+	f.tokenMu.Lock()
 	f.tenantToken = result.TenantAccessToken
 	buffer := 60
 	if result.Expire < buffer {
 		buffer = result.Expire / 2
 	}
 	f.tokenExpiry = time.Now().Add(time.Duration(result.Expire-buffer) * time.Second)
+	f.tokenMu.Unlock()
+
 	return f.tenantToken, nil
 }
 

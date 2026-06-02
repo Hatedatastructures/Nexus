@@ -464,8 +464,8 @@ func (t *YBSearchStickerTool) Execute(ctx context.Context, args map[string]any) 
 	query, _ := args["query"].(string)
 
 	limit := 10
-	if l, ok := args["limit"].(int); ok && l > 0 {
-		limit = l
+	if l, ok := args["limit"].(float64); ok && l > 0 {
+		limit = int(l)
 	}
 	if limit > 50 {
 		limit = 50

@@ -38,12 +38,13 @@ var allowedURLSchemes = map[string]bool{
 	"tel":    true,
 }
 
+// msgLinkRe 匹配 Markdown 链接格式 [text](url)。
+var msgLinkRe = regexp.MustCompile(`\[([^\]]*)\]\(([^)]+)\)`)
+
 // sanitizeMessageLinks 清理消息内容中的 Markdown 链接，仅允许安全的 URL scheme。
 func sanitizeMessageLinks(content string) string {
-	// 匹配 Markdown 链接: [text](url)
-	linkRe := regexp.MustCompile(`\[([^\]]*)\]\(([^)]+)\)`)
-	return linkRe.ReplaceAllStringFunc(content, func(match string) string {
-		sub := linkRe.FindStringSubmatch(match)
+	return msgLinkRe.ReplaceAllStringFunc(content, func(match string) string {
+		sub := msgLinkRe.FindStringSubmatch(match)
 		if len(sub) < 3 {
 			return match
 		}
@@ -239,7 +240,7 @@ func (t *SendMessageTool) doTelegramPost(ctx context.Context, token, method stri
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("Telegram API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("Telegram API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var apiResp struct {
@@ -286,7 +287,7 @@ func (t *SendMessageTool) sendDiscord(ctx context.Context, chatID, message, thre
 
 	url := "https://discord.com/api/v10/channels/" + chatID + "/messages"
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, jsonReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, mustJSONReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -305,13 +306,15 @@ func (t *SendMessageTool) sendDiscord(ctx context.Context, chatID, message, thre
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("Discord API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("Discord API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var apiResp struct {
 		ID string `json:"id"`
 	}
-	_ = json.Unmarshal(respBody, &apiResp)
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		slog.Warn("send_message: failed to parse discord response", "error", err)
+	}
 
 	return map[string]any{
 		"output":     fmt.Sprintf("Discord 消息发送成功 (channel: %s)", chatID),
@@ -336,7 +339,7 @@ func (t *SendMessageTool) sendSlack(ctx context.Context, chatID, message, thread
 		body["thread_ts"] = threadID
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://slack.com/api/chat.postMessage", jsonReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://slack.com/api/chat.postMessage", mustJSONReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +358,7 @@ func (t *SendMessageTool) sendSlack(ctx context.Context, chatID, message, thread
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("Slack API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("Slack API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var apiResp struct {
@@ -404,7 +407,7 @@ func (t *SendMessageTool) sendFeishu(ctx context.Context, chatID, message string
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
-		jsonReader(body))
+		mustJSONReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -417,13 +420,10 @@ func (t *SendMessageTool) sendFeishu(ctx context.Context, chatID, message string
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 8192))
-	if err != nil {
-		return nil, err
-	}
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 8192))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("飞书 API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("飞书 API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	return map[string]any{
@@ -442,7 +442,7 @@ func (t *SendMessageTool) getFeishuToken(ctx context.Context, appID, appSecret s
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		"https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-		jsonReader(body))
+		mustJSONReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -497,7 +497,7 @@ func (t *SendMessageTool) sendDingTalk(ctx context.Context, chatID, message stri
 
 		req, err := http.NewRequestWithContext(ctx, "POST",
 			"https://oapi.dingtalk.com/robot/send?access_token="+accessToken,
-			jsonReader(body))
+			mustJSONReader(body))
 		if err != nil {
 			return nil, err
 		}
@@ -507,11 +507,11 @@ func (t *SendMessageTool) sendDingTalk(ctx context.Context, chatID, message stri
 		if err != nil {
 			return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 		}
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("钉钉 API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+			return nil, fmt.Errorf("钉钉 API 错误 (HTTP %d)", resp.StatusCode)
 		}
 	}
 
@@ -535,7 +535,7 @@ func (t *SendMessageTool) sendDingTalkWebhook(ctx context.Context, webhook, mess
 		},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", webhook, jsonReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", webhook, mustJSONReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -549,7 +549,7 @@ func (t *SendMessageTool) sendDingTalkWebhook(ctx context.Context, webhook, mess
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("钉钉 Webhook 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("钉钉 Webhook 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var dingResp struct {
@@ -590,7 +590,7 @@ func (t *SendMessageTool) sendWeChat(ctx context.Context, chatID, message string
 	}
 
 	url := fmt.Sprintf("https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token=%s", token)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, jsonReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, mustJSONReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -604,14 +604,16 @@ func (t *SendMessageTool) sendWeChat(ctx context.Context, chatID, message string
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("微信 API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("微信 API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var wxResp struct {
 		ErrCode int    `json:"errcode"`
 		ErrMsg  string `json:"errmsg"`
 	}
-	_ = json.Unmarshal(respBody, &wxResp)
+	if err := json.Unmarshal(respBody, &wxResp); err != nil {
+		return nil, fmt.Errorf("解析微信响应失败: %w", err)
+	}
 	if wxResp.ErrCode != 0 {
 		return nil, fmt.Errorf("微信 API 错误: %s", wxResp.ErrMsg)
 	}
@@ -672,7 +674,7 @@ func (t *SendMessageTool) sendWhatsApp(ctx context.Context, chatID, message stri
 	}
 
 	url := fmt.Sprintf("https://graph.facebook.com/v17.0/%s/messages", phoneNumberID)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, jsonReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, mustJSONReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -685,9 +687,9 @@ func (t *SendMessageTool) sendWhatsApp(ctx context.Context, chatID, message stri
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("WhatsApp API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("WhatsApp API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	return map[string]any{
@@ -712,7 +714,7 @@ func (t *SendMessageTool) sendWebhook(ctx context.Context, webhookURL, message s
 		"content": message,
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", webhookURL, jsonReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", webhookURL, mustJSONReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -725,8 +727,8 @@ func (t *SendMessageTool) sendWebhook(ctx context.Context, webhookURL, message s
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("Webhook 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("Webhook 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	return map[string]any{
@@ -736,9 +738,21 @@ func (t *SendMessageTool) sendWebhook(ctx context.Context, webhookURL, message s
 }
 
 // jsonReader 将 map 序列化为 JSON 并返回 Reader。
-func jsonReader(data map[string]any) *bytes.Reader {
-	bytesData, _ := json.Marshal(data)
-	return bytes.NewReader(bytesData)
+func jsonReader(data map[string]any) (*bytes.Reader, error) {
+	bytesData, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("JSON 序列化失败: %w", err)
+	}
+	return bytes.NewReader(bytesData), nil
+}
+
+// mustJSONReader 序列化 map 为 JSON Reader，出错时 panic (用于已知合法数据)。
+func mustJSONReader(data map[string]any) *bytes.Reader {
+	r, err := jsonReader(data)
+	if err != nil {
+		panic(fmt.Sprintf("jsonReader: %v", err))
+	}
+	return r
 }
 
 // ───────────────────────────── init 注册 ─────────────────────────────

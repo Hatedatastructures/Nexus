@@ -179,7 +179,7 @@ func (fs *FileSafetyChecker) CheckWrite(path string, contentSize int64) (allowed
 func (fs *FileSafetyChecker) CheckRead(path string) (allowed bool, reason string) {
 	resolved, err := resolvePath(path)
 	if err != nil {
-		return true, ""
+		return false, "无法解析路径: " + err.Error()
 	}
 
 	cleanPath := filepath.ToSlash(filepath.Clean(path))
@@ -293,7 +293,7 @@ func matchProtectedPath(path, pattern string) bool {
 
 	matched, err := filepath.Match(pattern, path)
 	if err != nil {
-		return false
+		return true
 	}
 	if matched {
 		return true
@@ -303,8 +303,8 @@ func matchProtectedPath(path, pattern string) bool {
 		parts := strings.Split(path, "/")
 		for i := range parts {
 			subPath := strings.Join(parts[i:], "/")
-			matched, _ = filepath.Match(pattern, subPath)
-			if matched {
+			matched, err2 := filepath.Match(pattern, subPath)
+			if err2 != nil || matched {
 				return true
 			}
 		}

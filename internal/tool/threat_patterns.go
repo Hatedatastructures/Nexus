@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -113,26 +114,24 @@ var threatPatterns = []struct {
 
 var (
 	compiledPatterns []threatPattern
-	patternsCompiled bool
+	patternsOnce     sync.Once
 )
 
 // compilePatterns 编译所有威胁模式（仅执行一次）。
 func compilePatterns() {
-	if patternsCompiled {
-		return
-	}
-	for _, p := range threatPatterns {
-		re, err := regexp.Compile(p.re)
-		if err != nil {
-			continue
+	patternsOnce.Do(func() {
+		for _, p := range threatPatterns {
+			re, err := regexp.Compile(p.re)
+			if err != nil {
+				continue
+			}
+			compiledPatterns = append(compiledPatterns, threatPattern{
+				id:    p.id,
+				re:    re,
+				scope: p.scope,
+			})
 		}
-		compiledPatterns = append(compiledPatterns, threatPattern{
-			id:    p.id,
-			re:    re,
-			scope: p.scope,
-		})
-	}
-	patternsCompiled = true
+	})
 }
 
 // scopeIncludes 判断 target 作用域是否包含 pattern 作用域。

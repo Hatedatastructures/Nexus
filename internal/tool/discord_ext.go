@@ -626,7 +626,11 @@ func (t *DiscordExtTool) callAPI(ctx context.Context, method string, endpoint st
 
 	var bodyBytes []byte
 	if body != nil {
-		bodyBytes, _ = json.Marshal(body)
+		var err error
+		bodyBytes, err = json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("序列化请求体失败: %w", err)
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(bodyBytes))
@@ -649,11 +653,11 @@ func (t *DiscordExtTool) callAPI(ctx context.Context, method string, endpoint st
 	}
 
 	if resp.StatusCode == 403 {
-		return nil, fmt.Errorf("权限不足 (HTTP 403): %s", string(respBody))
+		return nil, fmt.Errorf("权限不足 (HTTP 403)")
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	// 尝试解析为 JSON

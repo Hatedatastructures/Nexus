@@ -16,6 +16,11 @@ import (
 
 // ───────────────────────────── 作业执行器 ─────────────────────────────
 
+// conversationRunner 抽象 agent 对话执行，方便测试时 mock。
+type conversationRunner interface {
+	runConversation(ctx context.Context, userMessage string, history []any, systemMessage string) (*agent.TurnResult, error)
+}
+
 // Executor 负责在独立的 AIAgent 实例中执行 cron 作业。
 //
 // 每个作业执行时:
@@ -26,6 +31,13 @@ type Executor struct {
 	outputDir    string          // 输出目录 (~/.nexus/cron/output)
 	inactivityTO time.Duration   // 不活跃超时
 	agentConfig  *config.AgentConfig // 代理配置
+	runner       conversationRunner  // 可选: 注入的对话执行器 (测试用)
+}
+
+// withRunner 注入自定义对话执行器 (测试用)，返回自身以支持链式调用。
+func (e *Executor) withRunner(r conversationRunner) *Executor {
+	e.runner = r
+	return e
 }
 
 // NewExecutor 创建作业执行器。
@@ -35,6 +47,15 @@ func NewExecutor(outputDir string, agentConfig *config.AgentConfig) *Executor {
 		inactivityTO: 600 * time.Second,
 		agentConfig: agentConfig,
 	}
+}
+
+// agentRunner 包装真实 AIAgent 以实现 conversationRunner 接口。
+type agentRunner struct {
+	agent *agent.AIAgent
+}
+
+func (r *agentRunner) runConversation(ctx context.Context, userMessage string, history []any, systemMessage string) (*agent.TurnResult, error) {
+	return r.agent.RunConversation(ctx, userMessage, nil, systemMessage)
 }
 
 // Execute 执行单个 cron 作业。
@@ -71,9 +92,15 @@ func (e *Executor) Execute(ctx context.Context, job *Job) error {
 	startTime := time.Now()
 	slog.Info("Cron: job prompt", "id", job.ID, "prompt_preview", truncate(prompt, 100))
 
-	// 创建 AIAgent 实例并执行对话
-	sessionAgent := agent.DefaultAgentFromConfig(e.agentConfig)
-	result, err := sessionAgent.RunConversation(execCtx, prompt, nil, "")
+	// 创建对话执行器
+	var runner conversationRunner
+	if e.runner != nil {
+		runner = e.runner
+	} else {
+		sessionAgent := agent.DefaultAgentFromConfig(e.agentConfig)
+		runner = &agentRunner{agent: sessionAgent}
+	}
+	result, err := runner.runConversation(execCtx, prompt, nil, "")
 	if err != nil {
 		return fmt.Errorf("agent 对话失败: %w", err)
 	}

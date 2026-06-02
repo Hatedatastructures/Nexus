@@ -226,7 +226,10 @@ func (s *PairingStore) VerifyCode(platform, userID, code string) (bool, error) {
 
 		// 所有检查通过，标记为已验证
 		r.Verified = true
-		_ = s.savePlatform(platform)
+		if err := s.savePlatform(platform); err != nil {
+			slog.Error("pairing: critical - failed to persist verification", "platform", platform, "error", err)
+			return false, fmt.Errorf("持久化验证状态失败: %w", err)
+		}
 
 		slog.Info("pairing: code verification succeeded",
 			"platform", platform,
@@ -246,7 +249,9 @@ func (s *PairingStore) VerifyCode(platform, userID, code string) (bool, error) {
 			r.LockedUntil = now.Add(10 * time.Minute)
 		}
 	}
-	_ = s.savePlatform(platform)
+	if err := s.savePlatform(platform); err != nil {
+		slog.Warn("pairing: failed to persist attempt count", "platform", platform, "error", err)
+	}
 
 	return false, fmt.Errorf("无效的配对码")
 }
@@ -301,7 +306,9 @@ func (s *PairingStore) PurgeExpired() int {
 			}
 		}
 		s.records[platform] = valid
-		s.savePlatform(platform)
+		if err := s.savePlatform(platform); err != nil {
+			slog.Warn("pairing: failed to persist purge", "platform", platform, "error", err)
+		}
 	}
 
 	if total > 0 {
@@ -358,7 +365,7 @@ func (s *PairingStore) savePlatform(platform string) error {
 		return fmt.Errorf("序列化记录失败: %w", err)
 	}
 
-	if err := atomicWriteFile(path, data, 0644); err != nil {
+	if err := atomicWriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("写入记录文件失败: %w", err)
 	}
 

@@ -38,10 +38,12 @@ type WebhookAdapter struct {
 	messageHandler func(*MessageEvent)
 
 	// HTTP 服务器
-	server   *http.Server
-	running  bool
+	server    *http.Server
+	running   bool
 	connected bool
-	mu       sync.Mutex
+	mu        sync.Mutex
+	closeOnce sync.Once
+	msgCh     chan *MessageEvent
 
 	// 发送配置
 	sendURL    string
@@ -105,14 +107,21 @@ func (a *WebhookAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, err
 
 	// 创建消息通道
 	msgCh := make(chan *MessageEvent, 100)
+	a.msgCh = msgCh
 
 	// 设置路由
 	mux := http.NewServeMux()
 	mux.HandleFunc(a.path, a.handleWebhook(msgCh))
 
+	// 绑定地址: 默认 127.0.0.1, 可通过 WEBHOOK_BIND 环境变量覆盖
+	bindAddr := "127.0.0.1"
+	if b := os.Getenv("WEBHOOK_BIND"); b != "" {
+		bindAddr = b
+	}
+
 	// 创建服务器
 	a.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", a.port),
+		Addr:    fmt.Sprintf("%s:%d", bindAddr, a.port),
 		Handler: mux,
 	}
 
@@ -142,6 +151,12 @@ func (a *WebhookAdapter) Disconnect(ctx context.Context) error {
 			slog.Warn("[Webhook] server shutdown failed", "err", err)
 		}
 	}
+
+	a.closeOnce.Do(func() {
+		if a.msgCh != nil {
+			close(a.msgCh)
+		}
+	})
 
 	a.connected = false
 	slog.Info("[Webhook] server stopped")
@@ -219,7 +234,7 @@ func (a *WebhookAdapter) parseWebhookPayload(payload map[string]any) *MessageEve
 	// 提取消息 ID
 	msgID := getString(payload, "message_id", getString(payload, "id", ""))
 	if msgID == "" {
-		msgID = fmt.Sprintf("%d", time.Now().UnixNano())
+		msgID = generateCryptoID()
 	}
 
 	// 确定聊天类型
@@ -254,7 +269,10 @@ func (a *WebhookAdapter) Send(ctx context.Context, chatID string, content string
 		"message": content,
 	}
 
-	bodyBytes, _ := json.Marshal(body)
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return &SendResult{Success: false, Error: fmt.Sprintf("序列化请求体失败: %v", err)}, nil
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", a.sendURL, bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -272,10 +290,8 @@ func (a *WebhookAdapter) Send(ctx context.Context, chatID string, content string
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &SendResult{Success: false, Error: fmt.Sprintf("HTTP 错误 (status=%d): %s", resp.StatusCode, string(respBody))}, nil
+		return &SendResult{Success: false, Error: fmt.Sprintf("HTTP 错误 (status=%d)", resp.StatusCode)}, nil
 	}
 
 	return &SendResult{Success: true}, nil
@@ -294,7 +310,10 @@ func (a *WebhookAdapter) SendImage(ctx context.Context, chatID string, imageURL 
 		"type":      "image",
 	}
 
-	bodyBytes, _ := json.Marshal(body)
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return &SendResult{Success: false, Error: fmt.Sprintf("序列化请求体失败: %v", err)}, nil
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", a.sendURL, bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -313,8 +332,7 @@ func (a *WebhookAdapter) SendImage(ctx context.Context, chatID string, imageURL 
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return &SendResult{Success: false, Error: fmt.Sprintf("HTTP 错误 (status=%d): %s", resp.StatusCode, string(respBody))}, nil
+		return &SendResult{Success: false, Error: fmt.Sprintf("HTTP 错误 (status=%d)", resp.StatusCode)}, nil
 	}
 
 	return &SendResult{Success: true}, nil

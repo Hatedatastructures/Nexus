@@ -57,6 +57,7 @@ type MoATool struct {
 	llmProvider   LLMProvider
 	openRouterKey string
 	initOnce      sync.Once
+	providerMu    sync.RWMutex
 }
 
 // MoAToolResult MoA 工具结果。
@@ -74,8 +75,9 @@ type LLMProvider interface {
 
 // OpenRouterProvider OpenRouter 提供者。
 type OpenRouterProvider struct {
-	apiKey string
-	client *http.Client
+	apiKey   string
+	client   *http.Client
+	initOnce sync.Once
 }
 
 // Call 调用 OpenRouter API。
@@ -92,7 +94,10 @@ func (p *OpenRouterProvider) Call(ctx context.Context, model string, systemPromp
 		"temperature": temperature,
 	}
 
-	bodyBytes, _ := json.Marshal(body)
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("JSON 序列化失败: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -104,9 +109,9 @@ func (p *OpenRouterProvider) Call(ctx context.Context, model string, systemPromp
 	req.Header.Set("HTTP-Referer", "https://github.com/nexus-agent")
 	req.Header.Set("X-Title", "Nexus Agent")
 
-	if p.client == nil {
+	p.initOnce.Do(func() {
 		p.client = &http.Client{Timeout: moaDefaultTimeout}
-	}
+	})
 	resp, err := p.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("HTTP 请求失败: %w", err)
@@ -119,7 +124,7 @@ func (p *OpenRouterProvider) Call(ctx context.Context, model string, systemPromp
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var result map[string]any
@@ -128,7 +133,7 @@ func (p *OpenRouterProvider) Call(ctx context.Context, model string, systemPromp
 	}
 
 	choices, ok := result["choices"].([]any)
-	if !ok {
+	if !ok || len(choices) == 0 {
 		return "", fmt.Errorf("无响应内容")
 	}
 
@@ -152,7 +157,9 @@ func NewMoATool() *MoATool {
 
 // SetLLMProvider 设置 LLM 提供者。
 func (t *MoATool) SetLLMProvider(provider LLMProvider) {
+	t.providerMu.Lock()
 	t.llmProvider = provider
+	t.providerMu.Unlock()
 }
 
 // ───────────────────────────── 工具接口 ─────────────────────────────
@@ -206,16 +213,21 @@ func (t *MoATool) Execute(ctx context.Context, args map[string]any) (string, err
 
 	// 初始化 LLM 提供者
 	t.initOnce.Do(func() {
+		t.providerMu.Lock()
 		if t.llmProvider == nil && t.openRouterKey != "" {
 			t.llmProvider = &OpenRouterProvider{apiKey: t.openRouterKey}
 		}
+		t.providerMu.Unlock()
 	})
-	if t.llmProvider == nil {
+	t.providerMu.RLock()
+	provider := t.llmProvider
+	t.providerMu.RUnlock()
+	if provider == nil {
 		return "", fmt.Errorf("OPENROUTER_API_KEY 未配置")
 	}
 
 	// Layer 1: 并行调用参考模型
-	referenceResponses := t.callReferenceModels(ctx, userPrompt)
+	referenceResponses := t.callReferenceModels(ctx, userPrompt, provider)
 
 	// 检查最小成功数
 	if len(referenceResponses) < moaMinSuccessfulReferences {
@@ -223,7 +235,7 @@ func (t *MoATool) Execute(ctx context.Context, args map[string]any) (string, err
 	}
 
 	// Layer 2: 聚合响应
-	finalResponse := t.aggregateResponses(ctx, userPrompt, referenceResponses)
+	finalResponse := t.aggregateResponses(ctx, userPrompt, referenceResponses, provider)
 
 	// 构建结果
 	result := MoAToolResult{
@@ -232,12 +244,15 @@ func (t *MoATool) Execute(ctx context.Context, args map[string]any) (string, err
 		ModelsUsed: moaReferenceModels,
 	}
 
-	resultBytes, _ := json.Marshal(result)
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("序列化结果失败: %w", err)
+	}
 	return string(resultBytes), nil
 }
 
 // callReferenceModels 并行调用参考模型。
-func (t *MoATool) callReferenceModels(ctx context.Context, userPrompt string) []string {
+func (t *MoATool) callReferenceModels(ctx context.Context, userPrompt string, provider LLMProvider) []string {
 	var responses []string
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -247,7 +262,7 @@ func (t *MoATool) callReferenceModels(ctx context.Context, userPrompt string) []
 		go func(m string) {
 			defer wg.Done()
 
-			response, err := t.callWithRetry(ctx, m, "", userPrompt, moaReferenceTemperature)
+			response, err := callWithRetry(ctx, provider, m, "", userPrompt, moaReferenceTemperature)
 			if err != nil {
 				slog.Warn("[MoA] reference model call failed", "model", m, "err", err)
 				return
@@ -264,11 +279,11 @@ func (t *MoATool) callReferenceModels(ctx context.Context, userPrompt string) []
 }
 
 // callWithRetry 带重试的模型调用。
-func (t *MoATool) callWithRetry(ctx context.Context, model, systemPrompt, userPrompt string, temperature float64) (string, error) {
+func callWithRetry(ctx context.Context, provider LLMProvider, model, systemPrompt, userPrompt string, temperature float64) (string, error) {
 	backoff := []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second, 60 * time.Second}
 
 	for i := 0; i < moaMaxRetries; i++ {
-		response, err := t.llmProvider.Call(ctx, model, systemPrompt, userPrompt, temperature)
+		response, err := provider.Call(ctx, model, systemPrompt, userPrompt, temperature)
 		if err == nil {
 			return response, nil
 		}
@@ -288,12 +303,12 @@ func (t *MoATool) callWithRetry(ctx context.Context, model, systemPrompt, userPr
 }
 
 // aggregateResponses 聚合多个响应。
-func (t *MoATool) aggregateResponses(ctx context.Context, userPrompt string, responses []string) string {
+func (t *MoATool) aggregateResponses(ctx context.Context, userPrompt string, responses []string, provider LLMProvider) string {
 	// 构建聚合器提示
 	aggregatorPrompt := t.constructAggregatorPrompt(userPrompt, responses)
 
 	// 调用聚合模型
-	finalResponse, err := t.callWithRetry(ctx, moaAggregatorModel, moaAggregatorSystemPrompt, aggregatorPrompt, moaAggregatorTemperature)
+	finalResponse, err := callWithRetry(ctx, provider, moaAggregatorModel, moaAggregatorSystemPrompt, aggregatorPrompt, moaAggregatorTemperature)
 	if err != nil {
 		slog.Warn("[MoA] aggregation failed, returning first reference response", "err", err)
 		if len(responses) > 0 {

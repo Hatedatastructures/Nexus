@@ -5,6 +5,7 @@ package tool
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,15 @@ import (
 	"sync"
 	"time"
 )
+
+// generateTaskID 生成不可预测的任务 ID。
+func generateTaskID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("task-%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("task-%x", b)
+}
 
 // ───────────────────────────── 看板数据模型 ─────────────────────────────
 
@@ -208,7 +218,9 @@ func (t *KanbanListTool) Execute(ctx context.Context, args map[string]any) (stri
 
 	// 检查 ready 状态提升 (所有 parent 完成的 todo 任务提升为 ready)
 	promoteReadyTasks(tasks)
-	_ = store.saveBoard(board, tasks)
+	if err := store.saveBoard(board, tasks); err != nil {
+		slog.Warn("kanban: failed to save board after promotion", "err", err)
+	}
 
 	var rows []map[string]any
 	for _, task := range tasks {
@@ -375,7 +387,7 @@ func (t *KanbanCreateTool) Execute(ctx context.Context, args map[string]any) (st
 	}
 
 	now := time.Now()
-	id := fmt.Sprintf("task-%d", now.UnixNano())
+	id := generateTaskID()
 
 	// 有父任务时初始状态为 todo，否则为 ready
 	status := StatusReady

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,7 @@ import (
 // 通过读取图片文件并以 base64 编码发送给支持多模态的 LLM 进行分析。
 type VisionAnalyzeTool struct {
 	client *http.Client
+	once   sync.Once
 }
 
 // Name 返回工具名称。
@@ -160,9 +162,9 @@ func (t *VisionAnalyzeTool) readImage(path string) ([]byte, string, error) {
 
 // analyzeImage 调用多模态 LLM API 分析图片。
 func (t *VisionAnalyzeTool) analyzeImage(ctx context.Context, model, prompt, base64Data, mimeType string) (string, error) {
-	if t.client == nil {
+	t.once.Do(func() {
 		t.client = &http.Client{Timeout: 120 * time.Second}
-	}
+	})
 
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -225,7 +227,8 @@ func (t *VisionAnalyzeTool) analyzeImage(ctx context.Context, model, prompt, bas
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		slog.Warn("vision API error response", "status", resp.StatusCode, "body", string(respBody))
+		return "", fmt.Errorf("视觉分析 API 返回错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	// 解析响应

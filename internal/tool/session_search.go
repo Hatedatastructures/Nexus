@@ -138,12 +138,15 @@ func (t *SessionSearchTool) Execute(ctx context.Context, args map[string]any) (s
 
 	// 无结果
 	if len(results) == 0 {
-		result, _ := json.Marshal(map[string]any{
+		result, err := json.Marshal(map[string]any{
 			"output":  fmt.Sprintf("未找到匹配 \"%s\" 的会话内容", query),
 			"query":   query,
 			"count":   0,
 			"results": []any{},
 		})
+		if err != nil {
+			return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+		}
 		return string(result), nil
 	}
 
@@ -184,12 +187,15 @@ func (t *SessionSearchTool) Execute(ctx context.Context, args map[string]any) (s
 	}
 
 	// JSON 输出
-	output, _ := json.Marshal(map[string]any{
+	output, err := json.Marshal(map[string]any{
 		"output":  sb.String(),
 		"query":   query,
 		"count":   len(results),
 		"results": formattedResults,
 	})
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(output), nil
 }
 

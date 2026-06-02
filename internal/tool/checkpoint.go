@@ -106,7 +106,7 @@ func sanitizeRepoName(path string) string {
 
 // EnsureCheckpoint 确保目录有对应的影子 Git 仓库，并创建一个新的检查点。
 // 如果影子仓库不存在，会自动初始化。然后暂存所有变更并提交。
-func (m *CheckpointManager) EnsureCheckpoint(dir string) error {
+func (m *CheckpointManager) EnsureCheckpoint(ctx context.Context, dir string) error {
 	// 验证源目录存在
 	if _, err := os.Stat(dir); err != nil {
 		return fmt.Errorf("源目录不存在: %w", err)
@@ -121,7 +121,7 @@ func (m *CheckpointManager) EnsureCheckpoint(dir string) error {
 
 	// 如果影子仓库不存在，初始化
 	if _, err := os.Stat(filepath.Join(shadowDir, ".git")); os.IsNotExist(err) {
-		if err := m.initShadowRepo(dir, shadowDir); err != nil {
+		if err := m.initShadowRepo(ctx, dir, shadowDir); err != nil {
 			return fmt.Errorf("初始化影子仓库失败: %w", err)
 		}
 	}
@@ -132,7 +132,7 @@ func (m *CheckpointManager) EnsureCheckpoint(dir string) error {
 	}
 
 	// 检查是否有变更
-	hasChanges, err := m.hasChanges(shadowDir)
+	hasChanges, err := m.hasChanges(ctx, shadowDir)
 	if err != nil {
 		return fmt.Errorf("检查变更失败: %w", err)
 	}
@@ -143,7 +143,7 @@ func (m *CheckpointManager) EnsureCheckpoint(dir string) error {
 	}
 
 	// 暂存并提交
-	if err := m.commitCheckpoint(shadowDir); err != nil {
+	if err := m.commitCheckpoint(ctx, shadowDir); err != nil {
 		return fmt.Errorf("提交检查点失败: %w", err)
 	}
 
@@ -152,7 +152,7 @@ func (m *CheckpointManager) EnsureCheckpoint(dir string) error {
 }
 
 // initShadowRepo 初始化影子 Git 仓库。
-func (m *CheckpointManager) initShadowRepo(srcDir, shadowDir string) error {
+func (m *CheckpointManager) initShadowRepo(ctx context.Context, srcDir, shadowDir string) error {
 	// 清理可能存在的旧目录
 	os.RemoveAll(shadowDir)
 
@@ -162,14 +162,14 @@ func (m *CheckpointManager) initShadowRepo(srcDir, shadowDir string) error {
 	}
 
 	// git init
-	cmd := exec.Command("git", "init", shadowDir)
+	cmd := exec.CommandContext(ctx, "git", "init", shadowDir)
 	cmd.Env = gitEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git init 失败: %s (%w)", string(output), err)
 	}
 
 	// 初始提交 (空仓库需要至少一个提交)
-	cmd = exec.Command("git", "-C", shadowDir, "commit", "--allow-empty", "-m", "初始检查点")
+	cmd = exec.CommandContext(ctx, "git", "-C", shadowDir, "commit", "--allow-empty", "-m", "初始检查点")
 	cmd.Env = gitEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("初始提交失败: %s (%w)", string(output), err)
@@ -182,7 +182,8 @@ func (m *CheckpointManager) initShadowRepo(srcDir, shadowDir string) error {
 func (m *CheckpointManager) syncToShadow(srcDir, shadowDir string) error {
 	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // 跳过无法访问的文件
+			slog.Warn("checkpoint: skip inaccessible file", "path", path, "error", err)
+			return nil
 		}
 
 		// 跳过隐藏目录
@@ -204,13 +205,15 @@ func (m *CheckpointManager) syncToShadow(srcDir, shadowDir string) error {
 
 		// 复制文件
 		data, readErr := os.ReadFile(path)
-		if readErr != nil {
+	if readErr != nil {
+			slog.Warn("checkpoint: skip unreadable file", "path", path, "error", readErr)
 			return nil
 		}
 
 		// 确保目标目录存在
 		destDir := filepath.Dir(destPath)
-		if err := os.MkdirAll(destDir, 0755); err != nil {
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+			slog.Warn("checkpoint: skip file, cannot create dest dir", "path", path, "error", err)
 			return nil
 		}
 
@@ -219,8 +222,8 @@ func (m *CheckpointManager) syncToShadow(srcDir, shadowDir string) error {
 }
 
 // hasChanges 检查影子仓库是否有未提交的变更。
-func (m *CheckpointManager) hasChanges(shadowDir string) (bool, error) {
-	cmd := exec.Command("git", "-C", shadowDir, "status", "--porcelain")
+func (m *CheckpointManager) hasChanges(ctx context.Context, shadowDir string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", shadowDir, "status", "--porcelain")
 	cmd.Env = gitEnv()
 	output, err := cmd.Output()
 	if err != nil {
@@ -230,16 +233,16 @@ func (m *CheckpointManager) hasChanges(shadowDir string) (bool, error) {
 }
 
 // commitCheckpoint 暂存所有变更并创建提交。
-func (m *CheckpointManager) commitCheckpoint(shadowDir string) error {
+func (m *CheckpointManager) commitCheckpoint(ctx context.Context, shadowDir string) error {
 	// git add -A
-	cmd := exec.Command("git", "-C", shadowDir, "add", "-A")
+	cmd := exec.CommandContext(ctx, "git", "-C", shadowDir, "add", "-A")
 	cmd.Env = gitEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git add 失败: %s (%w)", string(output), err)
 	}
 
 	// git commit
-	cmd = exec.Command("git", "-C", shadowDir, "commit", "-m", "自动检查点")
+	cmd = exec.CommandContext(ctx, "git", "-C", shadowDir, "commit", "-m", "自动检查点")
 	cmd.Env = gitEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git commit 失败: %s (%w)", string(output), err)
@@ -250,7 +253,7 @@ func (m *CheckpointManager) commitCheckpoint(shadowDir string) error {
 
 // ListCheckpoints 列出目录的所有检查点提交。
 // 返回按时间倒序排列的提交哈希列表。
-func (m *CheckpointManager) ListCheckpoints(dir string) ([]string, error) {
+func (m *CheckpointManager) ListCheckpoints(ctx context.Context, dir string) ([]string, error) {
 	shadowDir := m.shadowRepoPath(dir)
 
 	// 检查影子仓库是否存在
@@ -258,7 +261,7 @@ func (m *CheckpointManager) ListCheckpoints(dir string) ([]string, error) {
 		return []string{}, nil
 	}
 
-	cmd := exec.Command("git", "-C", shadowDir, "log", "--format=%H", "--all")
+	cmd := exec.CommandContext(ctx, "git", "-C", shadowDir, "log", "--format=%H", "--all")
 	cmd.Env = gitEnv()
 	output, err := cmd.Output()
 	if err != nil {
@@ -281,7 +284,7 @@ func (m *CheckpointManager) ListCheckpoints(dir string) ([]string, error) {
 // Diff 返回两个检查点之间的差异。
 // 如果 from 为空，比较第一个提交和 to。
 // 如果 to 为空，比较 from 和当前工作树。
-func (m *CheckpointManager) Diff(dir string, from, to string) (string, error) {
+func (m *CheckpointManager) Diff(ctx context.Context, dir string, from, to string) (string, error) {
 	shadowDir := m.shadowRepoPath(dir)
 
 	// 验证提交哈希
@@ -311,7 +314,7 @@ func (m *CheckpointManager) Diff(dir string, from, to string) (string, error) {
 		args = append(args, "HEAD")
 	}
 
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Env = gitEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -327,7 +330,7 @@ func (m *CheckpointManager) Diff(dir string, from, to string) (string, error) {
 
 // Restore 将目录恢复到指定的检查点。
 // 使用 git checkout 将影子仓库恢复到指定提交，然后复制回源目录。
-func (m *CheckpointManager) Restore(dir string, commitHash string) error {
+func (m *CheckpointManager) Restore(ctx context.Context, dir string, commitHash string) error {
 	// 验证提交哈希 (防注入)
 	if err := validateCommitHash(commitHash); err != nil {
 		return fmt.Errorf("无效的提交哈希: %w", err)
@@ -341,12 +344,12 @@ func (m *CheckpointManager) Restore(dir string, commitHash string) error {
 	}
 
 	// 创建当前状态的检查点 (恢复前自动备份)
-	if err := m.EnsureCheckpoint(dir); err != nil {
+	if err := m.EnsureCheckpoint(ctx, dir); err != nil {
 		slog.Warn("failed to create checkpoint before restore", "err", err)
 	}
 
 	// git checkout <commit>
-	cmd := exec.Command("git", "-C", shadowDir, "checkout", commitHash, "--", ".")
+	cmd := exec.CommandContext(ctx, "git", "-C", shadowDir, "checkout", commitHash, "--", ".")
 	cmd.Env = gitEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git checkout 失败: %s (%w)", string(output), err)
@@ -395,12 +398,14 @@ func (m *CheckpointManager) syncFromShadow(shadowDir, srcDir string) error {
 		}
 
 		data, readErr := os.ReadFile(path)
-		if readErr != nil {
+	if readErr != nil {
+			slog.Warn("checkpoint: skip unreadable file", "path", path, "error", readErr)
 			return nil
 		}
 
 		destDir := filepath.Dir(destPath)
-		if err := os.MkdirAll(destDir, 0755); err != nil {
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+			slog.Warn("checkpoint: skip file, cannot create dest dir", "path", path, "error", err)
 			return nil
 		}
 
@@ -532,31 +537,31 @@ func (t *CheckpointTool) Execute(ctx context.Context, args map[string]any) (stri
 
 	switch action {
 	case "create":
-		return t.createCheckpoint(dir)
+		return t.createCheckpoint(ctx, dir)
 	case "list":
-		return t.listCheckpoints(dir)
+		return t.listCheckpoints(ctx, dir)
 	case "diff":
 		from, _ := args["from"].(string)
 		to, _ := args["to"].(string)
-		return t.diffCheckpoints(dir, from, to)
+		return t.diffCheckpoints(ctx, dir, from, to)
 	case "restore":
 		commit, ok := args["commit"].(string)
 		if !ok || commit == "" {
 			return ToolError("restore 操作需要 commit 参数"), nil
 		}
-		return t.restoreCheckpoint(dir, commit)
+		return t.restoreCheckpoint(ctx, dir, commit)
 	default:
 		return ToolError(fmt.Sprintf("未知操作: %s", action)), nil
 	}
 }
 
-func (t *CheckpointTool) createCheckpoint(dir string) (string, error) {
-	if err := t.manager.EnsureCheckpoint(dir); err != nil {
+func (t *CheckpointTool) createCheckpoint(ctx context.Context, dir string) (string, error) {
+	if err := t.manager.EnsureCheckpoint(ctx, dir); err != nil {
 		return ToolError(fmt.Sprintf("创建检查点失败: %v", err)), nil
 	}
 
 	// 获取最新提交哈希
-	checkpoints, _ := t.manager.ListCheckpoints(dir)
+	checkpoints, _ := t.manager.ListCheckpoints(ctx, dir)
 	commitHash := ""
 	if len(checkpoints) > 0 {
 		commitHash = checkpoints[0]
@@ -570,8 +575,8 @@ func (t *CheckpointTool) createCheckpoint(dir string) (string, error) {
 	}), nil
 }
 
-func (t *CheckpointTool) listCheckpoints(dir string) (string, error) {
-	checkpoints, err := t.manager.ListCheckpoints(dir)
+func (t *CheckpointTool) listCheckpoints(ctx context.Context, dir string) (string, error) {
+	checkpoints, err := t.manager.ListCheckpoints(ctx, dir)
 	if err != nil {
 		return ToolError(fmt.Sprintf("列出检查点失败: %v", err)), nil
 	}
@@ -584,8 +589,8 @@ func (t *CheckpointTool) listCheckpoints(dir string) (string, error) {
 	}), nil
 }
 
-func (t *CheckpointTool) diffCheckpoints(dir, from, to string) (string, error) {
-	diff, err := t.manager.Diff(dir, from, to)
+func (t *CheckpointTool) diffCheckpoints(ctx context.Context, dir, from, to string) (string, error) {
+	diff, err := t.manager.Diff(ctx, dir, from, to)
 	if err != nil {
 		return ToolError(fmt.Sprintf("获取差异失败: %v", err)), nil
 	}
@@ -604,8 +609,8 @@ func (t *CheckpointTool) diffCheckpoints(dir, from, to string) (string, error) {
 	}), nil
 }
 
-func (t *CheckpointTool) restoreCheckpoint(dir, commit string) (string, error) {
-	if err := t.manager.Restore(dir, commit); err != nil {
+func (t *CheckpointTool) restoreCheckpoint(ctx context.Context, dir, commit string) (string, error) {
+	if err := t.manager.Restore(ctx, dir, commit); err != nil {
 		return ToolError(fmt.Sprintf("恢复检查点失败: %v", err)), nil
 	}
 

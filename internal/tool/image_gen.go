@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,7 @@ import (
 // 通过 OpenAI DALL-E API 或兼容端点，根据文本描述生成图片。
 type ImageGenTool struct {
 	client *http.Client
+	once   sync.Once
 }
 
 // Name 返回工具名称。
@@ -152,9 +154,9 @@ func (t *ImageGenTool) Execute(ctx context.Context, args map[string]any) (string
 
 // generateImage 调用图像生成 API。
 func (t *ImageGenTool) generateImage(ctx context.Context, model, prompt, size, quality string) (url string, b64Data string, err error) {
-	if t.client == nil {
+	t.once.Do(func() {
 		t.client = &http.Client{Timeout: 180 * time.Second}
-	}
+	})
 
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -208,7 +210,8 @@ func (t *ImageGenTool) generateImage(ctx context.Context, model, prompt, size, q
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		slog.Warn("image generation API error response", "status", resp.StatusCode, "body", string(respBody))
+		return "", "", fmt.Errorf("图像生成 API 返回错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	// 解析响应
@@ -251,9 +254,7 @@ func (t *ImageGenTool) saveImage(path string, b64Data string, imageURL string) e
 		}
 	} else if imageURL != "" {
 		// 通过 URL 下载
-		if t.client == nil {
-			t.client = &http.Client{Timeout: 120 * time.Second}
-		}
+		// client 已在 generateImage 中通过 sync.Once 初始化
 		req, reqErr := http.NewRequest("GET", imageURL, nil)
 		if reqErr != nil {
 			return fmt.Errorf("创建下载请求失败: %w", reqErr)

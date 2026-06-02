@@ -49,7 +49,7 @@ func ensureBrowserLocked(ctx context.Context) error {
 		browserControlURL = cdpURL
 		browserInstance = rod.New().ControlURL(cdpURL).MustConnect()
 		browserReady = true
-			slog.Info("Browserbase cloud browser connected", "session_id", sess.SessionID())
+		slog.Info("Browserbase cloud browser connected", "session_id", sess.SessionID())
 		return nil
 	}
 
@@ -97,26 +97,26 @@ func ensureBrowserLocked(ctx context.Context) error {
 }
 
 // ensureBrowser 确保浏览器实例已启动并可用。
-func ensureBrowser() error {
+func ensureBrowser(ctx context.Context) error {
 	browserMu.Lock()
 	defer browserMu.Unlock()
-	return ensureBrowserLocked(context.Background())
+	return ensureBrowserLocked(ctx)
 }
 
 // getBrowser 返回浏览器实例。
-func getBrowser() (*rod.Browser, error) {
-	if err := ensureBrowser(); err != nil {
+func getBrowser(ctx context.Context) (*rod.Browser, error) {
+	if err := ensureBrowser(ctx); err != nil {
 		return nil, err
 	}
 	return browserInstance, nil
 }
 
 // getPage 返回当前页面实例，如果不存在则创建新页面。
-func getPage() (*rod.Page, error) {
+func getPage(ctx context.Context) (*rod.Page, error) {
 	browserMu.Lock()
 	defer browserMu.Unlock()
 
-	if err := ensureBrowserLocked(context.Background()); err != nil {
+	if err := ensureBrowserLocked(ctx); err != nil {
 		return nil, err
 	}
 
@@ -181,7 +181,7 @@ func (t *BrowserNavigateTool) Schema() *ToolSchema {
 
 // Execute 执行浏览器导航。
 func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	page, err := getPage()
+	page, err := getPage(ctx)
 	if err != nil {
 		return ToolError(fmt.Sprintf("浏览器不可用: %v", err)), nil
 	}
@@ -218,13 +218,15 @@ func (t *BrowserNavigateTool) Execute(ctx context.Context, args map[string]any) 
 		text = text[:30000] + "\n...[页面内容已截断]"
 	}
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output": fmt.Sprintf("已导航到 %s", url),
 		"url":    url,
 		"title":  title,
 		"text":   text,
 	})
-
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
@@ -274,7 +276,7 @@ func (t *BrowserScreenshotTool) Schema() *ToolSchema {
 
 // Execute 执行浏览器截图。
 func (t *BrowserScreenshotTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	page, err := getPage()
+	page, err := getPage(ctx)
 	if err != nil {
 		return ToolError(fmt.Sprintf("浏览器不可用: %v", err)), nil
 	}
@@ -296,12 +298,14 @@ func (t *BrowserScreenshotTool) Execute(ctx context.Context, args map[string]any
 		return ToolError(fmt.Sprintf("截图失败: %v", err)), nil
 	}
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output": fmt.Sprintf("截图成功 (%d 字节)", len(screenshot)),
 		"image":  fmt.Sprintf("[base64 图片数据, %d 字节]", len(screenshot)),
 		"size":   len(screenshot),
 	})
-
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
@@ -352,7 +356,7 @@ func (t *BrowserClickTool) Schema() *ToolSchema {
 
 // Execute 执行浏览器点击。
 func (t *BrowserClickTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	page, err := getPage()
+	page, err := getPage(ctx)
 	if err != nil {
 		return ToolError(fmt.Sprintf("浏览器不可用: %v", err)), nil
 	}
@@ -375,11 +379,13 @@ func (t *BrowserClickTool) Execute(ctx context.Context, args map[string]any) (st
 	// 等待可能的页面变化
 	page.Timeout(3 * time.Second).WaitLoad()
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output":   fmt.Sprintf("已点击元素: %s", selector),
 		"selector": selector,
 	})
-
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
@@ -434,7 +440,7 @@ func (t *BrowserTypeTool) Schema() *ToolSchema {
 
 // Execute 执行浏览器输入。
 func (t *BrowserTypeTool) Execute(ctx context.Context, args map[string]any) (string, error) {
-	page, err := getPage()
+	page, err := getPage(ctx)
 	if err != nil {
 		return ToolError(fmt.Sprintf("浏览器不可用: %v", err)), nil
 	}
@@ -459,12 +465,14 @@ func (t *BrowserTypeTool) Execute(ctx context.Context, args map[string]any) (str
 		return ToolError(fmt.Sprintf("输入失败: %v", err)), nil
 	}
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output":   fmt.Sprintf("已在 %s 中输入文本 (%d 字符)", selector, len(text)),
 		"selector": selector,
 		"length":   len(text),
 	})
-
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 

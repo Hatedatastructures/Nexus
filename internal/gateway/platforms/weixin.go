@@ -5,6 +5,7 @@ package platforms
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -19,14 +20,15 @@ import (
 // ───────────────────────────── 常量 ─────────────────────────────
 
 const (
-	weixinBaseURL           = "https://ilinkai.weixin.qq.com"
-	weixinCDNBaseURL        = "https://novac2c.cdn.weixin.qq.com/c2c"
-	weixinLongPollTimeoutMs = 35000
-	weixinAPITimeoutMs      = 15000
+	weixinBaseURL               = "https://ilinkai.weixin.qq.com"
+	weixinLongPollTimeoutMs     = 35000
+	weixinAPITimeoutMs          = 15000
 	weixinMaxConsecutiveFailures = 3
-	weixinRetryDelaySeconds = 2
-	weixinBackoffDelaySeconds = 30
+	weixinRetryDelaySeconds     = 2
+	weixinBackoffDelaySeconds   = 30
 	weixinSessionExpiredErrcode = -14
+	weixinContextTokenMaxSize   = 5000
+	weixinHTTPTimeout           = 40 * time.Second
 )
 
 // iLink API endpoints
@@ -34,40 +36,25 @@ const (
 	weixinEpGetUpdates  = "ilink/bot/getupdates"
 	weixinEpSendMessage = "ilink/bot/sendmessage"
 	weixinEpSendTyping  = "ilink/bot/sendtyping"
-	weixinEpGetConfig   = "ilink/bot/getconfig"
-	weixinEpGetUploadURL = "ilink/bot/getuploadurl"
-)
-
-// Media types
-const (
-	weixinMediaImage = 1
-	weixinMediaVideo = 2
-	weixinMediaFile  = 3
-	weixinMediaVoice = 4
 )
 
 // Message item types
 const (
-	weixinItemText  = 1
-	weixinItemImage = 2
-	weixinItemVoice = 3
-	weixinItemFile  = 4
-	weixinItemVideo = 5
+	weixinItemText = 1
 )
 
 // ───────────────────────────── WeixinAdapter ─────────────────────────────
 
 // WeixinAdapter 微信个人号适配器。
 type WeixinAdapter struct {
-	accountID  string
-	token      string
-	baseURL    string
-	messageHandler func(*MessageEvent)
+	accountID string
+	token     string
+	baseURL   string
 
 	// HTTP 客户端
 	httpClient *http.Client
 
-	// Context token 存储
+	// Context token 存储 (有界)
 	contextTokens map[string]string
 	contextTokenMu sync.Mutex
 
@@ -76,20 +63,25 @@ type WeixinAdapter struct {
 	connected bool
 	mu        sync.Mutex
 
+	// 消息通道保护
+	msgCh     chan *MessageEvent
+	msgMu     sync.RWMutex
+	closeOnce sync.Once
+
 	// 消息去重
 	dedup *weixinDeduplicator
 }
 
 // weixinDeduplicator 消息去重器。
 type weixinDeduplicator struct {
-	mu     sync.Mutex
-	msgIDs map[string]time.Time
+	mu      sync.Mutex
+	msgIDs  map[string]time.Time
 	maxSize int
 }
 
 func newWeixinDeduplicator(maxSize int) *weixinDeduplicator {
 	return &weixinDeduplicator{
-		msgIDs:   make(map[string]time.Time),
+		msgIDs:  make(map[string]time.Time),
 		maxSize: maxSize,
 	}
 }
@@ -116,20 +108,19 @@ func (d *weixinDeduplicator) isDuplicate(msgID string) bool {
 }
 
 // NewWeixinAdapter 创建微信个人号适配器。
-func NewWeixinAdapter(accountID, token string, messageHandler func(*MessageEvent)) *WeixinAdapter {
+func NewWeixinAdapter(accountID, token string) *WeixinAdapter {
 	baseURL := os.Getenv("WEIXIN_BASE_URL")
 	if baseURL == "" {
 		baseURL = weixinBaseURL
 	}
 
 	return &WeixinAdapter{
-		accountID:      accountID,
-		token:          token,
-		baseURL:        baseURL,
-		messageHandler: messageHandler,
-		httpClient:     &http.Client{Timeout: 60 * time.Second},
-		contextTokens:  make(map[string]string),
-		dedup:          newWeixinDeduplicator(1000),
+		accountID:     accountID,
+		token:         token,
+		baseURL:       baseURL,
+		httpClient:    &http.Client{Timeout: weixinHTTPTimeout},
+		contextTokens: make(map[string]string),
+		dedup:         newWeixinDeduplicator(1000),
 	}
 }
 
@@ -147,13 +138,15 @@ func (a *WeixinAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, erro
 	a.mu.Unlock()
 
 	// 创建消息通道
-	msgCh := make(chan *MessageEvent, 100)
+	a.msgMu.Lock()
+	a.msgCh = make(chan *MessageEvent, 100)
+	a.msgMu.Unlock()
 
 	// 启动长轮询循环
-	go a.pollLoop(ctx, msgCh)
+	go a.pollLoop(ctx)
 
 	slog.Info("[Weixin] connected", "account", a.accountID)
-	return msgCh, nil
+	return a.msgCh, nil
 }
 
 // Disconnect 断开连接。
@@ -163,6 +156,14 @@ func (a *WeixinAdapter) Disconnect(ctx context.Context) error {
 	a.connected = false
 	a.mu.Unlock()
 
+	a.closeOnce.Do(func() {
+		a.msgMu.Lock()
+		if a.msgCh != nil {
+			close(a.msgCh)
+		}
+		a.msgMu.Unlock()
+	})
+
 	slog.Info("[Weixin] disconnected")
 	return nil
 }
@@ -170,7 +171,7 @@ func (a *WeixinAdapter) Disconnect(ctx context.Context) error {
 // ───────────────────────────── 长轮询循环 ─────────────────────────────
 
 // pollLoop 长轮询获取消息。
-func (a *WeixinAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) {
+func (a *WeixinAdapter) pollLoop(ctx context.Context) {
 	consecutiveFailures := 0
 
 	for {
@@ -179,7 +180,6 @@ func (a *WeixinAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) 
 		a.mu.Unlock()
 
 		if !running {
-			close(msgCh)
 			return
 		}
 
@@ -189,18 +189,18 @@ func (a *WeixinAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) 
 			slog.Warn("[Weixin] failed to fetch messages", "err", err, "consecutive", consecutiveFailures)
 
 			if consecutiveFailures >= weixinMaxConsecutiveFailures {
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(time.Duration(weixinBackoffDelaySeconds) * time.Second):
-					}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Duration(weixinBackoffDelaySeconds) * time.Second):
+				}
 				consecutiveFailures = 0
 			} else {
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(time.Duration(weixinRetryDelaySeconds) * time.Second):
-					}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Duration(weixinRetryDelaySeconds) * time.Second):
+				}
 			}
 			continue
 		}
@@ -210,15 +210,18 @@ func (a *WeixinAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) 
 		for _, update := range updates {
 			event := a.parseUpdate(update)
 			if event != nil && !a.dedup.isDuplicate(event.MessageID) {
-				// 存储 context_token
 				if event.Source != nil {
 					a.setContextToken(event.Source.UserID, getString(update, "context_token", ""))
 				}
-				select {
-				case msgCh <- event:
-				default:
-					slog.Warn("[Weixin] message channel full, dropping message")
+				a.msgMu.RLock()
+				if a.msgCh != nil {
+					select {
+					case a.msgCh <- event:
+					default:
+						slog.Warn("[Weixin] message channel full, dropping message")
+					}
 				}
+				a.msgMu.RUnlock()
 			}
 		}
 	}
@@ -262,7 +265,7 @@ func (a *WeixinAdapter) getUpdates(ctx context.Context) ([]map[string]any, error
 // parseUpdate 解析消息更新。
 func (a *WeixinAdapter) parseUpdate(update map[string]any) *MessageEvent {
 	msgType := getInt(update, "msg_type", 0)
-	if msgType != 1 { // 只处理用户消息
+	if msgType != 1 {
 		return nil
 	}
 
@@ -274,10 +277,14 @@ func (a *WeixinAdapter) parseUpdate(update map[string]any) *MessageEvent {
 
 	msgID := getString(update, "msg_id", "")
 	if msgID == "" {
-		msgID = fmt.Sprintf("%d", time.Now().UnixNano())
+		var rnd [8]byte
+		if _, err := rand.Read(rnd[:]); err != nil {
+			msgID = fmt.Sprintf("%d", time.Now().UnixNano())
+		} else {
+			msgID = base64.RawURLEncoding.EncodeToString(rnd[:])
+		}
 	}
 
-	// 提取文本
 	text := ""
 	items := getListAny(update, "items")
 	for _, item := range items {
@@ -316,7 +323,6 @@ func (a *WeixinAdapter) Send(ctx context.Context, chatID string, content string,
 		return &SendResult{Success: false, Error: "chat_id 是必填项"}, nil
 	}
 
-	// 获取 context_token
 	contextToken := a.getContextToken(chatID)
 
 	body := map[string]any{
@@ -327,8 +333,8 @@ func (a *WeixinAdapter) Send(ctx context.Context, chatID string, content string,
 			"user_id": chatID,
 		},
 		"context_token": contextToken,
-		"msg_type":      2, // Bot 消息
-		"msg_state":     2, // Finish
+		"msg_type":      2,
+		"msg_state":     2,
 		"items": []map[string]any{
 			{
 				"type": weixinItemText,
@@ -353,7 +359,6 @@ func (a *WeixinAdapter) Send(ctx context.Context, chatID string, content string,
 		return &SendResult{Success: false, Error: fmt.Sprintf("%s (errcode=%d)", errmsg, errcode)}, nil
 	}
 
-	// 更新 context_token
 	newToken := getString(resp, "context_token", "")
 	if newToken != "" {
 		a.setContextToken(chatID, newToken)
@@ -365,7 +370,6 @@ func (a *WeixinAdapter) Send(ctx context.Context, chatID string, content string,
 
 // SendImage 发送图片。
 func (a *WeixinAdapter) SendImage(ctx context.Context, chatID string, imageURL string, caption string, opts *SendOptions) (*SendResult, error) {
-	// 微信需要先上传媒体，简化为发送 URL 文本
 	text := caption
 	if text == "" {
 		text = imageURL
@@ -384,7 +388,7 @@ func (a *WeixinAdapter) SendTyping(ctx context.Context, chatID string) error {
 		"to_user": map[string]any{
 			"user_id": chatID,
 		},
-		"typing": 1, // Start typing
+		"typing": 1,
 	}
 
 	_, err := a.callAPI(ctx, weixinEpSendTyping, body, weixinAPITimeoutMs)
@@ -404,6 +408,14 @@ func (a *WeixinAdapter) setContextToken(userID, token string) {
 		return
 	}
 	a.contextTokenMu.Lock()
+	if len(a.contextTokens) > weixinContextTokenMaxSize {
+		for k := range a.contextTokens {
+			delete(a.contextTokens, k)
+			if len(a.contextTokens) <= weixinContextTokenMaxSize/2 {
+				break
+			}
+		}
+	}
 	a.contextTokens[userID] = token
 	a.contextTokenMu.Unlock()
 }
@@ -412,23 +424,24 @@ func (a *WeixinAdapter) setContextToken(userID, token string) {
 
 // callAPI 调用 iLink API。
 func (a *WeixinAdapter) callAPI(ctx context.Context, endpoint string, body map[string]any, timeoutMs int) (map[string]any, error) {
-	bodyBytes, _ := json.Marshal(body)
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求体失败: %w", err)
+	}
 
-	url := a.baseURL + "/" + endpoint
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
+	reqURL := a.baseURL + "/" + endpoint
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
 
-	// 设置请求头
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("AuthorizationType", "ilink_bot_token")
 	req.Header.Set("Authorization", "Bearer "+a.token)
 	req.Header.Set("iLink-App-Id", "bot")
-	req.Header.Set("iLink-App-ClientVersion", "131072") // (2 << 16) | (2 << 8) | 0
+	req.Header.Set("iLink-App-ClientVersion", "131072")
 	req.Header.Set("X-WECHAT-UIN", generateWechatUIN())
 
-	// 设置超时并复用连接池
 	ctx2, cancel2 := context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel2()
 	req = req.WithContext(ctx2)
@@ -445,7 +458,7 @@ func (a *WeixinAdapter) callAPI(ctx context.Context, endpoint string, body map[s
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var result map[string]any
@@ -458,48 +471,40 @@ func (a *WeixinAdapter) callAPI(ctx context.Context, endpoint string, body map[s
 
 // generateWechatUIN 生成随机微信 UIN。
 func generateWechatUIN() string {
-	value := time.Now().UnixNano()
-	return base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%d", value)))
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		slog.Warn("[Weixin] crypto/rand failed, using weak fallback for UIN")
+		b = fmt.Appendf(nil, "%d", time.Now().UnixNano())
+	}
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 // ───────────────────────────── 接口实现 ─────────────────────────────
 
-// Name 返回适配器名称。
-func (a *WeixinAdapter) Name() string { return "Weixin" }
+func (a *WeixinAdapter) Name() string            { return "Weixin" }
+func (a *WeixinAdapter) PlatformType() Platform   { return PlatformWeChat }
+func (a *WeixinAdapter) MaxMessageLength() int     { return 2000 }
+func (a *WeixinAdapter) SupportsStreaming() bool   { return false }
 
-// PlatformType 返回平台类型。
-func (a *WeixinAdapter) PlatformType() Platform { return PlatformWeChat }
-
-// EditMessage 编辑消息（微信不支持）。
 func (a *WeixinAdapter) EditMessage(ctx context.Context, chatID string, messageID string, content string) (*SendResult, error) {
 	return &SendResult{Success: false, Error: "微信不支持编辑消息"}, nil
 }
 
-// DeleteMessage 删除消息（微信不支持）。
 func (a *WeixinAdapter) DeleteMessage(ctx context.Context, chatID string, messageID string) error {
 	return fmt.Errorf("微信不支持删除消息")
 }
 
-// SendVoice 发送语音。
 func (a *WeixinAdapter) SendVoice(ctx context.Context, chatID string, audioPath string, opts *SendOptions) (*SendResult, error) {
 	return &SendResult{Success: false, Error: "微信语音发送需要媒体上传"}, nil
 }
 
-// SendVideo 发送视频。
 func (a *WeixinAdapter) SendVideo(ctx context.Context, chatID string, videoPath string, caption string, opts *SendOptions) (*SendResult, error) {
 	return &SendResult{Success: false, Error: "微信视频发送需要媒体上传"}, nil
 }
 
-// SendDocument 发送文件。
 func (a *WeixinAdapter) SendDocument(ctx context.Context, chatID string, filePath string, caption string, opts *SendOptions) (*SendResult, error) {
 	return &SendResult{Success: false, Error: "微信文件发送需要媒体上传"}, nil
 }
-
-// MaxMessageLength 返回最大消息长度。
-func (a *WeixinAdapter) MaxMessageLength() int { return 2000 }
-
-// SupportsStreaming 返回是否支持流式输出。
-func (a *WeixinAdapter) SupportsStreaming() bool { return false }
 
 // ───────────────────────────── 自注册 ─────────────────────────────
 
@@ -507,6 +512,6 @@ func init() {
 	GetRegistry().Register(&AdapterEntry{
 		Platform: PlatformWeiXin,
 		Name:     "Weixin",
-		Factory:  func() PlatformAdapter { return NewWeixinAdapter("", "", nil) },
+		Factory:  func() PlatformAdapter { return NewWeixinAdapter("", "") },
 	})
 }

@@ -26,6 +26,7 @@ const (
 	wecomRequestTimeout    = 15 * time.Second
 	wecomHeartbeatInterval = 30 * time.Second
 	wecomDedupMaxSize      = 1000
+	wecomMapMaxSize        = 1000
 )
 
 // WebSocket 命令类型
@@ -60,10 +61,11 @@ type WeComAdapter struct {
 	running     bool
 	connected   bool
 	msgCh       chan *MessageEvent
+	closeOnce   sync.Once
 
 	// 并发控制
 	mu            sync.Mutex
-	pendingResps  map[string]chan map[string]any
+	writeMu       sync.Mutex // WebSocket 写锁，保护并发 WriteJSON
 	dedup         *wecomDeduplicator
 	replyReqIDs   map[string]string
 	lastChatReqIDs map[string]string
@@ -108,6 +110,13 @@ func (d *wecomDeduplicator) isDuplicate(msgID string) bool {
 	return false
 }
 
+// writeWS 安全地向 WebSocket 写入 JSON 消息（加写锁）。
+func (a *WeComAdapter) writeWS(conn *websocket.Conn, v any) error {
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
+	return conn.WriteJSON(v)
+}
+
 // NewWeComAdapter 创建企业微信适配器。
 func NewWeComAdapter(botID, secret string) *WeComAdapter {
 	wsURL := os.Getenv("WECOM_WEBSOCKET_URL")
@@ -134,7 +143,6 @@ func NewWeComAdapter(botID, secret string) *WeComAdapter {
 		allowFrom:      getEnvList("WECOM_ALLOW_FROM"),
 		groupAllowFrom: getEnvList("WECOM_GROUP_ALLOW_FROM"),
 		msgCh:          make(chan *MessageEvent, 64),
-		pendingResps:   make(map[string]chan map[string]any),
 		dedup:          newWecomDeduplicator(wecomDedupMaxSize),
 		replyReqIDs:    make(map[string]string),
 		lastChatReqIDs: make(map[string]string),
@@ -169,7 +177,7 @@ func (a *WeComAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error
 	a.mu.Unlock()
 
 	// 启动监听循环
-	go a.listenLoop()
+	go a.listenLoop(ctx)
 
 	// 启动心跳循环
 	go a.heartbeatLoop(ctx)
@@ -179,7 +187,7 @@ func (a *WeComAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error
 }
 
 // Disconnect 断开连接。
-	func (a *WeComAdapter) Disconnect(ctx context.Context) error {
+func (a *WeComAdapter) Disconnect(ctx context.Context) error {
 	a.mu.Lock()
 	a.running = false
 	a.connected = false
@@ -190,6 +198,7 @@ func (a *WeComAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error
 	if conn != nil {
 		conn.Close()
 	}
+	// listenLoop 退出时负责关闭 msgCh，这里不再重复关闭
 
 	slog.Info("[WeCom] disconnected")
 	return nil
@@ -215,7 +224,7 @@ func (a *WeComAdapter) openConnection(ctx context.Context) (*websocket.Conn, err
 		},
 	}
 
-	if err := conn.WriteJSON(subscribeReq); err != nil {
+	if err := a.writeWS(conn, subscribeReq); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("发送订阅请求失败: %w", err)
 	}
@@ -246,7 +255,9 @@ func (a *WeComAdapter) openConnection(ctx context.Context) (*websocket.Conn, err
 // ───────────────────────────── 监听循环 ─────────────────────────────
 
 // listenLoop WebSocket 消息监听循环。
-func (a *WeComAdapter) listenLoop() {
+func (a *WeComAdapter) listenLoop(ctx context.Context) {
+	defer a.closeOnce.Do(func() { close(a.msgCh) })
+
 	backoffIdx := 0
 
 	for {
@@ -263,10 +274,14 @@ func (a *WeComAdapter) listenLoop() {
 			// 尝试重连
 			delay := wecomReconnectBackoff[min(backoffIdx, len(wecomReconnectBackoff)-1)]
 			backoffIdx++
-			time.Sleep(delay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), wecomConnectTimeout)
-			newConn, err := a.openConnection(ctx)
+			newCtx, cancel := context.WithTimeout(ctx, wecomConnectTimeout)
+			newConn, err := a.openConnection(newCtx)
 			cancel()
 
 			if err != nil {
@@ -308,21 +323,7 @@ func (a *WeComAdapter) listenLoop() {
 
 // dispatchPayload 处理接收到的 WebSocket 消息。
 func (a *WeComAdapter) dispatchPayload(payload map[string]any) {
-	reqID := a.payloadReqID(payload)
 	cmd := getString(payload, "cmd", "")
-
-	// 检查是否是等待的响应
-	if reqID != "" {
-		a.mu.Lock()
-		ch, exists := a.pendingResps[reqID]
-		if exists {
-			delete(a.pendingResps, reqID)
-			a.mu.Unlock()
-			ch <- payload
-			return
-		}
-		a.mu.Unlock()
-	}
 
 	// 处理消息回调
 	if cmd == wecomCmdCallback {
@@ -350,15 +351,6 @@ func (a *WeComAdapter) heartbeatLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			a.mu.Lock()
-			running := a.running
-			conn := a.conn
-			a.mu.Unlock()
-
-			if !running || conn == nil {
-				return
-			}
-
 			pingReq := map[string]any{
 				"cmd": wecomCmdPing,
 				"headers": map[string]any{"req_id": a.newReqID("ping")},
@@ -366,11 +358,14 @@ func (a *WeComAdapter) heartbeatLoop(ctx context.Context) {
 			}
 
 			a.mu.Lock()
-			if err := conn.WriteJSON(pingReq); err != nil {
-				a.mu.Unlock()
+			conn := a.conn
+			a.mu.Unlock()
+
+			if conn == nil {
+				continue
+			}
+			if err := a.writeWS(conn, pingReq); err != nil {
 				slog.Debug("[WeCom] heartbeat send failed", "err", err)
-			} else {
-				a.mu.Unlock()
 			}
 		}
 	}
@@ -429,7 +424,7 @@ func (a *WeComAdapter) onMessage(payload map[string]any) {
 
 	// 去除群聊中的 @mention
 	if isGroup && text != "" {
-		text = strings.TrimSpace(strings.Replace(text, "@"+a.botID, "", 1))
+		text = strings.TrimSpace(strings.ReplaceAll(text, "@"+a.botID, ""))
 	}
 
 	if text == "" {
@@ -455,7 +450,6 @@ func (a *WeComAdapter) onMessage(payload map[string]any) {
 		RawMessage: payload,
 	}
 
-	// 回调处理
 	select {
 	case a.msgCh <- event:
 	default:
@@ -499,9 +493,6 @@ func (a *WeComAdapter) Send(ctx context.Context, chatID string, content string, 
 		return nil, fmt.Errorf("chat_id 是必填项")
 	}
 
-	// 检查是否有缓存的回复 req_id
-	replyReqID := a.getReplyReqID(chatID)
-
 	a.mu.Lock()
 	conn := a.conn
 	a.mu.Unlock()
@@ -514,6 +505,9 @@ func (a *WeComAdapter) Send(ctx context.Context, chatID string, content string, 
 	if trimmed == "" {
 		return nil, fmt.Errorf("消息内容为空")
 	}
+
+	// 检查是否有缓存的回复 req_id
+	replyReqID := a.getReplyReqID(chatID)
 
 	reqID := a.newReqID("send")
 	req := map[string]any{
@@ -534,33 +528,11 @@ func (a *WeComAdapter) Send(ctx context.Context, chatID string, content string, 
 		req["headers"] = map[string]any{"req_id": replyReqID}
 	}
 
-	// 注册响应通道 + 发送请求（原子操作，防止 flush 竞态）
-	respCh := make(chan map[string]any, 1)
-	a.mu.Lock()
-	a.pendingResps[reqID] = respCh
-	if err := conn.WriteJSON(req); err != nil {
-		delete(a.pendingResps, reqID)
-		a.mu.Unlock()
+	if err := a.writeWS(conn, req); err != nil {
 		return nil, fmt.Errorf("发送失败: %w", err)
 	}
-	a.mu.Unlock()
 
-	// 等待响应
-	select {
-	case resp := <-respCh:
-		errcode := getInt(resp, "errcode", 0)
-		if errcode != 0 {
-			errmsg := getString(resp, "errmsg", "发送失败")
-			return nil, fmt.Errorf("发送失败: %s (errcode=%d)", errmsg, errcode)
-		}
-		return &SendResult{Success: true}, nil
-
-	case <-time.After(wecomRequestTimeout):
-		a.mu.Lock()
-		delete(a.pendingResps, reqID)
-		a.mu.Unlock()
-		return nil, fmt.Errorf("发送超时")
-	}
+	return &SendResult{Success: true}, nil
 }
 
 // SendImage 发送图片。
@@ -574,7 +546,7 @@ func (a *WeComAdapter) SendImage(ctx context.Context, chatID string, imageURL st
 }
 
 func (a *WeComAdapter) Name() string            { return "WeCom" }
-func (a *WeComAdapter) PlatformType() Platform   { return PlatformWeChat }
+func (a *WeComAdapter) PlatformType() Platform   { return PlatformWeCom }
 func (a *WeComAdapter) MaxMessageLength() int     { return wecomMaxMessageLength }
 func (a *WeComAdapter) SupportsStreaming() bool   { return false }
 func (a *WeComAdapter) EditMessage(ctx context.Context, chatID string, messageID string, content string) (*SendResult, error) {
@@ -610,7 +582,7 @@ func (a *WeComAdapter) isDMAllowed(senderID string) bool {
 }
 
 // isGroupAllowed 检查群聊权限。
-func (a *WeComAdapter) isGroupAllowed(chatID, senderID string) bool {
+func (a *WeComAdapter) isGroupAllowed(chatID, _ string) bool {
 	if a.groupPolicy == "disabled" {
 		return false
 	}
@@ -636,14 +608,15 @@ func (a *WeComAdapter) rememberReplyReqID(msgID, reqID string) {
 		return
 	}
 	a.mu.Lock()
-	a.replyReqIDs[msgID] = reqID
-	// 清理超过上限的条目
-	if len(a.replyReqIDs) > wecomDedupMaxSize {
-		for key := range a.replyReqIDs {
-			delete(a.replyReqIDs, key)
-			break
+	if len(a.replyReqIDs) > wecomMapMaxSize {
+		for k := range a.replyReqIDs {
+			delete(a.replyReqIDs, k)
+			if len(a.replyReqIDs) <= wecomMapMaxSize/2 {
+				break
+			}
 		}
 	}
+	a.replyReqIDs[msgID] = reqID
 	a.mu.Unlock()
 }
 
@@ -652,13 +625,15 @@ func (a *WeComAdapter) rememberChatReqID(chatID, reqID string) {
 		return
 	}
 	a.mu.Lock()
-	a.lastChatReqIDs[chatID] = reqID
-	if len(a.lastChatReqIDs) > wecomDedupMaxSize {
-		for key := range a.lastChatReqIDs {
-			delete(a.lastChatReqIDs, key)
-			break
+	if len(a.lastChatReqIDs) > wecomMapMaxSize {
+		for k := range a.lastChatReqIDs {
+			delete(a.lastChatReqIDs, k)
+			if len(a.lastChatReqIDs) <= wecomMapMaxSize/2 {
+				break
+			}
 		}
 	}
+	a.lastChatReqIDs[chatID] = reqID
 	a.mu.Unlock()
 }
 
@@ -678,113 +653,4 @@ func entryMatches(entries []string, target string) bool {
 		}
 	}
 	return false
-}
-
-// ───────────────────────────── 配置辅助函数 ─────────────────────────────
-
-func getString(m map[string]any, key string, defaultVal string) string {
-	if m == nil {
-		return defaultVal
-	}
-	val, ok := m[key]
-	if !ok {
-		return defaultVal
-	}
-	str, ok := val.(string)
-	if !ok {
-		return defaultVal
-	}
-	return strings.TrimSpace(str)
-}
-
-func getInt(m map[string]any, key string, defaultVal int) int {
-	if m == nil {
-		return defaultVal
-	}
-	val, ok := m[key]
-	if !ok {
-		return defaultVal
-	}
-	switch v := val.(type) {
-	case int:
-		return v
-	case float64:
-		return int(v)
-	default:
-		return defaultVal
-	}
-}
-
-func getMap(m map[string]any, key string) map[string]any {
-	if m == nil {
-		return nil
-	}
-	val, ok := m[key]
-	if !ok {
-		return nil
-	}
-	mapVal, ok := val.(map[string]any)
-	if !ok {
-		return nil
-	}
-	return mapVal
-}
-
-func getList(m map[string]any, key string) []string {
-	if m == nil {
-		return nil
-	}
-	val, ok := m[key]
-	if !ok {
-		return nil
-	}
-
-	switch v := val.(type) {
-	case []string:
-		return v
-	case []any:
-		result := make([]string, len(v))
-		for i, item := range v {
-			result[i] = strings.TrimSpace(fmt.Sprintf("%v", item))
-		}
-		return result
-	case string:
-		// 逗号分隔的字符串
-		parts := strings.Split(v, ",")
-		result := make([]string, len(parts))
-		for i, p := range parts {
-			result[i] = strings.TrimSpace(p)
-		}
-		return result
-	default:
-		return nil
-	}
-}
-
-func getListAny(m map[string]any, key string) []any {
-	if m == nil {
-		return nil
-	}
-	val, ok := m[key]
-	if !ok {
-		return nil
-	}
-	list, ok := val.([]any)
-	if !ok {
-		return nil
-	}
-	return list
-}
-
-func getEnvList(envKey string) []string {
-	val := os.Getenv(envKey)
-	if val == "" {
-		return nil
-	}
-	parts := strings.Split(val, ",")
-	result := make([]string, len(parts))
-	for i, p := range parts {
-		result[i] = strings.TrimSpace(p)
-	}
-	return result
 }

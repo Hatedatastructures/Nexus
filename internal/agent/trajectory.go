@@ -51,7 +51,7 @@ func SaveTrajectory(path string, msgs []llm.Message, model string, completed boo
 	if err := validateTrajectoryPath(path); err != nil {
 		return fmt.Errorf("轨迹路径验证失败: %w", err)
 	}
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("创建轨迹文件: %w", err)
 	}
@@ -78,7 +78,7 @@ func SaveTrajectoryBatch(path string, entries []TrajectoryEntry) error {
 	if err := validateTrajectoryPath(path); err != nil {
 		return fmt.Errorf("轨迹路径验证失败: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("打开轨迹文件: %w", err)
 	}

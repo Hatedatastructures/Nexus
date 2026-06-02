@@ -12,24 +12,39 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // ───────────────────────────── 允许目录 (路径安全) ─────────────────────────────
 
 // allowedDir 是文件操作工具允许访问的根目录。
 // 默认为当前工作目录，测试中可覆盖此变量以限制文件操作范围。
-var allowedDir = func() string {
+var (
+	allowedDir   string
+	allowedDirMu sync.RWMutex
+)
+
+func init() {
 	dir, err := os.Getwd()
 	if err != nil {
-		return "."
+		allowedDir = "."
+	} else {
+		allowedDir = dir
 	}
-	return dir
-}()
+}
+
+func getAllowedDir() string {
+	allowedDirMu.RLock()
+	defer allowedDirMu.RUnlock()
+	return allowedDir
+}
 
 // SetAllowedDir updates the allowed root directory for file operations.
 func SetAllowedDir(dir string) {
 	if dir != "" {
+		allowedDirMu.Lock()
 		allowedDir = dir
+		allowedDirMu.Unlock()
 	}
 }
 
@@ -49,7 +64,7 @@ func checkPathSecurity(path string, sanitize bool) (string, error) {
 	}
 
 	// 第三步: 完整目录边界验证
-	if err := ValidateWithinDir(checkPath, allowedDir); err != nil {
+	if err := ValidateWithinDir(checkPath, getAllowedDir()); err != nil {
 		return "", fmt.Errorf("路径安全检查失败: %w", err)
 	}
 
@@ -117,8 +132,8 @@ func isPathSensitive(path string) bool {
 	cleanLower := strings.ToLower(cleanPath)
 
 	// 展开 HOME 目录
-	homeDir, _ := os.UserHomeDir()
-	if homeDir != "" {
+	homeDir, homeErr := os.UserHomeDir()
+	if homeErr == nil && homeDir != "" {
 		cleanLower = strings.ReplaceAll(cleanLower, strings.ToLower(homeDir), "~")
 	}
 
@@ -136,7 +151,7 @@ func isPathSensitive(path string) bool {
 		// 带 home 匹配
 		if strings.HasPrefix(sensitiveLower, "~") {
 			rest := strings.TrimPrefix(sensitiveLower, "~")
-			if strings.HasSuffix(cleanLower, rest) || strings.Contains(cleanLower, rest) {
+			if strings.HasSuffix(cleanLower, rest) || strings.Contains(cleanLower, string(os.PathSeparator)+rest) {
 				return true
 			}
 		}
@@ -282,14 +297,16 @@ func (t *FileReadTool) Execute(ctx context.Context, args map[string]any) (string
 	selectedLines := lines[startLine-1 : endLine]
 	output := strings.Join(selectedLines, "\n")
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output":     output,
 		"path":       path,
 		"totalLines": len(lines),
 		"startLine":  startLine,
 		"endLine":    endLine,
 	})
-
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
@@ -378,12 +395,14 @@ func (t *FileWriteTool) Execute(ctx context.Context, args map[string]any) (strin
 	}
 
 	slog.Info("file written successfully", "path", path, "size", len(content))
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output":  fmt.Sprintf("文件写入成功: %s (%d 字节)", path, len(content)),
 		"path":    path,
 		"size":    len(content),
 	})
-
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
@@ -490,14 +509,16 @@ func (t *FileEditTool) Execute(ctx context.Context, args map[string]any) (string
 	}
 
 	slog.Info("file edit succeeded", "path", path)
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output": fmt.Sprintf("文件编辑成功: %s (替换了 %d 处)", path, 1),
 		"path":   path,
 		"old_text": oldText,
 		"new_text": newText,
 		"diff":   generateUnifiedDiff(content, newContent, path),
 	})
-
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
@@ -616,12 +637,14 @@ func (t *PatchTool) Execute(ctx context.Context, args map[string]any) (string, e
 	}
 
 	slog.Info("file patch succeeded", "path", path, "replacements", expectedReplacements)
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output":       fmt.Sprintf("文件 patch 成功: %s (替换了 %d 处)", path, expectedReplacements),
 		"path":         path,
 		"replacements": expectedReplacements,
 	})
-
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
@@ -801,7 +824,8 @@ func (t *FileSearchTool) Execute(ctx context.Context, args map[string]any) (stri
 
 	err := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // 跳过无法访问的文件
+			slog.Warn("file search: skip inaccessible path", "path", path, "error", err)
+			return nil
 		}
 		if info.IsDir() {
 			// 跳过敏感目录
@@ -835,7 +859,7 @@ func (t *FileSearchTool) Execute(ctx context.Context, args map[string]any) (stri
 
 		// 读取文件内容并搜索
 		data, readErr := os.ReadFile(path)
-		if readErr != nil || len(data) > 1<<20 { // 跳过大于 1MB 的文件
+		if readErr != nil || len(data) >= 1<<20 { // 跳过大于等于 1MB 的文件
 			return nil
 		}
 
@@ -905,22 +929,27 @@ func (t *FileSearchTool) Execute(ctx context.Context, args map[string]any) (stri
 	}
 
 	if len(results) == 0 {
-		result, _ := json.Marshal(map[string]any{
+		result, err := json.Marshal(map[string]any{
 			"output":  fmt.Sprintf("在 %s 中未找到匹配 '%s' 的文件", searchPath, pattern),
 			"pattern": pattern,
 			"path":    searchPath,
 			"results": []any{},
 		})
+		if err != nil {
+			return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+		}
 		return string(result), nil
 	}
 
-	resultJSON, _ := json.Marshal(map[string]any{
+	resultJSON, err := json.Marshal(map[string]any{
 		"output":  fmt.Sprintf("在 %s 中找到 %d 个匹配 '%s' 的文件", searchPath, len(results), pattern),
 		"pattern": pattern,
 		"path":    searchPath,
 		"results": results,
 	})
-
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(resultJSON), nil
 }
 

@@ -142,7 +142,10 @@ var camofoxClient = &http.Client{Timeout: 60 * time.Second}
 
 // camofoxPost POST 请求。
 func camofoxPost(ctx context.Context, url string, body map[string]any, timeout time.Duration) ([]byte, error) {
-	bodyBytes, _ := json.Marshal(body)
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求体失败: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -150,12 +153,7 @@ func camofoxPost(ctx context.Context, url string, body map[string]any, timeout t
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := camofoxClient
-	if timeout > 0 {
-		client = &http.Client{Timeout: timeout}
-	}
-
-	resp, err := client.Do(req)
+	resp, err := camofoxClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 	}
@@ -167,7 +165,8 @@ func camofoxPost(ctx context.Context, url string, body map[string]any, timeout t
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("CamoFox 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		slog.Warn("CamoFox API error", "status", resp.StatusCode, "body", string(respBody))
+		return nil, fmt.Errorf("CamoFox 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	return respBody, nil
@@ -189,51 +188,7 @@ func camofoxGet(ctx context.Context, url string, params map[string]string, timeo
 		return nil, err
 	}
 
-	client := camofoxClient
-	if timeout > 0 {
-		client = &http.Client{Timeout: timeout}
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("CamoFox 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	return respBody, nil
-}
-
-// camofoxGetRaw GET 请求返回原始响应。
-func camofoxGetRaw(ctx context.Context, url string, params map[string]string, timeout time.Duration) ([]byte, error) {
-	// 构建查询参数
-	if len(params) > 0 {
-		vals := nurl.Values{}
-		for key, value := range params {
-			vals.Set(key, value)
-		}
-		url = url + "?" + vals.Encode()
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	client := camofoxClient
-	if timeout > 0 {
-		client = &http.Client{Timeout: timeout}
-	}
-
-	resp, err := client.Do(req)
+	resp, err := camofoxClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 	}
@@ -258,12 +213,7 @@ func camofoxDelete(ctx context.Context, url string, timeout time.Duration) ([]by
 		return nil, err
 	}
 
-	client := camofoxClient
-	if timeout > 0 {
-		client = &http.Client{Timeout: timeout}
-	}
-
-	resp, err := client.Do(req)
+	resp, err := camofoxClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 	}
@@ -275,7 +225,41 @@ func camofoxDelete(ctx context.Context, url string, timeout time.Duration) ([]by
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("CamoFox 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("CamoFox 错误 (HTTP %d)", resp.StatusCode)
+	}
+
+	return respBody, nil
+}
+
+// camofoxGetRaw GET 请求返回原始二进制响应 (5MB 限制)。
+// 不在错误信息中包含响应体，避免泄露敏感数据。
+func camofoxGetRaw(ctx context.Context, url string, params map[string]string, timeout time.Duration) ([]byte, error) {
+	if len(params) > 0 {
+		vals := nurl.Values{}
+		for key, value := range params {
+			vals.Set(key, value)
+		}
+		url = url + "?" + vals.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := camofoxClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("CamoFox 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	return respBody, nil
@@ -770,10 +754,14 @@ func (t *CamofoxVisionTool) Execute(ctx context.Context, args map[string]any) (s
 	// 保存截图
 	homeDir, _ := os.UserHomeDir()
 	screenshotsDir := filepath.Join(homeDir, ".nexus", "browser_screenshots")
-	os.MkdirAll(screenshotsDir, 0755)
+	if err := os.MkdirAll(screenshotsDir, 0755); err != nil {
+		return ToolError(fmt.Sprintf("创建截图目录失败: %v", err)), nil
+	}
 
 	screenshotPath := filepath.Join(screenshotsDir, fmt.Sprintf("browser_screenshot_%s.png", uuid.New().String()[:8]))
-	os.WriteFile(screenshotPath, screenshot, 0644)
+	if err := os.WriteFile(screenshotPath, screenshot, 0644); err != nil {
+		return ToolError(fmt.Sprintf("保存截图失败: %v", err)), nil
+	}
 
 	// 编码为 base64
 	imgB64 := base64.StdEncoding.EncodeToString(screenshot)

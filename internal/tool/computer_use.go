@@ -20,10 +20,10 @@ func cuLook(name string) bool {
 	return err == nil
 }
 // cuRun 执行命令并返回输出。
-// 安全说明: 使用 exec.Command 参数分离方式传递参数，参数不会经过 shell 解释，
+// 安全说明: 使用 exec.CommandContext 参数分离方式传递参数，参数不会经过 shell 解释，
 // 因此 shell 注入风险已消除。不应改用 sh -c 形式调用。
-func cuRun(name string, args ...string) (string, error) {
-	out, err := exec.Command(name, args...).CombinedOutput()
+func cuRun(ctx context.Context, name string, args ...string) (string, error) {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 	return string(out), err
 }
 func cuFloat(args map[string]any, k string) float64 {
@@ -181,7 +181,7 @@ func (t *ScreenshotTool) Schema() *ToolSchema {
 		},
 	}}
 }
-func (t *ScreenshotTool) Execute(_ context.Context, args map[string]any) (string, error) {
+func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	path := getStringFromArgs(args, "path")
 	if path == "" {
 		path = fmt.Sprintf("%s/screenshot_%d.png", os.TempDir(), os.Getpid())
@@ -198,17 +198,17 @@ func (t *ScreenshotTool) Execute(_ context.Context, args map[string]any) (string
 				`$g=[System.Drawing.Graphics]::FromImage($b);`+
 				`$g.CopyFromScreen($s.Location,[System.Drawing.Point]::Empty,$s.Size);`+
 				`$b.Save('%s');$g.Dispose();$b.Dispose()`, safePath)
-		_, err = cuRun("powershell", "-NoProfile", "-Command", ps)
+		_, err = cuRun(ctx, "powershell", "-NoProfile", "-Command", ps)
 	case "darwin":
-		_, err = cuRun("screencapture", "-x", path)
+		_, err = cuRun(ctx, "screencapture", "-x", path)
 	case "linux":
 		switch {
 		case cuLook("gnome-screenshot"):
-			_, err = cuRun("gnome-screenshot", "-f", path)
+			_, err = cuRun(ctx, "gnome-screenshot", "-f", path)
 		case cuLook("scrot"):
-			_, err = cuRun("scrot", path)
+			_, err = cuRun(ctx, "scrot", path)
 		case cuLook("import"):
-			_, err = cuRun("import", "-window", "root", path)
+			_, err = cuRun(ctx, "import", "-window", "root", path)
 		default:
 			return ToolError("未找到截图工具 (需要 gnome-screenshot/scrot/imagemagick)"), nil
 		}
@@ -241,7 +241,7 @@ func (t *MouseClickTool) Schema() *ToolSchema {
 		}, "required": []string{"x", "y"},
 	}}
 }
-func (t *MouseClickTool) Execute(_ context.Context, args map[string]any) (string, error) {
+func (t *MouseClickTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	x, y := int(cuFloat(args, "x")), int(cuFloat(args, "y"))
 	button := getStringFromArgs(args, "button")
 	if button == "" {
@@ -263,28 +263,28 @@ func (t *MouseClickTool) Execute(_ context.Context, args map[string]any) (string
 				`Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;`+
 				`public class M{[DllImport("user32.dll")]public static extern void mouse_event(int f,int a,int b,int c,int d);}';`+
 				`[M]::mouse_event(%s,0,0,0,0);[M]::mouse_event(%s,0,0,0,0)`, x, y, down, up)
-		_, err = cuRun("powershell", "-NoProfile", "-Command", ps)
+		_, err = cuRun(ctx, "powershell", "-NoProfile", "-Command", ps)
 	case "darwin":
 		if cuLook("cliclick") {
 			flag := "-c"
 			if button == "right" {
 				flag = "-rc"
 			}
-			_, err = cuRun("cliclick", flag, fmt.Sprintf("%d,%d", x, y))
+			_, err = cuRun(ctx, "cliclick", flag, fmt.Sprintf("%d,%d", x, y))
 		} else {
 			verb := "click"
 			if button == "right" {
 				verb = "right click"
 			}
-			_, err = cuRun("osascript", "-e", fmt.Sprintf(`tell application "System Events" to %s at {%d, %d}`, verb, x, y))
+			_, err = cuRun(ctx, "osascript", "-e", fmt.Sprintf(`tell application "System Events" to %s at {%d, %d}`, verb, x, y))
 		}
 	case "linux":
 		btn := "1"
 		if button == "right" {
 			btn = "3"
 		}
-		_, _ = cuRun("xdotool", "mousemove", strconv.Itoa(x), strconv.Itoa(y))
-		_, err = cuRun("xdotool", "click", btn)
+		_, _ = cuRun(ctx, "xdotool", "mousemove", strconv.Itoa(x), strconv.Itoa(y))
+		_, err = cuRun(ctx, "xdotool", "click", btn)
 	default:
 		return ToolError(fmt.Sprintf("不支持的操作系统: %s", cuOS())), nil
 	}
@@ -313,7 +313,7 @@ func (t *MouseMoveTool) Schema() *ToolSchema {
 		}, "required": []string{"x", "y"},
 	}}
 }
-func (t *MouseMoveTool) Execute(_ context.Context, args map[string]any) (string, error) {
+func (t *MouseMoveTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	x, y := int(cuFloat(args, "x")), int(cuFloat(args, "y"))
 	if x < 0 || y < 0 {
 		return ToolError("坐标不能为负数"), nil
@@ -321,16 +321,16 @@ func (t *MouseMoveTool) Execute(_ context.Context, args map[string]any) (string,
 	var err error
 	switch cuOS() {
 	case "windows":
-		_, err = cuRun("powershell", "-NoProfile", "-Command",
+		_, err = cuRun(ctx, "powershell", "-NoProfile", "-Command",
 			fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms;[System.Windows.Forms.Cursor]::Position=New-Object System.Drawing.Point(%d,%d)`, x, y))
 	case "darwin":
 		if cuLook("cliclick") {
-			_, err = cuRun("cliclick", "m", fmt.Sprintf("%d,%d", x, y))
+			_, err = cuRun(ctx, "cliclick", "m", fmt.Sprintf("%d,%d", x, y))
 		} else {
-			_, err = cuRun("osascript", "-e", fmt.Sprintf(`tell application "System Events" to set cursor to {%d, %d}`, x, y))
+			_, err = cuRun(ctx, "osascript", "-e", fmt.Sprintf(`tell application "System Events" to set cursor to {%d, %d}`, x, y))
 		}
 	case "linux":
-		_, err = cuRun("xdotool", "mousemove", strconv.Itoa(x), strconv.Itoa(y))
+		_, err = cuRun(ctx, "xdotool", "mousemove", strconv.Itoa(x), strconv.Itoa(y))
 	default:
 		return ToolError(fmt.Sprintf("不支持的操作系统: %s", cuOS())), nil
 	}
@@ -358,7 +358,7 @@ func (t *TypeTextTool) Schema() *ToolSchema {
 		}, "required": []string{"text"},
 	}}
 }
-func (t *TypeTextTool) Execute(_ context.Context, args map[string]any) (string, error) {
+func (t *TypeTextTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	text := getStringFromArgs(args, "text")
 	if text == "" {
 		return ToolError("参数 text 是必填项且不能为空"), nil
@@ -366,13 +366,13 @@ func (t *TypeTextTool) Execute(_ context.Context, args map[string]any) (string, 
 	var err error
 	switch cuOS() {
 	case "windows":
-		_, err = cuRun("powershell", "-NoProfile", "-Command",
+		_, err = cuRun(ctx, "powershell", "-NoProfile", "-Command",
 			fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms;[System.Windows.Forms.SendKeys]::SendWait('%s')`, cuEsc(text)))
 	case "darwin":
 		esc := strings.ReplaceAll(strings.ReplaceAll(text, `\`, `\\`), `"`, `\"`)
-		_, err = cuRun("osascript", "-e", fmt.Sprintf(`tell application "System Events" to keystroke "%s"`, esc))
+		_, err = cuRun(ctx, "osascript", "-e", fmt.Sprintf(`tell application "System Events" to keystroke "%s"`, esc))
 	case "linux":
-		_, err = cuRun("xdotool", "type", "--clearmodifiers", cuEsc(text))
+		_, err = cuRun(ctx, "xdotool", "type", "--clearmodifiers", cuEsc(text))
 	default:
 		return ToolError(fmt.Sprintf("不支持的操作系统: %s", cuOS())), nil
 	}
@@ -400,7 +400,7 @@ func (t *KeyPressTool) Schema() *ToolSchema {
 		}, "required": []string{"key"},
 	}}
 }
-func (t *KeyPressTool) Execute(_ context.Context, args map[string]any) (string, error) {
+func (t *KeyPressTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	key := getStringFromArgs(args, "key")
 	if key == "" {
 		return ToolError("参数 key 是必填项"), nil
@@ -409,14 +409,14 @@ func (t *KeyPressTool) Execute(_ context.Context, args map[string]any) (string, 
 	var err error
 	switch cuOS() {
 	case "windows":
-		_, err = cuRun("powershell", "-NoProfile", "-Command",
+		_, err = cuRun(ctx, "powershell", "-NoProfile", "-Command",
 			fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms;[System.Windows.Forms.SendKeys]::SendWait('%s')`, cuWinKey(parts)))
 	case "darwin":
-		_, err = cuRun("osascript", "-e", fmt.Sprintf(
+		_, err = cuRun(ctx, "osascript", "-e", fmt.Sprintf(
 			`tell application "System Events" to keystroke "%s"%s`,
 			cuMacKey(parts[len(parts)-1]), cuMacMods(parts[:len(parts)-1])))
 	case "linux":
-		_, err = cuRun("xdotool", "key", cuXdoSeq(parts))
+		_, err = cuRun(ctx, "xdotool", "key", cuXdoSeq(parts))
 	default:
 		return ToolError(fmt.Sprintf("不支持的操作系统: %s", cuOS())), nil
 	}

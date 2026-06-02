@@ -160,7 +160,8 @@ func (r *SWERunner) executeToolCall(ctx context.Context, tc llm.ToolCall) string
 		Timeout: sweDefaultTimeout,
 	})
 	if err != nil {
-		return fmt.Sprintf(`{"error": "%s"}`, err.Error())
+		errJSON, _ := json.Marshal(err.Error())
+		return fmt.Sprintf(`{"error": %s}`, string(errJSON))
 	}
 
 	output := result.Stdout + result.Stderr
@@ -279,6 +280,9 @@ func ReadTrajectoriesJSONL(path string) ([]Trajectory, error) {
 		if json.Unmarshal(scanner.Bytes(), &t) == nil {
 			results = append(results, t)
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return results, fmt.Errorf("读取 JSONL 文件出错: %w", err)
 	}
 	return results, nil
 }

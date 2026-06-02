@@ -20,6 +20,14 @@ import (
 
 // ───────────────────────────── Slack 适配器 ─────────────────────────────
 
+// slackEnvelope 是 Socket Mode 信封格式。
+type slackEnvelope struct {
+	Type            string          `json:"type"`
+	EnvelopeID      string          `json:"envelope_id"`
+	Payload         json.RawMessage `json:"payload"`
+	AcceptsResponse bool            `json:"accepts_response"`
+}
+
 // SlackAdapter 实现 Slack Socket Mode 适配器。
 // 使用 Socket Mode 接收事件，通过 chat.postMessage/chat.update 发送消息。
 type SlackAdapter struct {
@@ -206,10 +214,17 @@ func (s *SlackAdapter) socketLoop(ctx context.Context) {
 			}
 			continue
 		}
-
-		<-ctx.Done()
 		s.closeSocket()
-		return
+
+		if s.stopped.Load() {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(3 * time.Second):
+		}
 	}
 }
 
@@ -247,12 +262,7 @@ func (s *SlackAdapter) socketEventLoop(ctx context.Context, conn *websocket.Conn
 			return fmt.Errorf("read message: %w", err)
 		}
 
-		var envelope struct {
-			Type     string          `json:"type"`
-			EnvelopeID string        `json:"envelope_id"`
-			Payload  json.RawMessage `json:"payload"`
-			AcceptsResponse bool     `json:"accepts_response"`
-		}
+		var envelope slackEnvelope
 		if err := json.Unmarshal(msgBytes, &envelope); err != nil {
 			slog.Warn("slack socket parse error", "err", err)
 			continue
@@ -273,19 +283,18 @@ func (s *SlackAdapter) socketEventLoop(ctx context.Context, conn *websocket.Conn
 }
 
 // handleEventsAPI 处理 Events API 事件。
-func (s *SlackAdapter) handleEventsAPI(envelope *struct {
-	Type     string          `json:"type"`
-	EnvelopeID string        `json:"envelope_id"`
-	Payload  json.RawMessage `json:"payload"`
-	AcceptsResponse bool     `json:"accepts_response"`
-}, conn *websocket.Conn) {
+func (s *SlackAdapter) handleEventsAPI(envelope *slackEnvelope, conn *websocket.Conn) {
 	// 先发送确认
 	if envelope.EnvelopeID != "" {
 		ack := map[string]any{
 			"envelope_id": envelope.EnvelopeID,
 		}
-		data, _ := json.Marshal(ack)
-		_ = conn.WriteMessage(websocket.TextMessage, data)
+		data, err := json.Marshal(ack)
+		if err != nil {
+			slog.Warn("slack: failed to marshal ack", "error", err)
+		} else if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			slog.Warn("slack: failed to send ack", "envelope_id", envelope.EnvelopeID, "error", err)
+		}
 	}
 
 	// 解析事件
@@ -362,7 +371,9 @@ func (s *SlackAdapter) getSocketURL(ctx context.Context) (string, error) {
 		OK  bool   `json:"ok"`
 		URL string `json:"url"`
 	}
-	json.Unmarshal(resp, &result)
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return "", fmt.Errorf("slack: failed to parse connections.open response: %w", err)
+	}
 	if !result.OK {
 		return "", fmt.Errorf("slack apps.connections.open failed")
 	}

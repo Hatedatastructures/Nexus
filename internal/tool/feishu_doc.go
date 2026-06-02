@@ -84,7 +84,10 @@ func (c *DefaultFeishuClient) GetTenantAccessToken(ctx context.Context) (string,
 		"app_id":     c.appID,
 		"app_secret": c.appSecret,
 	}
-	bodyBytes, _ := json.Marshal(body)
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+	return "", fmt.Errorf("序列化请求体失败: %w", err)
+	}
 
 	url := c.baseURL + "/open-apis/auth/v3/tenant_access_token/internal"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytesReader(bodyBytes))
@@ -161,7 +164,7 @@ func (c *DefaultFeishuClient) Request(ctx context.Context, method, uri string, b
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("飞书 API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("飞书 API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	return respBody, nil

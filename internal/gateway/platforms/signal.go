@@ -5,17 +5,18 @@ package platforms
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 )
 
 // ───────────────────────────── 常量 ─────────────────────────────
@@ -40,20 +41,16 @@ type SignalAdapter struct {
 	// HTTP 客户端
 	httpClient *http.Client
 
-	// SSE 连接
-	conn      *websocket.Conn
 	running   bool
-	connected bool
 	msgCh     chan *MessageEvent
 
 	// 并发控制
 	mu          sync.Mutex
 	closeOnce   sync.Once
 	dedup       *signalDeduplicator
-	sentTimestamps map[int64]bool
+	sentTimestamps map[int64]time.Time
 
 	// 群信息缓存
-	groupInfoCache map[string]*SignalGroupInfo
 }
 
 // SignalGroupInfo 群信息。
@@ -114,8 +111,7 @@ func NewSignalAdapter(messageHandler func(*MessageEvent)) *SignalAdapter {
 		messageHandler: messageHandler,
 		httpClient:     &http.Client{Timeout: signalRequestTimeout},
 		dedup:          newSignalDeduplicator(signalDedupMaxSize),
-		sentTimestamps: make(map[int64]bool),
-		groupInfoCache: make(map[string]*SignalGroupInfo),
+		sentTimestamps: make(map[int64]time.Time),
 	}
 }
 
@@ -129,7 +125,6 @@ func (a *SignalAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, erro
 
 	a.mu.Lock()
 	a.running = true
-	a.connected = true
 	a.mu.Unlock()
 
 	// 创建消息通道
@@ -147,11 +142,9 @@ func (a *SignalAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, erro
 func (a *SignalAdapter) Disconnect(ctx context.Context) error {
 	a.mu.Lock()
 	a.running = false
-	a.connected = false
 	a.mu.Unlock()
 
-	a.closeOnce.Do(func() { close(a.msgCh) })
-
+	// sseListener 退出时负责关闭 msgCh，这里不再重复关闭
 	slog.Info("[Signal] disconnected")
 	return nil
 }
@@ -160,13 +153,14 @@ func (a *SignalAdapter) Disconnect(ctx context.Context) error {
 
 // sseListener SSE 消息监听。
 func (a *SignalAdapter) sseListener(ctx context.Context, msgCh chan *MessageEvent) {
+	defer a.closeOnce.Do(func() { close(a.msgCh) })
+
 	for {
 		a.mu.Lock()
 		running := a.running
 		a.mu.Unlock()
 
 		if !running {
-			a.closeOnce.Do(func() { close(a.msgCh) })
 			return
 		}
 
@@ -182,6 +176,13 @@ func (a *SignalAdapter) sseListener(ctx context.Context, msgCh chan *MessageEven
 			case <-time.After(5 * time.Second):
 			}
 			continue
+		}
+
+		// 检查 ctx 取消，避免在 ctx 已取消时发起请求
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 
 		req.Header.Set("Accept", "text/event-stream")
@@ -280,7 +281,7 @@ func (a *SignalAdapter) handleEnvelope(envelope map[string]any) *MessageEvent {
 		chatType = "group"
 
 		// 去除群聊中的 @mention
-		text = strings.Replace(text, "@"+a.account, "", -1)
+		text = strings.ReplaceAll(text, "@"+a.account, "")
 		text = strings.TrimSpace(text)
 	}
 
@@ -333,7 +334,8 @@ func (a *SignalAdapter) handleEnvelope(envelope map[string]any) *MessageEvent {
 func (a *SignalAdapter) isSentTimestamp(ts int64) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.sentTimestamps[ts]
+	_, exists := a.sentTimestamps[ts]
+	return exists
 }
 
 // markSentTimestamp 记录发送时间戳。
@@ -341,17 +343,14 @@ func (a *SignalAdapter) markSentTimestamp(ts int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	a.sentTimestamps[ts] = true
+	a.sentTimestamps[ts] = time.Now()
 
-	// 清理超过上限的条目：删除超过一半的旧记录
+	// 清理过期条目
 	if len(a.sentTimestamps) > signalDedupMaxSize {
-		deleteCount := len(a.sentTimestamps) / 2
-		deleted := 0
-		for key := range a.sentTimestamps {
-			delete(a.sentTimestamps, key)
-			deleted++
-			if deleted >= deleteCount {
-				break
+		now := time.Now()
+		for key, t := range a.sentTimestamps {
+			if now.Sub(t) > 10*time.Minute {
+				delete(a.sentTimestamps, key)
 			}
 		}
 	}
@@ -400,10 +399,12 @@ func (a *SignalAdapter) Send(ctx context.Context, chatID string, content string,
 }
 
 // convertMarkdownToSignal 转换 Markdown 为 Signal 样式。
+
 func (a *SignalAdapter) convertMarkdownToSignal(content string) (string, []map[string]any) {
 	var bodyRanges []map[string]any
 	var result strings.Builder
 	runes := []rune(content)
+	runePos := 0
 	i := 0
 	for i < len(runes) {
 		// Bold: **text**
@@ -411,11 +412,14 @@ func (a *SignalAdapter) convertMarkdownToSignal(content string) (string, []map[s
 			end := strings.Index(string(runes[i+2:]), "**")
 			if end != -1 {
 				end += i + 2
-				start := result.Len()
-				result.WriteString(string(runes[i+2 : end]))
+				start := runePos
+				text := string(runes[i+2 : end])
+				result.WriteString(text)
+				textRunes := len([]rune(text))
+				runePos += textRunes
 				bodyRanges = append(bodyRanges, map[string]any{
 					"start":  start,
-					"length": end - i - 2,
+					"length": textRunes,
 					"style":  "BOLD",
 				})
 				i = end + 2
@@ -431,11 +435,14 @@ func (a *SignalAdapter) convertMarkdownToSignal(content string) (string, []map[s
 			end := strings.Index(string(runes[i+1:]), "*")
 			if end != -1 {
 				end += i + 1
-				start := result.Len()
-				result.WriteString(string(runes[i+1 : end]))
+				start := runePos
+				text := string(runes[i+1 : end])
+				result.WriteString(text)
+				textRunes := len([]rune(text))
+				runePos += textRunes
 				bodyRanges = append(bodyRanges, map[string]any{
 					"start":  start,
-					"length": end - i - 1,
+					"length": textRunes,
 					"style":  "ITALIC",
 				})
 				i = end + 1
@@ -443,6 +450,7 @@ func (a *SignalAdapter) convertMarkdownToSignal(content string) (string, []map[s
 			}
 		}
 		result.WriteRune(runes[i])
+		runePos++
 		i++
 	}
 	return result.String(), bodyRanges
@@ -475,14 +483,18 @@ func (a *SignalAdapter) SendTyping(ctx context.Context, chatID string) error {
 
 // rpc 调用 JSON-RPC 2.0。
 func (a *SignalAdapter) rpc(ctx context.Context, method string, params map[string]any) (map[string]any, error) {
+	rpcID, _ := rand.Int(rand.Reader, big.NewInt(1<<62))
 	reqBody := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  method,
 		"params":  params,
-		"id":      fmt.Sprintf("%d", time.Now().UnixNano()),
+		"id":      rpcID.String(),
 	}
 
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("序列化 RPC 请求失败: %w", err)
+	}
 
 	url := a.httpURL + "/api/v1/rpc"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
@@ -504,7 +516,7 @@ func (a *SignalAdapter) rpc(ctx context.Context, method string, params map[strin
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("RPC 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("RPC 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var result map[string]any

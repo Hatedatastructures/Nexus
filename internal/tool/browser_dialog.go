@@ -150,14 +150,16 @@ func (t *BrowserHandleDialogTool) Execute(ctx context.Context, args map[string]a
 		return ToolError(fmt.Sprintf("处理对话框失败: %v", err)), nil
 	}
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output":      fmt.Sprintf("已处理对话框: %s", action),
 		"type":        info.Type,
 		"message":     info.Message,
 		"action":      action,
 		"prompt_text": promptText,
 	})
-
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 	return string(result), nil
 }
 
@@ -187,7 +189,10 @@ func handleDialogViaCDP(ctrlURL string, accept bool, promptText string) error {
 		},
 	}
 
-	data, _ := json.Marshal(params)
+	data, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("序列化 CDP 参数失败: %w", err)
+	}
 	if err := ws.WriteMessage(websocket.TextMessage, data); err != nil {
 		return fmt.Errorf("发送 CDP 命令失败: %w", err)
 	}

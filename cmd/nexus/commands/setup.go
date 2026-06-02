@@ -173,7 +173,12 @@ func saveConfig(path string, content string) error {
 		return err
 	}
 
-	return os.WriteFile(path, []byte(content), 0644)
+	// 原子写入: 先写临时文件，再 rename，权限 0600 防止 API Key 泄露
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func init() {

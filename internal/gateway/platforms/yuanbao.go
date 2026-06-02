@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
+	"crypto/rand"
 
 	"github.com/gorilla/websocket"
 )
@@ -30,28 +30,31 @@ const (
 	yuanbaoAuthTimeout       = 10 * time.Second
 	yuanbaoMaxReconnect      = 100
 	yuanbaoSendTimeout       = 30 * time.Second
+	yuanbaoCacheMaxSize      = 500
+	yuanbaoPendingMaxSize    = 200
 )
 
 // WebSocket 命令类型 (简化版)
 const (
-	yuanbaoCmdAuthBind    = "AUTH_BIND"
-	yuanbaoCmdPing        = "PING"
-	yuanbaoCmdPong        = "PONG"
-	yuanbaoCmdT05         = "T05" // 接收消息
-	yuanbaoCmdT06         = "T06" // 发送消息
-	yuanbaoCmdHeartbeat   = "HEARTBEAT"
+	yuanbaoCmdAuthBind  = "AUTH_BIND"
+	yuanbaoCmdPing      = "PING"
+	yuanbaoCmdPong      = "PONG"
+	yuanbaoCmdT05       = "T05" // 接收消息
+	yuanbaoCmdT06       = "T06" // 发送消息
+	yuanbaoCmdHeartbeat = "HEARTBEAT"
 )
 
 // ───────────────────────────── YuanbaoAdapter ─────────────────────────────
 
 // YuanbaoAdapter 元宝平台适配器。
 type YuanbaoAdapter struct {
-	appID      string
-	appSecret  string
-	botID      string
-	wsURL      string
-	apiDomain  string
-	messageHandler func(*MessageEvent)
+	appID     string
+	appSecret string
+	botID     string
+	wsURL     string
+	apiDomain string
+
+	// HTTP 客户端 (复用)
 	httpClient *http.Client
 
 	// WebSocket 连接
@@ -60,23 +63,30 @@ type YuanbaoAdapter struct {
 	connected bool
 
 	// 并发控制
-	mu             sync.Mutex
-	writeMu        sync.Mutex
-	pendingResps   map[string]chan map[string]any
-	dedup          *yuanbaoDeduplicator
-	instanceID     string
-	seqNo          int64
+	mu           sync.Mutex
+	writeMu      sync.Mutex
+	pendingResps map[string]chan map[string]any
+	dedup        *yuanbaoDeduplicator
+	instanceID   string
+	seqNo        int64
+	closeOnce    sync.Once
 
-	// 群信息缓存
-	groupInfoCache map[string]*YuanbaoGroupInfo
+	// 群信息缓存 (有界)
+	groupInfoCache map[string]*yuanbaoCacheEntry
+}
+
+// yuanbaoCacheEntry 带过期时间的缓存条目。
+type yuanbaoCacheEntry struct {
+	info      *YuanbaoGroupInfo
+	expiresAt time.Time
 }
 
 // YuanbaoGroupInfo 群信息。
 type YuanbaoGroupInfo struct {
-	GroupCode    string `json:"group_code"`
-	GroupName    string `json:"group_name"`
-	MemberCount  int    `json:"member_count"`
-	OwnerID      string `json:"owner_id"`
+	GroupCode   string `json:"group_code"`
+	GroupName   string `json:"group_name"`
+	MemberCount int    `json:"member_count"`
+	OwnerID     string `json:"owner_id"`
 }
 
 // YuanbaoMember 群成员。
@@ -122,7 +132,7 @@ func (d *yuanbaoDeduplicator) isDuplicate(msgID string) bool {
 }
 
 // NewYuanbaoAdapter 创建元宝适配器。
-func NewYuanbaoAdapter(appID, appSecret string, messageHandler func(*MessageEvent)) *YuanbaoAdapter {
+func NewYuanbaoAdapter(appID, appSecret string) *YuanbaoAdapter {
 	wsURL := os.Getenv("YUANBAO_WS_URL")
 	if wsURL == "" {
 		wsURL = yuanbaoDefaultWSURL
@@ -134,17 +144,16 @@ func NewYuanbaoAdapter(appID, appSecret string, messageHandler func(*MessageEven
 	}
 
 	return &YuanbaoAdapter{
-		appID:           appID,
-		appSecret:       appSecret,
+		appID:          appID,
+		appSecret:      appSecret,
 		httpClient:     &http.Client{Timeout: 30 * time.Second},
-		wsURL:           wsURL,
-		apiDomain:       apiDomain,
-		messageHandler:  messageHandler,
-		pendingResps:    make(map[string]chan map[string]any),
-		dedup:           newYuanbaoDeduplicator(1000),
-		instanceID:      uuid.New().String(),
-		seqNo:           0,
-		groupInfoCache:  make(map[string]*YuanbaoGroupInfo),
+		wsURL:          wsURL,
+		apiDomain:      apiDomain,
+		pendingResps:   make(map[string]chan map[string]any),
+		dedup:          newYuanbaoDeduplicator(1000),
+		instanceID:     generateCryptoID(),
+		seqNo:          0,
+		groupInfoCache: make(map[string]*yuanbaoCacheEntry),
 	}
 }
 
@@ -194,11 +203,12 @@ func (a *YuanbaoAdapter) Disconnect(ctx context.Context) error {
 	a.mu.Lock()
 	a.running = false
 	a.connected = false
+	conn := a.conn
+	a.conn = nil
 	a.mu.Unlock()
 
-	if a.conn != nil {
-		a.conn.Close()
-		a.conn = nil
+	if conn != nil {
+		conn.Close()
 	}
 
 	slog.Info("[Yuanbao] disconnected")
@@ -207,14 +217,13 @@ func (a *YuanbaoAdapter) Disconnect(ctx context.Context) error {
 
 // getSignToken 获取认证 token。
 func (a *YuanbaoAdapter) getSignToken(ctx context.Context) (string, string, error) {
-	// 调用 sign-token API
 	body := map[string]any{
-		"app_id":     a.appID,
-		"app_secret": a.appSecret,
+		"app_id":      a.appID,
+		"app_secret":  a.appSecret,
 		"instance_id": a.instanceID,
 	}
 
-	resp, err := a.callAPI(ctx, "/api/sign-token", body, 10*time.Second)
+	resp, err := a.callAPI(ctx, "/api/sign-token", body)
 	if err != nil {
 		return "", "", err
 	}
@@ -245,13 +254,16 @@ func (a *YuanbaoAdapter) openConnection(ctx context.Context, token string) (*web
 
 	// 发送 AUTH_BIND
 	authReq := map[string]any{
-		"cmd":       yuanbaoCmdAuthBind,
-		"token":     token,
+		"cmd":         yuanbaoCmdAuthBind,
+		"token":       token,
 		"instance_id": a.instanceID,
-		"seq_no":    a.nextSeqNo(),
+		"seq_no":      a.nextSeqNo(),
 	}
 
-	if err := conn.WriteJSON(authReq); err != nil {
+	a.writeMu.Lock()
+	err = conn.WriteJSON(authReq)
+	a.writeMu.Unlock()
+	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("发送认证请求失败: %w", err)
 	}
@@ -290,24 +302,24 @@ func (a *YuanbaoAdapter) listenLoop(msgCh chan *MessageEvent) {
 		a.mu.Unlock()
 
 		if !running {
-			close(msgCh)
+			a.closeOnce.Do(func() { close(msgCh) })
 			return
 		}
 
 		if conn == nil {
 			// 尝试重连
 			time.Sleep(5 * time.Second)
-			ctx, cancel := context.WithTimeout(context.Background(), yuanbaoConnectTimeout)
+			reconnectCtx, reconnectCancel := context.WithTimeout(context.Background(), yuanbaoConnectTimeout)
 
-			token, _, err := a.getSignToken(ctx)
-			cancel()
-
+			token, _, err := a.getSignToken(reconnectCtx)
 			if err != nil {
+				reconnectCancel()
 				slog.Warn("[Yuanbao] failed to get token", "err", err)
 				continue
 			}
 
-			newConn, err := a.openConnection(context.Background(), token)
+			newConn, err := a.openConnection(reconnectCtx, token)
+			reconnectCancel()
 			if err != nil {
 				slog.Warn("[Yuanbao] reconnect failed", "err", err)
 				continue
@@ -350,7 +362,6 @@ func (a *YuanbaoAdapter) dispatchPayload(payload map[string]any, msgCh chan *Mes
 
 	switch cmd {
 	case yuanbaoCmdT05:
-		// 接收消息
 		event := a.parseMessage(payload)
 		if event != nil && !a.dedup.isDuplicate(event.MessageID) {
 			select {
@@ -360,10 +371,8 @@ func (a *YuanbaoAdapter) dispatchPayload(payload map[string]any, msgCh chan *Mes
 			}
 		}
 	case yuanbaoCmdPong:
-		// 心跳响应
 		return
 	default:
-		// 检查是否是等待的响应
 		seqNo := getInt(payload, "seq_no", 0)
 		if seqNo > 0 {
 			seqNoStr := fmt.Sprintf("%d", seqNo)
@@ -389,19 +398,21 @@ func (a *YuanbaoAdapter) parseMessage(payload map[string]any) *MessageEvent {
 
 	msgID := getString(body, "msg_id", "")
 	if msgID == "" {
-		msgID = fmt.Sprintf("%d", time.Now().UnixNano())
+		b := make([]byte, 8)
+		if _, err := rand.Read(b); err == nil {
+			msgID = fmt.Sprintf("%x", b)
+		} else {
+			msgID = fmt.Sprintf("%d", time.Now().UnixNano())
+		}
 	}
 
-	// 提取发送者信息
 	fromUser := getMap(body, "from_user")
 	userID := getString(fromUser, "user_id", "")
 
-	// 提取聊天信息
 	chatID := getString(body, "chat_id", userID)
 	chatType := getString(body, "chat_type", "c2c")
 	isGroup := chatType == "group"
 
-	// 提取文本
 	text := ""
 	msgType := getString(body, "msg_type", "text")
 	if msgType == "text" {
@@ -413,7 +424,6 @@ func (a *YuanbaoAdapter) parseMessage(payload map[string]any) *MessageEvent {
 		return nil
 	}
 
-	// 去除群聊中的 @mention
 	if isGroup && text != "" {
 		text = strings.TrimSpace(strings.Replace(text, "@"+a.botID, "", 1))
 	}
@@ -491,9 +501,9 @@ func (a *YuanbaoAdapter) Send(ctx context.Context, chatID string, content string
 	}
 
 	req := map[string]any{
-		"cmd":      yuanbaoCmdT06,
-		"seq_no":   seqNo,
-		"chat_id":  chatID,
+		"cmd":       yuanbaoCmdT06,
+		"seq_no":    seqNo,
+		"chat_id":   chatID,
 		"chat_type": chatType,
 		"msg_type":  "text",
 		"text": map[string]any{
@@ -501,17 +511,26 @@ func (a *YuanbaoAdapter) Send(ctx context.Context, chatID string, content string
 		},
 	}
 
-	// 发送请求并等待响应
+	// 注册 pending response
 	respCh := make(chan map[string]any, 1)
+	seqNoStr := fmt.Sprintf("%d", seqNo)
 	a.mu.Lock()
-	a.pendingResps[fmt.Sprintf("%d", seqNo)] = respCh
+	if len(a.pendingResps) > yuanbaoPendingMaxSize {
+		for k := range a.pendingResps {
+			delete(a.pendingResps, k)
+			if len(a.pendingResps) <= yuanbaoPendingMaxSize/2 {
+				break
+			}
+		}
+	}
+	a.pendingResps[seqNoStr] = respCh
 	a.mu.Unlock()
 
 	a.writeMu.Lock()
 	if err := conn.WriteJSON(req); err != nil {
 		a.writeMu.Unlock()
 		a.mu.Lock()
-		delete(a.pendingResps, fmt.Sprintf("%d", seqNo))
+		delete(a.pendingResps, seqNoStr)
 		a.mu.Unlock()
 		return &SendResult{Success: false, Error: fmt.Sprintf("发送失败: %v", err)}, nil
 	}
@@ -529,7 +548,7 @@ func (a *YuanbaoAdapter) Send(ctx context.Context, chatID string, content string
 
 	case <-time.After(yuanbaoSendTimeout):
 		a.mu.Lock()
-		delete(a.pendingResps, fmt.Sprintf("%d", seqNo))
+		delete(a.pendingResps, seqNoStr)
 		a.mu.Unlock()
 		return &SendResult{Success: false, Error: "发送超时"}, nil
 	}
@@ -537,7 +556,6 @@ func (a *YuanbaoAdapter) Send(ctx context.Context, chatID string, content string
 
 // SendImage 发送图片。
 func (a *YuanbaoAdapter) SendImage(ctx context.Context, chatID string, imageURL string, caption string, opts *SendOptions) (*SendResult, error) {
-	// 元宝需要先上传媒体，简化为发送 URL 文本
 	text := caption
 	if text == "" {
 		text = imageURL
@@ -549,7 +567,6 @@ func (a *YuanbaoAdapter) SendImage(ctx context.Context, chatID string, imageURL 
 
 // SendTyping 发送正在输入指示。
 func (a *YuanbaoAdapter) SendTyping(ctx context.Context, chatID string) error {
-	// 元宝支持 heartbeat 作为 typing 指示
 	return nil
 }
 
@@ -559,19 +576,20 @@ func (a *YuanbaoAdapter) SendTyping(ctx context.Context, chatID string) error {
 func (a *YuanbaoAdapter) QueryGroupInfo(ctx context.Context, groupCode string) (*YuanbaoGroupInfo, error) {
 	// 检查缓存
 	a.mu.Lock()
- cached, exists := a.groupInfoCache[groupCode]
-	a.mu.Unlock()
-
-	if exists {
-		return cached, nil
+	cached, exists := a.groupInfoCache[groupCode]
+	if exists && time.Now().Before(cached.expiresAt) {
+		info := cached.info
+		a.mu.Unlock()
+		return info, nil
 	}
+	a.mu.Unlock()
 
 	// 调用 API
 	body := map[string]any{
 		"group_code": groupCode,
 	}
 
-	resp, err := a.callAPI(ctx, "/api/query-group-info", body, 10*time.Second)
+	resp, err := a.callAPI(ctx, "/api/query-group-info", body)
 	if err != nil {
 		return nil, err
 	}
@@ -588,9 +606,19 @@ func (a *YuanbaoAdapter) QueryGroupInfo(ctx context.Context, groupCode string) (
 		OwnerID:     getString(resp, "owner_id", ""),
 	}
 
-	// 缓存
+	// 缓存 (带 TTL + 有界驱逐)
 	a.mu.Lock()
-	a.groupInfoCache[groupCode] = info
+	if len(a.groupInfoCache) > yuanbaoCacheMaxSize {
+		for k, v := range a.groupInfoCache {
+			if time.Now().After(v.expiresAt) {
+				delete(a.groupInfoCache, k)
+			}
+		}
+	}
+	a.groupInfoCache[groupCode] = &yuanbaoCacheEntry{
+		info:      info,
+		expiresAt: time.Now().Add(10 * time.Minute),
+	}
 	a.mu.Unlock()
 
 	return info, nil
@@ -602,7 +630,7 @@ func (a *YuanbaoAdapter) GetGroupMemberList(ctx context.Context, groupCode strin
 		"group_code": groupCode,
 	}
 
-	resp, err := a.callAPI(ctx, "/api/get-group-member-list", body, 10*time.Second)
+	resp, err := a.callAPI(ctx, "/api/get-group-member-list", body)
 	if err != nil {
 		return nil, err
 	}
@@ -637,9 +665,21 @@ func (a *YuanbaoAdapter) nextSeqNo() int64 {
 	return seq
 }
 
-// callAPI 调用 HTTP API。
-func (a *YuanbaoAdapter) callAPI(ctx context.Context, endpoint string, body map[string]any, timeout time.Duration) (map[string]any, error) {
-	bodyBytes, _ := json.Marshal(body)
+// generateCryptoID 生成加密安全的随机 ID。
+func generateCryptoID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%x", b)
+}
+
+// callAPI 调用 HTTP API (复用 httpClient)。
+func (a *YuanbaoAdapter) callAPI(ctx context.Context, endpoint string, body map[string]any) (map[string]any, error) {
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求体失败: %w", err)
+	}
 
 	url := a.apiDomain + endpoint
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
@@ -650,8 +690,7 @@ func (a *YuanbaoAdapter) callAPI(ctx context.Context, endpoint string, body map[
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.appID+":"+a.appSecret)
 
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
+	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 	}
@@ -663,7 +702,7 @@ func (a *YuanbaoAdapter) callAPI(ctx context.Context, endpoint string, body map[
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var result map[string]any
@@ -676,42 +715,30 @@ func (a *YuanbaoAdapter) callAPI(ctx context.Context, endpoint string, body map[
 
 // ───────────────────────────── 接口实现 ─────────────────────────────
 
-// Name 返回适配器名称。
-func (a *YuanbaoAdapter) Name() string { return "Yuanbao" }
+func (a *YuanbaoAdapter) Name() string            { return "Yuanbao" }
+func (a *YuanbaoAdapter) PlatformType() Platform   { return PlatformYuanbao }
+func (a *YuanbaoAdapter) MaxMessageLength() int     { return 4000 }
+func (a *YuanbaoAdapter) SupportsStreaming() bool   { return true }
 
-// PlatformType 返回平台类型。
-func (a *YuanbaoAdapter) PlatformType() Platform { return PlatformYuanbao }
-
-// EditMessage 编辑消息（元宝不支持）。
 func (a *YuanbaoAdapter) EditMessage(ctx context.Context, chatID string, messageID string, content string) (*SendResult, error) {
 	return &SendResult{Success: false, Error: "元宝不支持编辑消息"}, nil
 }
 
-// DeleteMessage 删除消息（元宝不支持）。
 func (a *YuanbaoAdapter) DeleteMessage(ctx context.Context, chatID string, messageID string) error {
 	return fmt.Errorf("元宝不支持删除消息")
 }
 
-// SendVoice 发送语音。
 func (a *YuanbaoAdapter) SendVoice(ctx context.Context, chatID string, audioPath string, opts *SendOptions) (*SendResult, error) {
 	return &SendResult{Success: false, Error: "元宝语音发送需要媒体上传"}, nil
 }
 
-// SendVideo 发送视频。
 func (a *YuanbaoAdapter) SendVideo(ctx context.Context, chatID string, videoPath string, caption string, opts *SendOptions) (*SendResult, error) {
 	return &SendResult{Success: false, Error: "元宝视频发送需要媒体上传"}, nil
 }
 
-// SendDocument 发送文件。
 func (a *YuanbaoAdapter) SendDocument(ctx context.Context, chatID string, filePath string, caption string, opts *SendOptions) (*SendResult, error) {
 	return &SendResult{Success: false, Error: "元宝文件发送需要媒体上传"}, nil
 }
-
-// MaxMessageLength 返回最大消息长度。
-func (a *YuanbaoAdapter) MaxMessageLength() int { return 4000 }
-
-// SupportsStreaming 返回是否支持流式输出。
-func (a *YuanbaoAdapter) SupportsStreaming() bool { return true }
 
 // ───────────────────────────── 自注册 ─────────────────────────────
 
@@ -719,6 +746,6 @@ func init() {
 	GetRegistry().Register(&AdapterEntry{
 		Platform: PlatformYuanbao,
 		Name:     "Yuanbao",
-		Factory:  func() PlatformAdapter { return NewYuanbaoAdapter("", "", nil) },
+		Factory:  func() PlatformAdapter { return NewYuanbaoAdapter("", "") },
 	})
 }

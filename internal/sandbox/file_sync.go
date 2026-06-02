@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +72,7 @@ func (m *FileSyncManager) Sync() ([]string, error) {
 		relPath, _ := filepath.Rel(m.localRoot, path)
 		hash, err := fileHash(path)
 		if err != nil {
+			slog.Warn("file_sync: skip file with hash error", "path", path, "error", err)
 			return nil
 		}
 
@@ -123,11 +125,15 @@ func (m *FileSyncManager) SyncBack(downloadFn func(remotePath string) (io.ReadCl
 
 		// 确保路径在 localRoot 内
 		absLocal, err := filepath.Abs(localPath)
-			if err != nil {
-				slog.Warn("unable to resolve absolute path", "name", header.Name, "err", err)
-				continue
-			}
-		absRoot, _ := filepath.Abs(m.localRoot)
+		if err != nil {
+			slog.Warn("unable to resolve absolute path", "name", header.Name, "err", err)
+			continue
+		}
+		absRoot, err := filepath.Abs(m.localRoot)
+		if err != nil {
+			slog.Warn("unable to resolve root path", "err", err)
+			continue
+		}
 		rel, err := filepath.Rel(absRoot, absLocal)
 		if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
 			slog.Warn("skipping file outside root directory", "name", header.Name)
@@ -140,6 +146,7 @@ func (m *FileSyncManager) SyncBack(downloadFn func(remotePath string) (io.ReadCl
 		var buf bytes.Buffer
 		limited := io.LimitReader(io.TeeReader(tr, remoteHash), maxTarFileSize)
 		if _, err := io.Copy(&buf, limited); err != nil {
+			slog.Warn("file_sync: failed to read tar entry", "name", header.Name, "err", err)
 			continue
 		}
 		remoteHashHex := fmt.Sprintf("%x", remoteHash.Sum(nil))
@@ -153,10 +160,12 @@ func (m *FileSyncManager) SyncBack(downloadFn func(remotePath string) (io.ReadCl
 
 		// 写入本地文件
 		if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+			slog.Warn("file_sync: failed to create directory", "path", filepath.Dir(localPath), "err", err)
 			continue
 		}
 
 		if err := os.WriteFile(localPath, buf.Bytes(), 0644); err != nil {
+			slog.Warn("file_sync: failed to write file", "path", localPath, "err", err)
 			continue
 		}
 
@@ -193,7 +202,9 @@ func (m *FileSyncManager) CreateTarArchive(files []string, w io.Writer) error {
 		if err != nil {
 			continue
 		}
-		io.Copy(tw, f)
+		if _, err := io.Copy(tw, f); err != nil {
+			slog.Warn("file_sync: failed to write file to tar", "path", relPath, "err", err)
+		}
 		f.Close()
 	}
 
@@ -206,8 +217,13 @@ func (m *FileSyncManager) StateHash() string {
 	defer m.mu.Unlock()
 
 	h := sha256.New()
-	for path, hash := range m.state {
-		fmt.Fprintf(h, "%s:%s\n", path, hash)
+	keys := make([]string, 0, len(m.state))
+	for path := range m.state {
+		keys = append(keys, path)
+	}
+	sort.Strings(keys)
+	for _, path := range keys {
+		fmt.Fprintf(h, "%s:%s\n", path, m.state[path])
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
 }

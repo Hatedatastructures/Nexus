@@ -281,7 +281,7 @@ func (s *SWEEnvironment) handleRunTest(action Action) (*Observation, error) {
 // handleCommit 处理提交动作。
 func (s *SWEEnvironment) handleCommit(action Action) (*Observation, error) {
 	// 推进到提交阶段
-	if s.phase != SWETest && s.phase != SWECommit {
+	if s.phase < SWECommit {
 		s.phase = SWECommit
 	}
 

@@ -243,8 +243,13 @@ func StartOAuthFlow(cfg *OAuthConfig) (*OAuthFlowResult, error) {
 }
 
 // CompleteOAuthFlow 用授权回调中的 code 完成 Token 交换。
-// 返回完整的 OAuthToken。
-func CompleteOAuthFlow(cfg *OAuthConfig, code, state, verifier string) (*OAuthToken, error) {
+// callbackState 是回调返回的 state，expectedState 是发起流程时生成的 state，
+// 二者必须匹配以防止 CSRF 攻击。若 expectedState 为空则跳过校验（不推荐）。
+func CompleteOAuthFlow(cfg *OAuthConfig, code, callbackState, expectedState, verifier string) (*OAuthToken, error) {
+	if expectedState != "" && callbackState != expectedState {
+		return nil, fmt.Errorf("OAuth state 不匹配，可能的 CSRF 攻击")
+	}
+
 	token, err := ExchangeCodeForToken(cfg, code, verifier)
 	if err != nil {
 		return nil, err

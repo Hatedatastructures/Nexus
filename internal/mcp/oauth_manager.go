@@ -15,7 +15,8 @@ import (
 type OAuthManager struct {
 	cfg   *OAuthConfig       // OAuth 配置
 	store *TokenStore        // 持久化存储
-	mu    sync.RWMutex       // 并发保护
+	mu       sync.RWMutex       // 并发保护
+	refreshMu sync.Mutex        // 串行化刷新操作，防止并发刷新竞态
 	token *OAuthToken        // 内存中的令牌缓存
 }
 
@@ -113,9 +114,14 @@ func (m *OAuthManager) IsTokenExpired() (expired, exists bool) {
 	return token.IsExpired(), true
 }
 
+
 // refreshToken 使用刷新令牌获取新的访问令牌。
+// 使用 refreshMu 串行化刷新操作，防止并发刷新导致 TOCTOU 竞态。
 // 刷新成功后自动更新内存缓存和持久化存储。
 func (m *OAuthManager) refreshToken() (*OAuthToken, error) {
+	m.refreshMu.Lock()
+	defer m.refreshMu.Unlock()
+
 	m.mu.RLock()
 	currentToken := m.token
 	m.mu.RUnlock()
@@ -132,17 +138,14 @@ func (m *OAuthManager) refreshToken() (*OAuthToken, error) {
 		return nil, err
 	}
 
-	// 如果服务端没有返回新的刷新令牌，保留旧的
 	if newToken.RefreshToken == "" {
 		newToken.RefreshToken = currentToken.RefreshToken
 	}
 
-	// 更新内存缓存
 	m.mu.Lock()
 	m.token = newToken
 	m.mu.Unlock()
 
-	// 持久化到磁盘
 	if err := m.store.SaveToken(newToken); err != nil {
 		slog.Warn("failed to persist refreshed token", "err", err)
 	}
@@ -153,7 +156,6 @@ func (m *OAuthManager) refreshToken() (*OAuthToken, error) {
 
 	return newToken, nil
 }
-
 // RefreshToken 公开方法：使用刷新令牌获取新的访问令牌（代理到内部 refreshToken）。
 func (m *OAuthManager) RefreshToken() (*OAuthToken, error) {
 	return m.refreshToken()

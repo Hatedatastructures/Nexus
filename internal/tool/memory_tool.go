@@ -161,11 +161,14 @@ func (t *MemoryTool) Execute(ctx context.Context, args map[string]any) (string, 
 	// 无记忆管理器时的降级处理
 	slog.Warn("memory manager not configured, returning placeholder result", "action", action)
 
-	result, _ := json.Marshal(map[string]any{
+	result, err := json.Marshal(map[string]any{
 		"output": fmt.Sprintf("记忆操作 '%s' 已接收。记忆管理器未配置，操作未持久化。", action),
 		"action": action,
 		"status": "degraded",
 	})
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 
 	return string(result), nil
 }

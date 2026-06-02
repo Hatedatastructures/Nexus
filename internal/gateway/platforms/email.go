@@ -4,15 +4,18 @@ package platforms
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/smtp"
 	"net/textproto"
 	"os"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // ───────────────────────────── 常量 ─────────────────────────────
@@ -21,6 +24,8 @@ const (
 	emailDefaultPollInterval = 15 * time.Second
 	emailMaxSeenUIDs         = 2000
 	emailMaxBodySize         = 1024 * 1024 // 1MB
+	emailMaxThreadContext    = 1000
+	emailMaxResponseLines    = 5000
 )
 
 // 自动过滤的发件人模式
@@ -32,16 +37,16 @@ var emailAutoReplyPatterns = []string{
 
 // EmailAdapter Email 平台适配器。
 type EmailAdapter struct {
-	imapHost     string
-	smtpHost     string
-	emailAddress string
+	imapHost      string
+	smtpHost      string
+	emailAddress  string
 	emailPassword string
-	pollInterval time.Duration
+	pollInterval  time.Duration
 	messageHandler func(*MessageEvent)
 
 	// IMAP 客户端（使用 net/textproto 模拟）
-	imapConn     *textproto.Conn
-	smtpAuth     smtp.Auth
+	imapConn *textproto.Conn
+	smtpAuth smtp.Auth
 
 	// 运行状态
 	running   bool
@@ -140,7 +145,7 @@ func (a *EmailAdapter) Disconnect(ctx context.Context) error {
 		a.imapConn = nil
 	}
 
-	a.closeOnce.Do(func() { close(a.msgCh) })
+	// pollLoop 退出时负责关闭 msgCh，这里不再重复关闭
 	slog.Info("[Email] disconnected")
 	return nil
 }
@@ -149,6 +154,8 @@ func (a *EmailAdapter) Disconnect(ctx context.Context) error {
 
 // pollLoop 轮询邮件。
 func (a *EmailAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) {
+	defer a.closeOnce.Do(func() { close(msgCh) })
+
 	ticker := time.NewTicker(a.pollInterval)
 	defer ticker.Stop()
 
@@ -162,7 +169,6 @@ func (a *EmailAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) {
 			a.mu.Unlock()
 
 			if !running {
-				// msgCh 由 Disconnect 通过 closeOnce 关闭
 				return
 			}
 
@@ -181,12 +187,9 @@ func (a *EmailAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) {
 						default:
 							slog.Warn("[Email] message channel full, dropping message")
 						}
-
 					}
 				}
 			}
-		case <-ctx.Done():
-			return
 		}
 	}
 }
@@ -195,14 +198,14 @@ func (a *EmailAdapter) pollLoop(ctx context.Context, msgCh chan *MessageEvent) {
 
 // emailMessage 邮件消息。
 type emailMessage struct {
-	UID       string
-	From      string
-	Subject   string
-	MessageID string
-	InReplyTo string
-	Body      string
+	UID         string
+	From        string
+	Subject     string
+	MessageID   string
+	InReplyTo   string
+	Body        string
 	Attachments []string
-	Date      time.Time
+	Date        time.Time
 }
 
 // fetchUnseen 获取未读邮件。
@@ -287,7 +290,9 @@ func (a *EmailAdapter) connectIMAP() (*textproto.Conn, error) {
 	}
 
 	// 登录
-	tag, err := a.imapCommand(conn, "LOGIN \"%s\" \"%s\"", a.emailAddress, a.emailPassword)
+	sanitizedAddr := sanitizeIMAPString(a.emailAddress)
+	sanitizedPass := sanitizeIMAPString(a.emailPassword)
+	tag, err := a.imapCommand(conn, "LOGIN \"%s\" \"%s\"", sanitizedAddr, sanitizedPass)
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("发送登录命令失败: %w", err)
@@ -302,11 +307,16 @@ func (a *EmailAdapter) connectIMAP() (*textproto.Conn, error) {
 
 // imapCommand 发送 IMAP 命令并返回 tag。
 func (a *EmailAdapter) imapCommand(conn *textproto.Conn, format string, args ...any) (string, error) {
-	tag := fmt.Sprintf("A%04d", time.Now().UnixNano()%10000)
+	randNum, err := rand.Int(rand.Reader, big.NewInt(10000))
+	if err != nil {
+		return "", fmt.Errorf("生成 IMAP tag 失败: %w", err)
+	}
+	tag := fmt.Sprintf("A%04d", randNum.Int64())
 	cmd := fmt.Sprintf(format, args...)
-	// 使用 PrintfLine 发送命令
-	err := conn.PrintfLine("%s %s", tag, cmd)
-	return tag, err
+	if err := conn.PrintfLine("%s %s", tag, cmd); err != nil {
+		return "", err
+	}
+	return tag, nil
 }
 
 // imapReadResponse 读取 IMAP 响应，等待指定 tag 的完成响应。
@@ -319,6 +329,10 @@ func (a *EmailAdapter) imapReadResponse(conn *textproto.Conn, expectedTag string
 		}
 
 		lines = append(lines, line)
+
+		if len(lines) > emailMaxResponseLines {
+			return strings.Join(lines, "\n"), fmt.Errorf("IMAP 响应行数超过限制 (%d)", emailMaxResponseLines)
+		}
 
 		// 检查是否为完成响应 (tag + OK/NO/BAD)
 		if strings.HasPrefix(line, expectedTag+" ") {
@@ -356,13 +370,20 @@ func (a *EmailAdapter) parseMessage(msg emailMessage) *MessageEvent {
 			MessageID: msg.MessageID,
 			InReplyTo: msg.InReplyTo,
 		}
+		if len(a.threadContext) > emailMaxThreadContext {
+			for k := range a.threadContext {
+				delete(a.threadContext, k)
+				break
+			}
+		}
 		a.threadMu.Unlock()
 	}
 
-	// 截断过长的邮件正文
+	// 截断过长的邮件正文（rune 安全）
 	body := msg.Body
-	if len(body) > emailMaxBodySize {
-		body = body[:emailMaxBodySize]
+	if utf8.RuneCountInString(body) > emailMaxBodySize {
+		runes := []rune(body)
+		body = string(runes[:min(len(runes), emailMaxBodySize)])
 	}
 
 	return &MessageEvent{
@@ -437,6 +458,13 @@ func (a *EmailAdapter) fetchMessage(conn *textproto.Conn, uid string) (emailMess
 	var msg emailMessage
 	msg.UID = uid
 
+	// 验证 UID 仅包含数字，防止 IMAP 注入
+	for _, r := range uid {
+		if r < '0' || r > '9' {
+			return msg, fmt.Errorf("非法 UID 字符: %q", r)
+		}
+	}
+
 	// 获取邮件头部和正文
 	tag, err := a.imapCommand(conn, "FETCH %s (BODY.PEEK[])", uid)
 	if err != nil {
@@ -491,4 +519,13 @@ func (a *EmailAdapter) fetchMessage(conn *textproto.Conn, uid string) (emailMess
 	msg.Date = time.Now()
 
 	return msg, nil
+}
+
+// sanitizeIMAPString 清洗 IMAP 协议字符串，移除注入风险的字符。
+func sanitizeIMAPString(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	return s
 }

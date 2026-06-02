@@ -216,7 +216,7 @@ func (t *BrowserCDPTool) Execute(ctx context.Context, args map[string]any) (stri
 	timeout := time.Duration(timeoutSec * float64(time.Second))
 
 	// 确保浏览器已启动
-	if err := ensureBrowser(); err != nil {
+	if err := ensureBrowser(ctx); err != nil {
 		return ToolError(fmt.Sprintf("浏览器不可用: %v", err)), nil
 	}
 

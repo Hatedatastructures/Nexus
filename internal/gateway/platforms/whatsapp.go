@@ -5,12 +5,16 @@ package platforms
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -23,10 +27,12 @@ type WhatsAppAdapter struct {
 	token       string             // 访问令牌 (系统用户或用户令牌)
 	phoneID     string             // 电话号码 ID
 	verifyToken string             // Webhook 验证令牌
+	appSecret   string             // App Secret (用于 Webhook 签名验证)
 	client      *http.Client       // HTTP 客户端
 	baseURL     string             // API 基础 URL
 	msgCh       chan *MessageEvent // 入站消息通道
 	closeOnce   sync.Once          // 确保 msgCh 只关闭一次
+	mu          sync.RWMutex       // 保护 msgCh 关闭与发送
 }
 
 // NewWhatsAppAdapter 创建 WhatsApp 适配器。
@@ -63,7 +69,9 @@ func (w *WhatsAppAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, er
 // Disconnect 关闭消息通道。
 func (w *WhatsAppAdapter) Disconnect(ctx context.Context) error {
 	w.closeOnce.Do(func() {
+		w.mu.Lock()
 		close(w.msgCh)
+		w.mu.Unlock()
 	})
 	slog.Info("whatsapp adapter disconnected")
 	return nil
@@ -173,11 +181,13 @@ func (w *WhatsAppAdapter) ReceiveWebhook(payload []byte) error {
 			for _, msg := range change.Value.Messages {
 				event := w.convertMessage(&msg)
 				if event != nil {
+					w.mu.RLock()
 					select {
 					case w.msgCh <- event:
 					default:
 						slog.Warn("whatsapp message channel full, dropping message")
 					}
+					w.mu.RUnlock()
 				}
 			}
 		}
@@ -193,13 +203,37 @@ func (w *WhatsAppAdapter) VerifyWebhook(mode string, challenge string, verifyTok
 	return "", false
 }
 
+// VerifyWebhookSignature 验证 Webhook 请求的 HMAC-SHA256 签名。
+// 签名格式: SHA256=hex(hmac(app_secret, raw_body))
+func (w *WhatsAppAdapter) VerifyWebhookSignature(signature string, body []byte) bool {
+	if w.appSecret == "" {
+		slog.Error("whatsapp app_secret not configured, webhook signature verification is disabled")
+		return false
+	}
+	if signature == "" {
+		return false
+	}
+
+	// 签名格式: "sha256=<hex>"
+	if !strings.HasPrefix(signature, "sha256=") {
+		return false
+	}
+	sigHex := strings.TrimPrefix(signature, "sha256=")
+
+	mac := hmac.New(sha256.New, []byte(w.appSecret))
+	mac.Write(body)
+	expectedSig := hex.EncodeToString(mac.Sum(nil))
+
+	return subtle.ConstantTimeCompare([]byte(sigHex), []byte(expectedSig)) == 1
+}
+
 // ───────────────────────────── 自注册 ─────────────────────────────
 
 func init() {
 	GetRegistry().Register(&AdapterEntry{
 		Platform: PlatformWhatsApp,
 		Name:     "WhatsApp",
-		Factory:  func() PlatformAdapter { return &WhatsAppAdapter{} },
+		Factory:  func() PlatformAdapter { return NewWhatsAppAdapter("", "") },
 	})
 }
 
@@ -214,6 +248,7 @@ func (w *WhatsAppAdapter) Configure(settings map[string]any) error {
 	w.token = token
 	w.phoneID = phoneID
 	w.verifyToken, _ = settings["verify_token"].(string)
+	w.appSecret, _ = settings["app_secret"].(string)
 	w.client = &http.Client{Timeout: 30 * time.Second}
 	w.baseURL = "https://graph.facebook.com/v18.0"
 	w.msgCh = make(chan *MessageEvent, 128)
@@ -303,7 +338,7 @@ func (w *WhatsAppAdapter) doAPI(ctx context.Context, method string, path string,
 	if resp.StatusCode >= 400 {
 		return &SendResult{
 			Success:   false,
-			Error:     fmt.Sprintf("whatsapp api error %d: %s", resp.StatusCode, string(raw)),
+			Error:     fmt.Sprintf("whatsapp api error (HTTP %d)", resp.StatusCode),
 			Retryable: resp.StatusCode == 429 || resp.StatusCode >= 500,
 		}, nil
 	}
@@ -314,7 +349,9 @@ func (w *WhatsAppAdapter) doAPI(ctx context.Context, method string, path string,
 			ID string `json:"id"`
 		} `json:"messages"`
 	}
-	json.Unmarshal(raw, &result)
+	if err := json.Unmarshal(raw, &result); err != nil {
+		slog.Warn("whatsapp: failed to parse send response", "error", err)
+	}
 	msgID := ""
 	if len(result.Messages) > 0 {
 		msgID = result.Messages[0].ID

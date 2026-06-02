@@ -92,7 +92,7 @@ func parseBucket(h http.Header, limitKey, remainingKey, resetKey string) RateLim
 			slog.Debug("parse rate limit reset failed", "key", resetKey, "value", v, "error", err)
 		} else {
 			// 某些 API 返回的是 Unix 时间戳而非秒数差
-			if bucket.ResetSecs > 1e10 {
+			if bucket.ResetSecs > 1e9 {
 				bucket.ResetSecs = bucket.ResetSecs - float64(time.Now().Unix())
 			}
 			if bucket.ResetSecs < 0 {

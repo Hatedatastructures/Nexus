@@ -180,6 +180,8 @@ func (c *ConfigCommand) editConfig() {
 		PrintError("未找到编辑器，请设置 EDITOR 环境变量")
 	}
 
+	editor = sanitizeEditorPath(editor)
+
 	fmt.Printf("  使用 %s 编辑配置文件\n", editor)
 	fmt.Printf("  文件路径: %s\n", cfgPath)
 	fmt.Println()
@@ -192,6 +194,17 @@ func (c *ConfigCommand) editConfig() {
 	if err := cmd.Run(); err != nil {
 		PrintError("编辑器退出失败: %v", err)
 	}
+}
+
+func sanitizeEditorPath(editor string) string {
+	if idx := strings.IndexByte(editor, ' '); idx >= 0 {
+		editor = editor[:idx]
+	}
+	resolved, err := exec.LookPath(editor)
+	if err != nil {
+		return "vi"
+	}
+	return resolved
 }
 
 func (c *ConfigCommand) setConfig(key string, value string) {

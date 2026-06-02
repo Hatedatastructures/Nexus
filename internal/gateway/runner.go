@@ -373,8 +373,8 @@ func (g *GatewayRunner) processMessage(ctx context.Context, adapter platforms.Pl
 		return err
 	}
 
-// 9. 注: assistant 消息已由 agent.RunConversation 内部的 state.InsertMessage 处理，
-// 此处不再重复插入，避免双重记录。
+	// 9. 注: assistant 消息已由 agent.RunConversation 内部的 state.InsertMessage 处理，
+	// 此处不再重复插入，避免双重记录。
 
 	// 10. 等待流式消费完成 (如果已有回调投递，则此处仅为同步点)
 	if result.FinalResponse != "" {

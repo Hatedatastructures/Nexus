@@ -17,19 +17,45 @@ import (
 
 // ───────────────────────────── 全局终端配置 ─────────────────────────────
 
+// terminalEnvHolder 包装 sandbox.Environment 以支持 atomic.Value 存储零值。
+// atomic.Value 不允许存储 nil，因此使用指针包装。
+type terminalEnvHolder struct{ env sandbox.Environment }
+
+// terminalCheckerHolder 包装 *approval.Checker 以支持 atomic.Value 存储零值。
+type terminalCheckerHolder struct{ checker *approval.Checker }
+
 // 终端工具的全局环境引用，用于支持运行时注入沙箱环境和审批检查器。
 // 在代理初始化时通过 SetTerminalConfig() 设置。
 // 使用 atomic.Value 保证并发安全的读写。
 var (
-	globalTerminalEnv     atomic.Value // stores sandbox.Environment
-	globalTerminalChecker atomic.Value // stores *approval.Checker
+	globalTerminalEnv     atomic.Value // stores *terminalEnvHolder
+	globalTerminalChecker atomic.Value // stores *terminalCheckerHolder
 )
 
 // SetTerminalConfig 设置终端工具的全局沙箱环境和审批检查器。
 // 应在代理启动时调用，在所有 TerminalTool 的 Execute 调用之前。
+// 传入 nil 将重置为未配置状态。
 func SetTerminalConfig(env sandbox.Environment, checker *approval.Checker) {
-	globalTerminalEnv.Store(env)
-	globalTerminalChecker.Store(checker)
+	globalTerminalEnv.Store(&terminalEnvHolder{env: env})
+	globalTerminalChecker.Store(&terminalCheckerHolder{checker: checker})
+}
+
+// getTerminalEnv 返回当前配置的沙箱环境，未配置时返回 nil。
+func getTerminalEnv() sandbox.Environment {
+	v := globalTerminalEnv.Load()
+	if v == nil {
+		return nil
+	}
+	return v.(*terminalEnvHolder).env
+}
+
+// getTerminalChecker 返回当前配置的审批检查器，未配置时返回 nil。
+func getTerminalChecker() *approval.Checker {
+	v := globalTerminalChecker.Load()
+	if v == nil {
+		return nil
+	}
+	return v.(*terminalCheckerHolder).checker
 }
 
 // ───────────────────────────── 终端工具 ─────────────────────────────
@@ -66,7 +92,7 @@ func (t *TerminalTool) Emoji() string { return "💻" }
 // IsAvailable 检查终端工具是否可用。
 // 只要有可用的沙箱环境即为可用。
 func (t *TerminalTool) IsAvailable() bool {
-	return globalTerminalEnv.Load() != nil
+	return getTerminalEnv() != nil
 }
 
 // MaxResultChars 返回结果最大字符数。
@@ -130,8 +156,7 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (string
 	}
 
 	// 审批检查
-	if v := globalTerminalChecker.Load(); v != nil {
-		checker := v.(*approval.Checker)
+	if checker := getTerminalChecker(); checker != nil {
 		result, reason := checker.Check(ctx, command)
 		switch result {
 		case approval.Denied:
@@ -143,11 +168,10 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (string
 		}
 	}
 
-	envVal := globalTerminalEnv.Load()
-	if envVal == nil {
+	env := getTerminalEnv()
+	if env == nil {
 		return ToolError("终端环境未配置，请先调用 SetTerminalConfig"), nil
 	}
-	env := envVal.(sandbox.Environment)
 
 	// 构建执行选项
 	opts := &sandbox.ExecuteOptions{}
@@ -174,12 +198,15 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (string
 			return ToolError(fmt.Sprintf("后台命令启动失败: %v", bgErr)), nil
 		}
 		// 后台命令返回进程句柄信息
-		resultJSON, _ := json.Marshal(map[string]any{
+		resultJSON, marshalErr := json.Marshal(map[string]any{
 			"output":    fmt.Sprintf("后台进程已启动 (命令: %s). 注意: 后台模式下不会捕获 stdout/stderr，如需检查输出请使用前台模式。", command),
 			"exit_code": 0,
 			"cwd":       env.CWD(),
 			"pid":       fmt.Sprintf("%v", handle),
 		})
+		if marshalErr != nil {
+			return ToolError(fmt.Sprintf("序列化结果失败: %v", marshalErr)), nil
+		}
 		return string(resultJSON), nil
 	}
 
@@ -211,12 +238,15 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (string
 		cwd = env.CWD()
 	}
 
-	resultJSON, _ := json.Marshal(map[string]any{
+	resultJSON, err := json.Marshal(map[string]any{
 		"output":    output,
 		"exit_code": result.ExitCode,
 		"cwd":       cwd,
 		"duration":  result.Duration.String(),
 	})
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+	}
 
 	return string(resultJSON), nil
 }

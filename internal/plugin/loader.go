@@ -147,7 +147,8 @@ func (l *Loader) discoverInDir(dir string) ([]*Manifest, error) {
 
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil // 跳过无法访问的路径
+			slog.Warn("plugin: skip inaccessible path", "path", path, "error", err)
+			return nil
 		}
 
 		// 跳过排除的目录

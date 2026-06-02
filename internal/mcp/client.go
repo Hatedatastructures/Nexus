@@ -171,21 +171,25 @@ func (c *MCPClient) startReader(ctx context.Context, stdout io.Reader) {
 						}
 					} else if id, ok := resp.ID.(string); ok {
 						// 字符串 ID (不太常见)
+						var targetCh chan *JSONRPCResponse
 						c.mu.Lock()
 						for reqID, ch := range c.pendingReqs {
 							if fmt.Sprintf("%d", reqID) == id {
-								func() {
-									defer func() {
-										if r := recover(); r != nil {
-											slog.Debug("MCP reader: channel already closed, discarding response")
-										}
-									}()
-									ch <- &resp
-								}()
+								targetCh = ch
 								break
 							}
 						}
 						c.mu.Unlock()
+						if targetCh != nil {
+							func() {
+								defer func() {
+									if r := recover(); r != nil {
+										slog.Debug("MCP reader: channel already closed, discarding response")
+									}
+								}()
+								targetCh <- &resp
+							}()
+						}
 					}
 				}
 			} else {
@@ -342,6 +346,9 @@ func (c *MCPClient) doRequest(ctx context.Context, method string, params map[str
 	// 等待响应
 	select {
 	case resp := <-ch:
+		if resp == nil {
+			return nil, fmt.Errorf("MCP 连接已关闭")
+		}
 		if resp.Error != nil {
 			return nil, fmt.Errorf("RPC 错误 [%d]: %s", resp.Error.Code, resp.Error.Message)
 		}

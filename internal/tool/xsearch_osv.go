@@ -75,10 +75,10 @@ func (t *XSearchTool) Execute(ctx context.Context, args map[string]any) (string,
 		return ToolError("X_BEARER_TOKEN 环境变量未设置"), nil
 	}
 
-		t.once.Do(func() {
-			t.client = &http.Client{Timeout: 30 * time.Second}
-		})
-		endpoint := fmt.Sprintf(
+	t.once.Do(func() {
+		t.client = &http.Client{Timeout: 30 * time.Second}
+	})
+	endpoint := fmt.Sprintf(
 		"https://api.twitter.com/2/tweets/search/recent?query=%s&max_results=%d&tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=username,name",
 		url.QueryEscape(query), count,
 	)
@@ -101,7 +101,8 @@ func (t *XSearchTool) Execute(ctx context.Context, args map[string]any) (string,
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return ToolError(fmt.Sprintf("Twitter API 返回 HTTP %d: %s", resp.StatusCode, string(body))), nil
+		slog.Warn("Twitter API error response", "status", resp.StatusCode, "body", string(body))
+		return ToolError(fmt.Sprintf("Twitter API 返回 HTTP %d", resp.StatusCode)), nil
 	}
 
 	var result struct {
@@ -213,9 +214,9 @@ func (t *OSVCheckTool) Execute(ctx context.Context, args map[string]any) (string
 	}
 	version, _ := args["version"].(string)
 
-		t.once.Do(func() {
-			t.client = &http.Client{Timeout: 30 * time.Second}
-		})
+	t.once.Do(func() {
+		t.client = &http.Client{Timeout: 30 * time.Second}
+	})
 
 	// 构建查询
 	reqBody := map[string]any{
@@ -224,7 +225,10 @@ func (t *OSVCheckTool) Execute(ctx context.Context, args map[string]any) (string
 	if version != "" {
 		reqBody["version"] = version
 	}
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return ToolError(fmt.Sprintf("序列化请求体失败: %v", err)), nil
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.osv.dev/v1/query", bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -243,7 +247,8 @@ func (t *OSVCheckTool) Execute(ctx context.Context, args map[string]any) (string
 		return ToolError(fmt.Sprintf("读取响应失败: %v", err)), nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return ToolError(fmt.Sprintf("OSV API 返回 HTTP %d: %s", resp.StatusCode, string(respBody))), nil
+		slog.Warn("OSV API error response", "status", resp.StatusCode, "body", string(respBody))
+		return ToolError(fmt.Sprintf("OSV API 返回 HTTP %d", resp.StatusCode)), nil
 	}
 
 	var osvResp struct {

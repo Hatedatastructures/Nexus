@@ -96,7 +96,16 @@ func shouldFallback(err error) bool {
 		return false
 	}
 
-	return classified.ShouldFallback
+	if classified.ShouldFallback {
+		return true
+	}
+	// 在 fallback chain 上下文中，重试已耗尽，瞬态错误应切换提供者
+	if classified.Reason == llm.ReasonServerError ||
+		classified.Reason == llm.ReasonOverloaded ||
+		classified.Reason == llm.ReasonTimeout {
+		return true
+	}
+	return false
 }
 
 // isBillingError returns true when the error is classified as a billing/quota
@@ -220,10 +229,20 @@ func (a *AIAgent) tryFallback(ctx context.Context, req *llm.ChatRequest) (*llm.C
 		"to_model", a.fallbackModel,
 	)
 
-	originalModel := req.Model
-	req.Model = a.fallbackModel
-	resp, err := a.fallbackProvider.CreateChatCompletion(ctx, req)
-	req.Model = originalModel
+	reqCopy := *req
+	reqCopy.Model = a.fallbackModel
+	if req.Messages != nil {
+		reqCopy.Messages = make([]llm.Message, len(req.Messages))
+		copy(reqCopy.Messages, req.Messages)
+	}
+	if req.Metadata != nil {
+		reqCopy.Metadata = make(map[string]any, len(req.Metadata))
+		for k, v := range req.Metadata {
+			reqCopy.Metadata[k] = v
+		}
+	}
+
+	resp, err := a.fallbackProvider.CreateChatCompletion(ctx, &reqCopy)
 	return resp, err
 }
 
@@ -243,16 +262,16 @@ func (a *AIAgent) recoverUnhealthyProviders(ctx context.Context) {
 		}
 
 		// 距离上次错误超过 5 分钟才尝试恢复
-			v := entry.LastErr.Load()
-			if v == nil {
-				continue
-			}
-			lastErr, ok := v.(time.Time)
-			if !ok {
-				continue
-			}
-				if time.Since(lastErr) < 5*time.Minute {
-				continue
+		v := entry.LastErr.Load()
+		if v == nil {
+			continue
+		}
+		lastErr, ok := v.(time.Time)
+		if !ok {
+			continue
+		}
+		if time.Since(lastErr) < 5*time.Minute {
+			continue
 		}
 
 		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

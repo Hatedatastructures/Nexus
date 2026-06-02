@@ -27,6 +27,7 @@ type DingTalkAdapter struct {
 	tokenMu        sync.Mutex         // token 访问锁
 	callbackSecret string             // 回调签名验证密钥
 	closeOnce      sync.Once          // 确保 msgCh 只关闭一次
+	mu             sync.RWMutex       // 保护 msgCh 发送/关闭
 	appKey    string             // 应用 AppKey
 	appSecret string             // 应用 AppSecret
 	client    *http.Client       // HTTP 客户端
@@ -70,7 +71,9 @@ func (d *DingTalkAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, er
 // Disconnect 关闭消息通道。
 func (d *DingTalkAdapter) Disconnect(ctx context.Context) error {
 	d.closeOnce.Do(func() {
+		d.mu.Lock()
 		close(d.msgCh)
+		d.mu.Unlock()
 	})
 	slog.Info("dingtalk adapter disconnected")
 	return nil
@@ -78,7 +81,10 @@ func (d *DingTalkAdapter) Disconnect(ctx context.Context) error {
 
 // Send 发送文本消息 (使用消息通知 API)。
 func (d *DingTalkAdapter) Send(ctx context.Context, chatID string, content string, opts *SendOptions) (*SendResult, error) {
-	msgParamJSON, _ := json.Marshal(map[string]string{"content": content})
+	msgParamJSON, err := json.Marshal(map[string]string{"content": content})
+	if err != nil {
+		return nil, fmt.Errorf("序列化消息内容失败: %w", err)
+	}
 	body := map[string]any{
 		"msgParam": string(msgParamJSON),
 		"msgKey":   "sampleText",
@@ -122,7 +128,10 @@ func (d *DingTalkAdapter) SendTyping(ctx context.Context, chatID string) error {
 
 // SendImage 发送图片消息。
 func (d *DingTalkAdapter) SendImage(ctx context.Context, chatID string, imageURL string, caption string, opts *SendOptions) (*SendResult, error) {
-	imgParamJSON, _ := json.Marshal(map[string]string{"photoURL": imageURL, "title": caption})
+	imgParamJSON, err := json.Marshal(map[string]string{"photoURL": imageURL, "title": caption})
+	if err != nil {
+		return nil, fmt.Errorf("序列化图片参数失败: %w", err)
+	}
 	body := map[string]any{
 		"msgParam": string(imgParamJSON),
 		"msgKey":   "samplePhotoMsg",
@@ -134,7 +143,7 @@ func (d *DingTalkAdapter) SendImage(ctx context.Context, chatID string, imageURL
 // SendVoice 钉钉支持语音消息。
 func (d *DingTalkAdapter) SendVoice(ctx context.Context, chatID string, audioPath string, opts *SendOptions) (*SendResult, error) {
 	body := map[string]any{
-		"msgParam": fmt.Sprintf(`{"media_id":"%s"}`, audioPath),
+		"msgParam": fmt.Sprintf(`{"media_id":"%s"}`, escapeJSONDing(audioPath)),
 		"msgKey":   "sampleVoiceMsg",
 		"openConversationId": chatID,
 	}
@@ -143,7 +152,10 @@ func (d *DingTalkAdapter) SendVoice(ctx context.Context, chatID string, audioPat
 
 // SendVideo 钉钉支持视频消息。
 func (d *DingTalkAdapter) SendVideo(ctx context.Context, chatID string, videoPath string, caption string, opts *SendOptions) (*SendResult, error) {
-	vidParamJSON, _ := json.Marshal(map[string]string{"videoURL": videoPath, "title": caption})
+	vidParamJSON, err := json.Marshal(map[string]string{"videoURL": videoPath, "title": caption})
+	if err != nil {
+		return nil, fmt.Errorf("序列化视频参数失败: %w", err)
+	}
 	body := map[string]any{
 		"msgParam": string(vidParamJSON),
 		"msgKey":   "sampleVideoMsg",
@@ -154,7 +166,10 @@ func (d *DingTalkAdapter) SendVideo(ctx context.Context, chatID string, videoPat
 
 // SendDocument 发送文件消息。
 func (d *DingTalkAdapter) SendDocument(ctx context.Context, chatID string, filePath string, caption string, opts *SendOptions) (*SendResult, error) {
-	docParamJSON, _ := json.Marshal(map[string]string{"media_id": filePath, "title": caption})
+	docParamJSON, err := json.Marshal(map[string]string{"media_id": filePath, "title": caption})
+	if err != nil {
+		return nil, fmt.Errorf("序列化文件参数失败: %w", err)
+	}
 	body := map[string]any{
 		"msgParam": string(docParamJSON),
 		"msgKey":   "sampleFileMsg",
@@ -244,11 +259,13 @@ func (d *DingTalkAdapter) ReceiveCallback(payload []byte) error {
 		event.MessageID = msgID
 	}
 
+	d.mu.RLock()
 	select {
 	case d.msgCh <- event:
 	default:
 		slog.Warn("dingtalk message channel full, dropping message")
 	}
+	d.mu.RUnlock()
 	return nil
 }
 
@@ -258,7 +275,7 @@ func init() {
 	GetRegistry().Register(&AdapterEntry{
 		Platform: PlatformDingTalk,
 		Name:     "DingTalk",
-		Factory:  func() PlatformAdapter { return &DingTalkAdapter{} },
+		Factory:  func() PlatformAdapter { return NewDingTalkAdapter("", "") },
 	})
 }
 
@@ -344,17 +361,22 @@ func (d *DingTalkAdapter) doAPI(ctx context.Context, method string, path string,
 // getAccessToken 获取 access_token (带缓存)。
 func (d *DingTalkAdapter) getAccessToken(ctx context.Context) (string, error) {
 	d.tokenMu.Lock()
-	defer d.tokenMu.Unlock()
-
 	if d.accessToken != "" && time.Now().Before(d.tokenExpiry) {
-		return d.accessToken, nil
+		token := d.accessToken
+		d.tokenMu.Unlock()
+		return token, nil
 	}
+	d.tokenMu.Unlock()
 
+	// HTTP 调用在锁外执行，避免阻塞其他 API 调用
 	payload := map[string]string{
 		"appKey":    d.appKey,
 		"appSecret": d.appSecret,
 	}
-	data, _ := json.Marshal(payload)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("序列化请求失败: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		"https://api.dingtalk.com/v1.0/oauth2/accessToken", bytes.NewReader(data))
@@ -384,15 +406,18 @@ func (d *DingTalkAdapter) getAccessToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if result.Code != "" && result.Code != "0" {
-		return "", fmt.Errorf("get access_token failed: %s", string(raw))
+		slog.Warn("[DingTalk] get access_token failed", "code", result.Code, "message", result.Message)
+		return "", fmt.Errorf("get access_token failed (code=%s)", result.Code)
 	}
 
+	d.tokenMu.Lock()
 	d.accessToken = result.AccessToken
 	buffer := 60
 	if result.ExpireIn < buffer {
 		buffer = result.ExpireIn / 2
 	}
 	d.tokenExpiry = time.Now().Add(time.Duration(result.ExpireIn-buffer) * time.Second)
+	d.tokenMu.Unlock()
 
 	return d.accessToken, nil
 }

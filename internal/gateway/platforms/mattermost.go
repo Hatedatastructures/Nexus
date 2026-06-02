@@ -56,13 +56,16 @@ type MattermostAdapter struct {
 
 	// 并发控制
 	mu              sync.Mutex
+	writeMu         sync.Mutex // WebSocket 写锁，保护并发 WriteJSON
 	dedup           *mattermostDeduplicator
-	pendingResps     map[string]chan map[string]any
 	seqNo           int64
 	heartbeatCancel context.CancelFunc
 
 	// @mention 配置
 	requireMention bool
+
+	// 通道关闭保护
+	closeOnce sync.Once
 }
 
 // mattermostDeduplicator 消息去重器。
@@ -101,6 +104,13 @@ func (d *mattermostDeduplicator) isDuplicate(msgID string) bool {
 	return false
 }
 
+// writeWS 安全地向 WebSocket 写入 JSON 消息（加写锁）。
+func (a *MattermostAdapter) writeWS(conn *websocket.Conn, v any) error {
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
+	return conn.WriteJSON(v)
+}
+
 // NewMattermostAdapter 创建 Mattermost 适配器。
 func NewMattermostAdapter(messageHandler func(*MessageEvent)) *MattermostAdapter {
 	serverURL := os.Getenv("MATTERMOST_URL")
@@ -117,7 +127,6 @@ func NewMattermostAdapter(messageHandler func(*MessageEvent)) *MattermostAdapter
 		messageHandler: messageHandler,
 		httpClient:     &http.Client{Timeout: mattermostRequestTimeout},
 		dedup:          newMattermostDeduplicator(mattermostDedupMaxSize),
-		pendingResps:   make(map[string]chan map[string]any),
 		requireMention: requireMention,
 	}
 }
@@ -185,7 +194,7 @@ func (a *MattermostAdapter) connectWebSocket(ctx context.Context, msgCh chan *Me
 		a.mu.Unlock()
 
 		if !running {
-			close(msgCh)
+			a.closeOnce.Do(func() { close(msgCh) })
 			return
 		}
 
@@ -200,11 +209,11 @@ func (a *MattermostAdapter) connectWebSocket(ctx context.Context, msgCh chan *Me
 			delay := backoff[min(backoffIdx, len(backoff)-1)]
 			backoffIdx++
 			slog.Warn("[Mattermost] WebSocket connection failed", "err", err, "retry_after", delay)
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(delay):
-				}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
 			continue
 		}
 
@@ -215,13 +224,13 @@ func (a *MattermostAdapter) connectWebSocket(ctx context.Context, msgCh chan *Me
 
 		backoffIdx = 0
 
-		// 发送认证
+		// 发送认证（加写锁）
 		authReq := map[string]any{
-			"seq":     1,
-			"action":  "authentication_challenge",
-			"data":    map[string]any{"token": a.token},
+			"seq":    1,
+			"action": "authentication_challenge",
+			"data":   map[string]any{"token": a.token},
 		}
-		if err := conn.WriteJSON(authReq); err != nil {
+		if err := a.writeWS(conn, authReq); err != nil {
 			conn.Close()
 			continue
 		}
@@ -397,7 +406,7 @@ func (a *MattermostAdapter) heartbeatLoop(ctx context.Context) {
 			"action": "ping",
 		}
 
-		if err := conn.WriteJSON(pingReq); err != nil {
+		if err := a.writeWS(conn, pingReq); err != nil {
 			slog.Debug("[Mattermost] heartbeat send failed", "err", err)
 		}
 	}
@@ -411,8 +420,8 @@ func (a *MattermostAdapter) Send(ctx context.Context, chatID string, content str
 		return &SendResult{Success: false, Error: "channel_id 是必填项"}, nil
 	}
 
-	// 分块发送（超过最大长度）
-	if len(content) > mattermostMaxMessageLength {
+	// 分块发送（超过最大长度，按 rune 计数）
+	if len([]rune(content)) > mattermostMaxMessageLength {
 		return a.sendChunked(ctx, chatID, content, opts)
 	}
 
@@ -477,6 +486,10 @@ func (a *MattermostAdapter) SendTyping(ctx context.Context, chatID string) error
 
 // EditMessage 编辑消息。
 func (a *MattermostAdapter) EditMessage(ctx context.Context, chatID string, messageID string, content string) (*SendResult, error) {
+	if err := validateMessageID(messageID); err != nil {
+		return nil, err
+	}
+
 	post := map[string]any{
 		"id":      messageID,
 		"message": content,
@@ -492,6 +505,9 @@ func (a *MattermostAdapter) EditMessage(ctx context.Context, chatID string, mess
 
 // DeleteMessage 删除消息。
 func (a *MattermostAdapter) DeleteMessage(ctx context.Context, chatID string, messageID string) error {
+	if err := validateMessageID(messageID); err != nil {
+		return err
+	}
 	_, err := a.callAPI(ctx, "DELETE", "/posts/"+messageID, nil)
 	return err
 }
@@ -504,7 +520,11 @@ func (a *MattermostAdapter) callAPI(ctx context.Context, method, endpoint string
 
 	var bodyBytes []byte
 	if body != nil {
-		bodyBytes, _ = json.Marshal(body)
+		var err error
+		bodyBytes, err = json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("序列化请求体失败: %w", err)
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(bodyBytes))
@@ -527,7 +547,7 @@ func (a *MattermostAdapter) callAPI(ctx context.Context, method, endpoint string
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var result map[string]any
@@ -558,7 +578,7 @@ func (a *MattermostAdapter) SendVideo(ctx context.Context, chatID string, videoP
 
 // SendDocument 发送文件（需要上传）。
 func (a *MattermostAdapter) SendDocument(ctx context.Context, chatID string, filePath string, caption string, opts *SendOptions) (*SendResult, error) {
-	return &SendResult{Success: false, Error: "Mattermost 文件发送需要上传"}, nil
+	return &SendResult{Success: false, Error: "Mattermost 文件发送需要文件上传"}, nil
 }
 
 // MaxMessageLength 返回最大消息长度。
@@ -580,13 +600,14 @@ func init() {
 // ───────────────────────────── 辅助函数 ─────────────────────────────
 
 func splitMessage(content string, maxLength int) []string {
+	runes := []rune(content)
 	var chunks []string
-	for len(content) > maxLength {
-		chunks = append(chunks, content[:maxLength])
-		content = content[maxLength:]
+	for len(runes) > maxLength {
+		chunks = append(chunks, string(runes[:maxLength]))
+		runes = runes[maxLength:]
 	}
-	if content != "" {
-		chunks = append(chunks, content)
+	if len(runes) > 0 {
+		chunks = append(chunks, string(runes))
 	}
 	return chunks
 }

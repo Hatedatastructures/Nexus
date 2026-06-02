@@ -230,8 +230,10 @@ func (e *DockerEnvironment) ExecuteBackground(ctx context.Context, command strin
 	}
 
 	handle := &OSProcessHandle{
-		cmd:    cmd,
-		process: cmd.Process,
+		cmd:       cmd,
+		process:   cmd.Process,
+		stdoutBuf: &stdout,
+		stderrBuf: &stderr,
 	}
 
 	// 提取容器内的进程 ID

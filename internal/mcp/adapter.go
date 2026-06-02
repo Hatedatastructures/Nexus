@@ -44,8 +44,7 @@ func (a *ToolRegistryAdapter) GetSchema(name string) (*ToolSchema, bool) {
 }
 
 // Dispatch 执行指定工具。
-func (a *ToolRegistryAdapter) Dispatch(name string, args map[string]any) (string, error) {
-	ctx := context.Background()
+func (a *ToolRegistryAdapter) Dispatch(ctx context.Context, name string, args map[string]any) (string, error) {
 	toolName := strings.TrimPrefix(name, "mcp_")
 
 	result, err := a.registry.Dispatch(ctx, toolName, args)

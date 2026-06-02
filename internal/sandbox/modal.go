@@ -61,7 +61,10 @@ func (e *ModalEnvironment) Execute(ctx context.Context, command string, opts *Ex
 		reqBody["timeout"] = int(opts.Timeout.Seconds())
 	}
 
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求失败: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		fmt.Sprintf("%s/sandboxes/%s/exec", e.baseURL, e.sandboxID),
 		bytes.NewReader(bodyBytes))
@@ -156,7 +159,10 @@ func (e *ModalEnvironment) createSandbox(ctx context.Context) error {
 		"image":      "python:3.11-slim",
 		"timeout":    3600,
 	}
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("序列化请求失败: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		fmt.Sprintf("%s/sandboxes", e.baseURL),

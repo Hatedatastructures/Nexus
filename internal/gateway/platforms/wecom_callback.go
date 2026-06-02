@@ -42,6 +42,9 @@ type WeComCallbackAdapter struct {
 	httpClient     *http.Client
 	msgCh          chan *MessageEvent
 	running        bool
+	closeOnce sync.Once
+	mu        sync.RWMutex // 保护 msgCh 写入/关闭
+	httpServer *http.Server
 	webhookPort    int
 
 	tokenMu      sync.Mutex
@@ -115,13 +118,21 @@ func (a *WeComCallbackAdapter) Connect(ctx context.Context) (<-chan *MessageEven
 	mux := http.NewServeMux()
 	mux.HandleFunc("/wecom/callback", a.handleCallback)
 
+	a.httpServer = &http.Server{Addr: fmt.Sprintf("%s:%d", func() string {
+		bind := os.Getenv("WECOM_CALLBACK_BIND")
+		if bind == "" {
+			bind = "127.0.0.1"
+		}
+		return bind
+	}(), a.webhookPort), Handler: mux}
+
 	go func() {
-		addr := fmt.Sprintf(":%d", a.webhookPort)
+		addr := a.httpServer.Addr
 		if a.webhookPort != 443 && a.webhookPort != 8443 {
 			slog.Warn("[WeCom Callback] webhook 使用 HTTP，建议启用 TLS", "addr", addr)
 		}
 		slog.Info("[WeCom Callback] webhook server started", "addr", addr)
-		if err := http.ListenAndServe(addr, mux); err != nil {
+		if err := a.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("[WeCom Callback] webhook server failed", "err", err)
 		}
 	}()
@@ -132,6 +143,18 @@ func (a *WeComCallbackAdapter) Connect(ctx context.Context) (<-chan *MessageEven
 
 func (a *WeComCallbackAdapter) Disconnect(ctx context.Context) error {
 	a.running = false
+	if a.httpServer != nil {
+		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		a.httpServer.Shutdown(shutdownCtx)
+	}
+	a.mu.Lock()
+	a.closeOnce.Do(func() {
+		if a.msgCh != nil {
+			close(a.msgCh)
+		}
+	})
+	a.mu.Unlock()
 	slog.Info("[WeCom Callback] disconnected")
 	return nil
 }
@@ -151,7 +174,11 @@ func (a *WeComCallbackAdapter) Send(ctx context.Context, chatID string, content 
 		return &SendResult{Success: false, Error: fmt.Sprintf("获取 access_token 失败: %v", err)}, nil
 	}
 
-	apiURL := fmt.Sprintf("https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=%s", accessToken)
+	sendURL, _ := url.Parse("https://qyapi.weixin.qq.com/cgi-bin/message/send")
+	q := sendURL.Query()
+	q.Set("access_token", accessToken)
+	sendURL.RawQuery = q.Encode()
+	apiURL := sendURL.String()
 
 	payload := map[string]any{
 		"touser":  userID,
@@ -160,7 +187,10 @@ func (a *WeComCallbackAdapter) Send(ctx context.Context, chatID string, content 
 		"text":    map[string]string{"content": content},
 	}
 
-	jsonData, _ := json.Marshal(payload)
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return &SendResult{Success: false, Error: fmt.Sprintf("序列化消息失败: %v", err)}, nil
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(jsonData))
 	if err != nil {
 		return &SendResult{Success: false, Error: err.Error()}, nil
@@ -175,7 +205,9 @@ func (a *WeComCallbackAdapter) Send(ctx context.Context, chatID string, content 
 	defer resp.Body.Close()
 
 	var result map[string]any
-	json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
+		return &SendResult{Success: false, Error: fmt.Sprintf("解析响应失败: %v", err)}, nil
+	}
 
 	if errcode, ok := result["errcode"].(float64); ok && errcode != 0 {
 		errmsg, _ := result["errmsg"].(string)
@@ -301,11 +333,13 @@ func (a *WeComCallbackAdapter) handleMessage(w http.ResponseWriter, r *http.Requ
 		},
 	}
 
+	a.mu.RLock()
 	select {
 		case a.msgCh <- msgEvent:
 		default:
 			slog.Warn("[WeComCallback] message channel full, dropping message")
 		}
+		a.mu.RUnlock()
 
 	// 返回空响应（使用主动发送 API 回复）
 	w.Header().Set("Content-Type", "text/xml")
@@ -327,11 +361,12 @@ func (a *WeComCallbackAdapter) generateSignature(timestamp, nonce, echostr strin
 
 func (a *WeComCallbackAdapter) getAccessToken(ctx context.Context) (string, error) {
 	a.tokenMu.Lock()
-	defer a.tokenMu.Unlock()
-
 	if a.accessToken != "" && time.Now().Before(a.tokenExpiry) {
-		return a.accessToken, nil
+		token := a.accessToken
+		a.tokenMu.Unlock()
+		return token, nil
 	}
+	a.tokenMu.Unlock()
 
 	secret := a.corpSecret
 	if secret == "" {
@@ -374,14 +409,17 @@ func (a *WeComCallbackAdapter) getAccessToken(ctx context.Context) (string, erro
 		return "", fmt.Errorf("无法获取 access_token")
 	}
 
+	a.tokenMu.Lock()
 	a.accessToken = result.AccessToken
 	buffer := 60
 	if result.ExpiresIn < buffer {
 		buffer = result.ExpiresIn / 2
 	}
 	a.tokenExpiry = time.Now().Add(time.Duration(result.ExpiresIn-buffer) * time.Second)
+	token := a.accessToken
+	a.tokenMu.Unlock()
 
-	return a.accessToken, nil
+	return token, nil
 }
 
 // ───────────────────────────── 自注册 ─────────────────────────────

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,7 @@ import (
 // 通过 OpenAI TTS API 将文本转换为 MP3 等格式的音频文件。
 type TTSTool struct {
 	client *http.Client
+	once   sync.Once
 }
 
 // Name 返回工具名称。
@@ -152,9 +154,9 @@ func (t *TTSTool) Execute(ctx context.Context, args map[string]any) (string, err
 
 // convertToSpeech 调用 TTS API 将文本转换为语音。
 func (t *TTSTool) convertToSpeech(ctx context.Context, model, text, voice, language string, speed float64) ([]byte, error) {
-	if t.client == nil {
+	t.once.Do(func() {
 		t.client = &http.Client{Timeout: 120 * time.Second}
-	}
+	})
 
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -203,7 +205,8 @@ func (t *TTSTool) convertToSpeech(ctx context.Context, model, text, voice, langu
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(errBody))
+		slog.Warn("TTS API error response", "status", resp.StatusCode, "body", string(errBody))
+		return nil, fmt.Errorf("语音合成 API 返回错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	// 读取音频数据

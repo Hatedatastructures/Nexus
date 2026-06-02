@@ -5,6 +5,7 @@ package platforms
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -71,10 +72,10 @@ const (
 
 // 媒体类型
 const (
-	qqbotMediaTypeImage    = 1
-	qqbotMediaTypeVideo    = 2
-	qqbotMediaTypeVoice    = 3
-	qqbotMediaTypeFile     = 4
+	qqbotMediaTypeImage = 1
+	qqbotMediaTypeVideo = 2
+	qqbotMediaTypeVoice = 3
+	qqbotMediaTypeFile  = 4
 )
 
 // ───────────────────────────── QQBotAdapter ─────────────────────────────
@@ -102,9 +103,9 @@ type QQBotAdapter struct {
 
 	// 并发控制
 	mu              sync.Mutex
+	writeMu         sync.Mutex
 	closeOnce       sync.Once
 	dedup           *qqbotDeduplicator
-	pendingResps    map[string]chan map[string]any
 	seqNo           int64
 	lastHeartbeat   time.Time
 	heartbeatCancel context.CancelFunc
@@ -178,7 +179,6 @@ func NewQQBotAdapter(messageHandler func(*MessageEvent)) *QQBotAdapter {
 		groupAllowFrom: getEnvList("QQBOT_GROUP_ALLOW_FROM"),
 		messageHandler: messageHandler,
 		dedup:          newQQBotDeduplicator(qqbotDedupMaxSize),
-		pendingResps:   make(map[string]chan map[string]any),
 		httpClient:     &http.Client{Timeout: qqbotRequestTimeout},
 	}
 }
@@ -221,11 +221,12 @@ func (a *QQBotAdapter) Disconnect(ctx context.Context) error {
 	a.mu.Lock()
 	a.running = false
 	a.connected = false
+	conn := a.conn
+	a.conn = nil
 	a.mu.Unlock()
 
-	if a.conn != nil {
-		a.conn.Close()
-		a.conn = nil
+	if conn != nil {
+		conn.Close()
 	}
 
 	slog.Info("[QQBot] disconnected")
@@ -233,10 +234,8 @@ func (a *QQBotAdapter) Disconnect(ctx context.Context) error {
 }
 
 // getAccessToken 获取 access token。
+// 仅在写入 accessToken 时持锁，HTTP 调用在锁外执行。
 func (a *QQBotAdapter) getAccessToken(ctx context.Context) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	body := map[string]any{
 		"app_id":     a.appID,
 		"app_secret": a.appSecret,
@@ -247,10 +246,14 @@ func (a *QQBotAdapter) getAccessToken(ctx context.Context) error {
 		return err
 	}
 
-	a.accessToken = getString(resp, "access_token", "")
-	if a.accessToken == "" {
+	token := getString(resp, "access_token", "")
+	if token == "" {
 		return fmt.Errorf("access_token 未返回")
 	}
+
+	a.mu.Lock()
+	a.accessToken = token
+	a.mu.Unlock()
 
 	return nil
 }
@@ -262,7 +265,11 @@ func (a *QQBotAdapter) getGatewayURL(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	req.Header.Set("Authorization", "Bearer "+a.accessToken)
+	a.mu.Lock()
+	token := a.accessToken
+	a.mu.Unlock()
+
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-App-Id", a.appID)
 
 	resp, err := a.httpClient.Do(req)
@@ -312,11 +319,11 @@ func (a *QQBotAdapter) connectWebSocket(ctx context.Context, gatewayURL string, 
 			delay := backoff[min(backoffIdx, len(backoff)-1)]
 			backoffIdx++
 			slog.Warn("[QQBot] WebSocket connection failed", "err", err, "retry_after", delay)
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(delay):
-				}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
 
 			// 刷新 token
 			if err := a.getAccessToken(ctx); err != nil {
@@ -369,21 +376,17 @@ func (a *QQBotAdapter) connectWebSocket(ctx context.Context, gatewayURL string, 
 		a.heartbeatCancel = hbCancel
 		go a.heartbeatLoop(hbCtx)
 
-		// 监听消息
-		a.listenLoop(msgCh)
+		// 监听消息，返回导致退出的错误用于提取 close code
+		listenErr := a.listenLoop(msgCh)
 
-		// 连接断开，检查 close code
+		// 从 listenLoop 返回的错误中提取 close code
 		a.mu.Lock()
 		a.connected = false
 		closeCode := 0
+		if ce, ok := listenErr.(*websocket.CloseError); ok {
+			closeCode = ce.Code
+		}
 		if a.conn != nil {
-			// 尝试从 WebSocket 关闭帧中提取 close code
-			_, _, readErr := a.conn.ReadMessage()
-			if readErr != nil {
-				if ce, ok := readErr.(*websocket.CloseError); ok {
-					closeCode = ce.Code
-				}
-			}
 			a.conn.Close()
 			a.conn = nil
 		}
@@ -404,12 +407,16 @@ func (a *QQBotAdapter) connectWebSocket(ctx context.Context, gatewayURL string, 
 
 // sendIdentify 发送 Identify 请求。
 func (a *QQBotAdapter) sendIdentify(conn *websocket.Conn) {
+	a.mu.Lock()
+	token := a.accessToken
+	a.mu.Unlock()
+
 	identifyReq := map[string]any{
 		"op": qqbotOpIdentify,
 		"d": map[string]any{
-			"token":      a.accessToken,
-			"intents":    qqbotIntentC2CGroupAtMessages | qqbotIntentPublicGuildMessages | qqbotIntentDirectMessage | qqbotIntentInteraction,
-			"shard":      []int{0, 1},
+			"token":   token,
+			"intents": qqbotIntentC2CGroupAtMessages | qqbotIntentPublicGuildMessages | qqbotIntentDirectMessage | qqbotIntentInteraction,
+			"shard":   []int{0, 1},
 			"properties": map[string]any{
 				"$os":      "linux",
 				"$browser": "nexus-agent",
@@ -418,29 +425,40 @@ func (a *QQBotAdapter) sendIdentify(conn *websocket.Conn) {
 		},
 	}
 
+	a.writeMu.Lock()
 	if err := conn.WriteJSON(identifyReq); err != nil {
 		slog.Warn("[QQBot] failed to send Identify", "err", err)
 	}
+	a.writeMu.Unlock()
 }
 
 // sendResume 发送 Resume 请求。
 func (a *QQBotAdapter) sendResume(conn *websocket.Conn) {
+	a.mu.Lock()
+	token := a.accessToken
+	sessID := a.sessionID
+	seq := a.seqNo
+	a.mu.Unlock()
+
 	resumeReq := map[string]any{
 		"op": qqbotOpResume,
 		"d": map[string]any{
-			"token":     a.accessToken,
-			"session_id": a.sessionID,
-			"seq":       a.seqNo,
+			"token":      token,
+			"session_id": sessID,
+			"seq":        seq,
 		},
 	}
 
+	a.writeMu.Lock()
 	if err := conn.WriteJSON(resumeReq); err != nil {
 		slog.Warn("[QQBot] failed to send Resume", "err", err)
 	}
+	a.writeMu.Unlock()
 }
 
 // listenLoop WebSocket 消息监听循环。
-func (a *QQBotAdapter) listenLoop(msgCh chan *MessageEvent) {
+// 返回导致退出的错误（可用于提取 WebSocket close code）。
+func (a *QQBotAdapter) listenLoop(msgCh chan *MessageEvent) error {
 	for {
 		a.mu.Lock()
 		running := a.running
@@ -448,13 +466,12 @@ func (a *QQBotAdapter) listenLoop(msgCh chan *MessageEvent) {
 		a.mu.Unlock()
 
 		if !running || conn == nil {
-			return
+			return nil
 		}
 
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			slog.Warn("[QQBot] failed to read message", "err", err)
-			return
+			return err
 		}
 
 		var payload map[string]any
@@ -467,6 +484,7 @@ func (a *QQBotAdapter) listenLoop(msgCh chan *MessageEvent) {
 }
 
 // dispatchPayload 处理 WebSocket 消息。
+// 每个临界区使用 Lock + defer Unlock 防止 panic 导致死锁。
 func (a *QQBotAdapter) dispatchPayload(payload map[string]any, msgCh chan *MessageEvent) {
 	op := getInt(payload, "op", 0)
 
@@ -474,31 +492,31 @@ func (a *QQBotAdapter) dispatchPayload(payload map[string]any, msgCh chan *Messa
 	case qqbotOpDispatch:
 		t := getString(payload, "t", "")
 		s := getInt(payload, "s", 0)
+		d := getMap(payload, "d")
+
 		a.mu.Lock()
 		a.seqNo = int64(s)
-
-		d := getMap(payload, "d")
+		a.mu.Unlock()
 
 		switch t {
 		case "READY":
+			a.mu.Lock()
 			a.sessionID = getString(d, "session_id", "")
-			a.botOpenID = getString(d, "user", "")
-			slog.Info("[QQBot] authenticated", "session_id", a.sessionID)
+			userMap := getMap(d, "user")
+			if userMap != nil {
+				a.botOpenID = getString(userMap, "id", "")
+			}
 			a.mu.Unlock()
+			slog.Info("[QQBot] authenticated", "session_id", a.sessionID)
 
 		case "C2C_MESSAGE_CREATE":
-			a.mu.Unlock()
 			a.onC2CMessage(d, msgCh)
 
 		case "GROUP_AT_MESSAGE_CREATE":
-			a.mu.Unlock()
 			a.onGroupAtMessage(d, msgCh)
 
 		case "DIRECT_MESSAGE_CREATE":
-			a.mu.Unlock()
 			a.onDirectMessage(d, msgCh)
-		default:
-			a.mu.Unlock()
 		}
 
 	case qqbotOpHeartbeatAck:
@@ -507,37 +525,21 @@ func (a *QQBotAdapter) dispatchPayload(payload map[string]any, msgCh chan *Messa
 		a.mu.Unlock()
 
 	case qqbotOpReconnect:
-
 		slog.Warn("[QQBot] received Reconnect command")
-
 		return
-
-
 
 	case qqbotOpInvalidSession:
-
 		d := payload["d"]
-
 		a.mu.Lock()
-
 		if boolVal, ok := d.(bool); ok && boolVal {
-
 			slog.Warn("[QQBot] invalid session (resumable), will resume")
-
 		} else {
-
 			slog.Warn("[QQBot] invalid session (non-resumable), clearing session")
-
 			a.sessionID = ""
-
 			a.seqNo = 0
-
 		}
-
 		a.mu.Unlock()
-
 		return
-
 	}
 }
 
@@ -577,10 +579,10 @@ func (a *QQBotAdapter) onC2CMessage(d map[string]any, msgCh chan *MessageEvent) 
 	}
 
 	select {
-		case msgCh <- event:
-		default:
-			slog.Warn("[QQBot] message channel full, dropping message")
-		}
+	case msgCh <- event:
+	default:
+		slog.Warn("[QQBot] message channel full, dropping message")
+	}
 }
 
 // onGroupAtMessage 处理群 @消息。
@@ -605,7 +607,10 @@ func (a *QQBotAdapter) onGroupAtMessage(d map[string]any, msgCh chan *MessageEve
 	}
 
 	// 去除 @mention
-	content = strings.Replace(content, "@"+a.botOpenID, "", -1)
+	a.mu.Lock()
+	botID := a.botOpenID
+	a.mu.Unlock()
+	content = strings.Replace(content, "@"+botID, "", -1)
 	content = strings.TrimSpace(content)
 
 	if content == "" {
@@ -626,10 +631,10 @@ func (a *QQBotAdapter) onGroupAtMessage(d map[string]any, msgCh chan *MessageEve
 	}
 
 	select {
-		case msgCh <- event:
-		default:
-			slog.Warn("[QQBot] message channel full, dropping message")
-		}
+	case msgCh <- event:
+	default:
+		slog.Warn("[QQBot] message channel full, dropping message")
+	}
 }
 
 // onDirectMessage 处理频道私信。
@@ -664,10 +669,10 @@ func (a *QQBotAdapter) onDirectMessage(d map[string]any, msgCh chan *MessageEven
 	}
 
 	select {
-		case msgCh <- event:
-		default:
-			slog.Warn("[QQBot] message channel full, dropping message")
-		}
+	case msgCh <- event:
+	default:
+		slog.Warn("[QQBot] message channel full, dropping message")
+	}
 }
 
 // heartbeatLoop 发送心跳。
@@ -695,9 +700,11 @@ func (a *QQBotAdapter) heartbeatLoop(ctx context.Context) {
 				"d":  seq,
 			}
 
+			a.writeMu.Lock()
 			if err := conn.WriteJSON(heartbeatReq); err != nil {
 				slog.Debug("[QQBot] heartbeat send failed", "err", err)
 			}
+			a.writeMu.Unlock()
 		}
 	}
 }
@@ -723,9 +730,9 @@ func (a *QQBotAdapter) Send(ctx context.Context, chatID string, content string, 
 		groupOpenID := strings.TrimPrefix(chatID, "group:")
 		endpoint = fmt.Sprintf("/v2/groups/%s/messages", groupOpenID)
 		body = map[string]any{
-			"content":      content,
-			"msg_type":     qqbotMsgTypeText,
-			"msg_id":       generateMsgID(),
+			"content":  content,
+			"msg_type": qqbotMsgTypeText,
+			"msg_id":   generateMsgID(),
 		}
 	} else if strings.HasPrefix(chatID, "guild:") {
 		// 频道私信
@@ -863,6 +870,48 @@ func (a *QQBotAdapter) uploadMedia(ctx context.Context, chatID, fileURL string, 
 	return fmt.Sprintf("url:%s", fileURL), nil
 }
 
+// sendMediaMessage 发送已上传的媒体消息（供 SendVoice/SendVideo/SendDocument 复用）。
+func (a *QQBotAdapter) sendMediaMessage(ctx context.Context, chatID, fileInfo, caption string) (*SendResult, error) {
+	if err := validateChatID(chatID); err != nil {
+		return nil, err
+	}
+
+	var endpoint string
+	var body map[string]any
+
+	if strings.HasPrefix(chatID, "group:") {
+		groupOpenID := strings.TrimPrefix(chatID, "group:")
+		endpoint = fmt.Sprintf("/v2/groups/%s/messages", groupOpenID)
+		body = map[string]any{
+			"msg_type": qqbotMsgTypeMedia,
+			"msg_id":   generateMsgID(),
+			"media": map[string]any{
+				"file_info": fileInfo,
+			},
+		}
+	} else {
+		endpoint = fmt.Sprintf("/v2/users/%s/messages", chatID)
+		body = map[string]any{
+			"msg_type": qqbotMsgTypeMedia,
+			"msg_id":   generateMsgID(),
+			"media": map[string]any{
+				"file_info": fileInfo,
+			},
+		}
+	}
+
+	if caption != "" {
+		body["content"] = caption
+	}
+
+	resp, err := a.callAPI(ctx, endpoint, body)
+	if err != nil {
+		return &SendResult{Success: false, Error: err.Error()}, nil
+	}
+
+	return &SendResult{Success: true, MessageID: getString(resp, "id", "")}, nil
+}
+
 // SendTyping 发送正在输入指示。
 func (a *QQBotAdapter) SendTyping(ctx context.Context, chatID string) error {
 	if err := validateChatID(chatID); err != nil {
@@ -912,15 +961,22 @@ func (a *QQBotAdapter) isGroupAllowed(groupID, userID string) bool {
 func (a *QQBotAdapter) callAPI(ctx context.Context, endpoint string, body map[string]any) (map[string]any, error) {
 	url := a.apiURL + endpoint
 
-	bodyBytes, _ := json.Marshal(body)
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求体失败: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
 
+	a.mu.Lock()
+	token := a.accessToken
+	a.mu.Unlock()
+
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+a.accessToken)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-App-Id", a.appID)
 
 	resp, err := a.httpClient.Do(req)
@@ -935,7 +991,7 @@ func (a *QQBotAdapter) callAPI(ctx context.Context, endpoint string, body map[st
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var result map[string]any
@@ -948,7 +1004,10 @@ func (a *QQBotAdapter) callAPI(ctx context.Context, endpoint string, body map[st
 
 // callExternalAPI 调用外部 API。
 func (a *QQBotAdapter) callExternalAPI(ctx context.Context, url string, body map[string]any) (map[string]any, error) {
-	bodyBytes, _ := json.Marshal(body)
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求体失败: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -969,7 +1028,7 @@ func (a *QQBotAdapter) callExternalAPI(ctx context.Context, url string, body map
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API 错误 (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("外部 API 错误 (HTTP %d)", resp.StatusCode)
 	}
 
 	var result map[string]any
@@ -1008,57 +1067,35 @@ func (a *QQBotAdapter) SendVoice(ctx context.Context, chatID string, audioPath s
 		return &SendResult{Success: false, Error: fmt.Sprintf("上传语音失败: %v", err)}, nil
 	}
 
-	var endpoint string
-	var body map[string]any
-
-	if strings.HasPrefix(chatID, "group:") {
-		groupOpenID := strings.TrimPrefix(chatID, "group:")
-		endpoint = fmt.Sprintf("/v2/groups/%s/messages", groupOpenID)
-		body = map[string]any{
-			"msg_type": qqbotMsgTypeMedia,
-			"msg_id":   generateMsgID(),
-			"media": map[string]any{
-				"file_info": fileInfo,
-			},
-		}
-	} else {
-		endpoint = fmt.Sprintf("/v2/users/%s/messages", chatID)
-		body = map[string]any{
-			"msg_type": qqbotMsgTypeMedia,
-			"msg_id":   generateMsgID(),
-			"media": map[string]any{
-				"file_info": fileInfo,
-			},
-		}
-	}
-
-	resp, err := a.callAPI(ctx, endpoint, body)
-	if err != nil {
-		return &SendResult{Success: false, Error: err.Error()}, nil
-	}
-
-	return &SendResult{Success: true, MessageID: getString(resp, "id", "")}, nil
+	return a.sendMediaMessage(ctx, chatID, fileInfo, "")
 }
 
 // SendVideo 发送视频。
+// 直接构造媒体消息，不委托给 SendImage（避免重复上传）。
 func (a *QQBotAdapter) SendVideo(ctx context.Context, chatID string, videoPath string, caption string, opts *SendOptions) (*SendResult, error) {
+	if err := validateChatID(chatID); err != nil {
+		return nil, err
+	}
 	fileInfo, err := a.uploadMedia(ctx, chatID, videoPath, qqbotMediaTypeVideo)
 	if err != nil {
 		return &SendResult{Success: false, Error: fmt.Sprintf("上传视频失败: %v", err)}, nil
 	}
 
-	// 类似 SendImage 的实现
-	return a.SendImage(ctx, chatID, fileInfo, caption, opts)
+	return a.sendMediaMessage(ctx, chatID, fileInfo, caption)
 }
 
 // SendDocument 发送文件。
+// 直接构造媒体消息，不委托给 SendImage（避免重复上传）。
 func (a *QQBotAdapter) SendDocument(ctx context.Context, chatID string, filePath string, caption string, opts *SendOptions) (*SendResult, error) {
+	if err := validateChatID(chatID); err != nil {
+		return nil, err
+	}
 	fileInfo, err := a.uploadMedia(ctx, chatID, filePath, qqbotMediaTypeFile)
 	if err != nil {
 		return &SendResult{Success: false, Error: fmt.Sprintf("上传文件失败: %v", err)}, nil
 	}
 
-	return a.SendImage(ctx, chatID, fileInfo, caption, opts)
+	return a.sendMediaMessage(ctx, chatID, fileInfo, caption)
 }
 
 // MaxMessageLength 返回最大消息长度。
@@ -1080,7 +1117,11 @@ func init() {
 // ───────────────────────────── 辅助函数 ─────────────────────────────
 
 func generateMsgID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%x", b)
 }
 
 // validateChatID 验证 chatID/groupOpenID 只含安全字符，防止路径注入。

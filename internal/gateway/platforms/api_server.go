@@ -4,6 +4,7 @@ package platforms
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -152,13 +153,18 @@ func (a *APIServerAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, e
 	a.msgCh = make(chan *MessageEvent, 100)
 	a.mu.Unlock()
 
+	bindAddr := "127.0.0.1"
+	if b := os.Getenv("API_SERVER_BIND"); b != "" {
+		bindAddr = b
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", a.handleChatCompletions)
 	mux.HandleFunc("/v1/models", a.handleListModels)
 	mux.HandleFunc("/health", a.handleHealth)
 
 	a.httpServer = &http.Server{
-		Addr:         fmt.Sprintf(":%d", a.port),
+		Addr:         fmt.Sprintf("%s:%d", bindAddr, a.port),
 		Handler:      bearerAuthMiddleware(mux),
 		ReadTimeout:  apiServerRequestTimeout,
 		WriteTimeout: apiServerRequestTimeout,
@@ -266,8 +272,13 @@ func (a *APIServerAdapter) handleChatCompletions(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// 生成请求 ID
-	requestID := fmt.Sprintf("req_%d", time.Now().UnixNano())
+	// 生成请求 ID (crypto/rand)
+	var randBytes [8]byte
+	if _, err := rand.Read(randBytes[:]); err != nil {
+		http.Error(w, "内部错误: 无法生成请求 ID", http.StatusInternalServerError)
+		return
+	}
+	requestID := fmt.Sprintf("req_%x", randBytes[:])
 
 	// 创建响应通道
 	responseCh := make(chan string, 1)
@@ -289,10 +300,10 @@ func (a *APIServerAdapter) handleChatCompletions(w http.ResponseWriter, r *http.
 	}
 
 	select {
-		case a.msgCh <- msgEvent:
-		default:
-			slog.Warn("[API] message channel full, dropping message")
-		}
+	case a.msgCh <- msgEvent:
+	default:
+		slog.Warn("[API] message channel full, dropping message")
+	}
 
 	// 等待响应
 	timer := time.NewTimer(apiServerRequestTimeout)
@@ -315,7 +326,13 @@ func (a *APIServerAdapter) handleChatCompletions(w http.ResponseWriter, r *http.
 
 func (a *APIServerAdapter) handleNormalResponse(w http.ResponseWriter, model string, content string) {
 	resp := map[string]any{
-		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
+		"id": func() string {
+			var b [8]byte
+			if _, err := rand.Read(b[:]); err != nil {
+				return fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
+			}
+			return fmt.Sprintf("chatcmpl-%x", b[:])
+		}(),
 		"object":  "chat.completion",
 		"created": time.Now().Unix(),
 		"model":   model,
@@ -355,7 +372,7 @@ func (a *APIServerAdapter) handleStreamResponse(w http.ResponseWriter, content s
 	chunks := splitContent(content, 20)
 	for _, chunk := range chunks {
 		resp := map[string]any{
-			"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
+			"id":      generateChunkID(),
 			"object":  "chat.completion.chunk",
 			"created": time.Now().Unix(),
 			"choices": []map[string]any{
@@ -369,7 +386,11 @@ func (a *APIServerAdapter) handleStreamResponse(w http.ResponseWriter, content s
 			},
 		}
 
-		data, _ := json.Marshal(resp)
+		data, err := json.Marshal(resp)
+		if err != nil {
+			slog.Error("failed to marshal streaming chunk", "error", err)
+			continue
+		}
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 	}
@@ -394,6 +415,15 @@ func (a *APIServerAdapter) handleListModels(w http.ResponseWriter, r *http.Reque
 func (a *APIServerAdapter) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// generateChunkID 使用 crypto/rand 生成不可预测的流式响应 chunk ID。
+func generateChunkID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("chatcmpl-fallback-%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("chatcmpl-%x", b[:])
 }
 
 func splitContent(content string, chunkSize int) []string {

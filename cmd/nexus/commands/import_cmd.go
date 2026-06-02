@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"nexus-agent/internal/tool"
 )
 
 // ImportCommand 实现 nexus import 命令。
@@ -115,13 +118,31 @@ func extractSkillNameFromURL(url string) string {
 	return ""
 }
 
-func isGitURLFromImport(url string) bool {
-	return strings.HasPrefix(url, "git@") ||
-		strings.HasSuffix(url, ".git") ||
-		(strings.HasPrefix(url, "https://github.com") && !strings.HasSuffix(url, ".md"))
+func isGitURLFromImport(rawURL string) bool {
+	if strings.HasPrefix(rawURL, "git@") {
+		rest := rawURL[4:]
+		colonIdx := strings.Index(rest, ":")
+		if colonIdx < 0 {
+			return false
+		}
+		return tool.IsAllowedGitHost(rest[:colonIdx])
+	}
+	if strings.HasPrefix(rawURL, "https://") {
+		u, err := url.Parse(rawURL)
+		if err != nil {
+			return false
+		}
+		return tool.IsAllowedGitHost(u.Hostname())
+	}
+	return false
 }
 
-func cloneGitRepoFromImport(url, targetDir string) error {
+func cloneGitRepoFromImport(rawURL, targetDir string) error {
+	// SSRF 防御: 验证 URL 安全性
+	if safe, reason := tool.CheckURLSafety(rawURL); !safe {
+		return fmt.Errorf("URL 安全检查失败: %s", reason)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -130,7 +151,7 @@ func cloneGitRepoFromImport(url, targetDir string) error {
 		return fmt.Errorf("系统未安装 git，无法克隆仓库")
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", url, targetDir)
+	cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", rawURL, targetDir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git clone 失败: %v\n%s", err, string(output))
 	}
@@ -138,12 +159,22 @@ func cloneGitRepoFromImport(url, targetDir string) error {
 	return nil
 }
 
-func downloadSkillFileFromImport(url, targetDir string) error {
+func downloadSkillFileFromImport(rawURL, targetDir string) error {
+	// 协议白名单: 仅允许 HTTPS
+	if !strings.HasPrefix(rawURL, "https://") {
+		return fmt.Errorf("仅允许 HTTPS 协议下载技能文件")
+	}
+
+	// SSRF 防御
+	if safe, reason := tool.CheckURLSafety(rawURL); !safe {
+		return fmt.Errorf("URL 安全检查失败: %s", reason)
+	}
+
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		return fmt.Errorf("创建目录失败: %v", err)
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", rawURL, nil)
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %v", err)
 	}

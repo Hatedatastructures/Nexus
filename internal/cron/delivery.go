@@ -132,10 +132,11 @@ func buildDeliveryContent(job *Job, result string) string {
 	buf.WriteString(fmt.Sprintf("(作业 ID: %s)\n", job.ID))
 	buf.WriteString("─────────────\n\n")
 
-	// 正文 (限制长度)
+	// 正文 (限制长度, rune 安全截断避免破坏多字节字符)
 	maxLen := 3900 // Telegram 消息限制为 4096，留一些余量
-	if len(result) > maxLen {
-		result = result[:maxLen] + "\n\n[... 输出已截断 ...]"
+	runes := []rune(result)
+	if len(runes) > maxLen {
+		result = string(runes[:maxLen]) + "\n\n[... 输出已截断 ...]"
 	}
 	buf.WriteString(result)
 

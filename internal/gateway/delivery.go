@@ -174,6 +174,24 @@ func (d *DeliveryManager) SplitLongMessage(content string, maxLen int) []string 
 			var lineBuffer strings.Builder
 			for _, line := range lines {
 				lineLen := utf8.RuneCountInString(line)
+
+				// 单行超过 maxLen，硬截断
+				if lineLen > maxLen {
+					if lineBuffer.Len() > 0 {
+						chunks = append(chunks, strings.TrimSpace(lineBuffer.String()))
+						lineBuffer.Reset()
+					}
+					runes := []rune(line)
+					for i := 0; i < len(runes); i += maxLen {
+						end := i + maxLen
+						if end > len(runes) {
+							end = len(runes)
+						}
+						chunks = append(chunks, string(runes[i:end]))
+					}
+					continue
+				}
+
 				bufLen := utf8.RuneCountInString(lineBuffer.String())
 				if bufLen+lineLen+1 > maxLen && lineBuffer.Len() > 0 {
 					chunks = append(chunks, strings.TrimSpace(lineBuffer.String()))

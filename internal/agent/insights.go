@@ -257,6 +257,9 @@ func (e *InsightsEngine) GetSessionStats(ctx context.Context, sessionID string) 
 	if err != nil {
 		return nil, err
 	}
+	if sess == nil {
+		return nil, fmt.Errorf("session not found: %s", sessionID)
+	}
 
 	return &SessionStats{
 		ID:               sess.ID,

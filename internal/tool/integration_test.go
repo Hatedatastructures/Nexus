@@ -173,14 +173,14 @@ func TestSSRFBlocked_ViaTool(t *testing.T) {
 	}
 }
 
-// TestSSRFBlocked_NoChecker 验证未设置 URL 安全检查器时默认放行。
+// TestSSRFBlocked_NoChecker 验证未设置 URL 安全检查器时默认拒绝 (fail-closed)。
 func TestSSRFBlocked_NoChecker(t *testing.T) {
 	// 确保全局检查器为 nil
 	SetURLSafetyConfig(nil)
 
 	safe, reason := CheckURLSafety("http://169.254.169.254/latest/meta-data/")
-	if !safe {
-		t.Fatalf("未设置检查器时应默认放行，实际被拦截: %s", reason)
+	if safe {
+		t.Fatalf("未设置检查器时应默认拒绝 (fail-closed)，实际被放行: %s", reason)
 	}
 }
 

@@ -101,6 +101,9 @@ func (t *SkillManageTool) installSkill(ctx context.Context, identifier string) (
 	if skillName == "" {
 		return ToolError("无法从标识符提取技能名称"), nil
 	}
+	if skillName == "." || skillName == ".." || strings.ContainsAny(skillName, "/\\") {
+		return ToolError("无效的技能名称"), nil
+	}
 
 	targetDir := filepath.Join(skillsDir, skillName)
 
@@ -303,7 +306,7 @@ func isGitIdentifier(identifier string) bool {
 			return false
 		}
 		host := rest[:colonIdx]
-		return isAllowedGitHost(host)
+		return IsAllowedGitHost(host)
 	}
 	// HTTPS URL: must be from a known host
 	if strings.HasPrefix(identifier, "https://") {
@@ -311,13 +314,13 @@ func isGitIdentifier(identifier string) bool {
 		if err != nil {
 			return false
 		}
-		return isAllowedGitHost(u.Hostname())
+		return IsAllowedGitHost(u.Hostname())
 	}
 	return false
 }
 
-// isAllowedGitHost 检查 git 主机是否在白名单中。
-func isAllowedGitHost(host string) bool {
+// IsAllowedGitHost 检查 git 主机是否在白名单中。
+func IsAllowedGitHost(host string) bool {
 	switch host {
 	case "github.com", "gitlab.com", "bitbucket.org":
 		return true

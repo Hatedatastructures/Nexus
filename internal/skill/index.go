@@ -49,8 +49,9 @@ func BuildSkillsIndex(skills []*Skill, tools []string, platform string) string {
 
 	for _, skill := range skills {
 		desc := skill.Description
-		if len(desc) > 100 {
-			desc = desc[:97] + "..."
+		runes := []rune(desc)
+		if len(runes) > 100 {
+			desc = string(runes[:97]) + "..."
 		}
 		lines = append(lines, fmt.Sprintf("- **%s**: %s", skill.Name, desc))
 	}
@@ -121,8 +122,9 @@ func LoadSkillsIndexFromCache(cacheDir string) string {
 
 	for _, s := range snapshot.Skills {
 		desc := s.Description
-		if len(desc) > 100 {
-			desc = desc[:97] + "..."
+		runes := []rune(desc)
+		if len(runes) > 100 {
+			desc = string(runes[:97]) + "..."
 		}
 		lines = append(lines, fmt.Sprintf("- **%s**: %s", s.Name, desc))
 	}

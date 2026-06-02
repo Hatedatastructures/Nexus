@@ -155,10 +155,11 @@ func migrateV10(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
-	// 回填已有数据
+	// 回填已有数据（包含 content + tool_name + tool_calls，与触发器一致）
 	_, err = db.ExecContext(ctx,
 		`INSERT INTO messages_fts_trigram(rowid, content)
-		 SELECT id, COALESCE(content, '') FROM messages WHERE content IS NOT NULL`,
+		 SELECT id, COALESCE(content, '') || ' ' || COALESCE(tool_name, '') || ' ' || COALESCE(tool_calls, '')
+		 FROM messages WHERE content IS NOT NULL`,
 	)
 	if err != nil {
 		slog.Warn("v10 trigram backfill failed (possibly no data)", "error", err)
@@ -180,11 +181,15 @@ func migrateV11(ctx context.Context, db *sql.DB) error {
 		"messages_fts_trigram_delete",
 		"messages_fts_trigram_update",
 	} {
-		_, _ = db.ExecContext(ctx, "DROP TRIGGER IF EXISTS "+trig)
+		if _, err := db.ExecContext(ctx, "DROP TRIGGER IF EXISTS "+trig); err != nil {
+			slog.Warn("migration v11: failed to drop trigger", "trigger", trig, "err", err)
+		}
 	}
 
 	for _, tbl := range []string{"messages_fts", "messages_fts_trigram"} {
-		_, _ = db.ExecContext(ctx, "DROP TABLE IF EXISTS "+tbl)
+		if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+tbl); err != nil {
+			slog.Warn("migration v11: failed to drop table", "table", tbl, "err", err)
+		}
 	}
 
 	// 使用新内联模式重建虚拟表和触发器
@@ -277,6 +282,9 @@ func parseSchemaColumns(schema string) (map[string]map[string]string, error) {
 	}
 	defer ref.Close()
 
+	// :memory: 每个连接是独立的数据库，必须限制为单连接
+	ref.SetMaxOpenConns(1)
+
 	// 拆分并执行模式 SQL（跳过 FTS 和触发器，它们不需要列调和）
 	for _, stmt := range splitSQLStatements(schema) {
 		upper := strings.ToUpper(strings.TrimSpace(stmt))
@@ -299,12 +307,17 @@ func parseSchemaColumns(schema string) (map[string]map[string]string, error) {
 	defer rows.Close()
 
 	tableColumns := make(map[string]map[string]string)
+	var tableNames []string
 	for rows.Next() {
 		var tblName string
 		if err := rows.Scan(&tblName); err != nil {
 			return nil, err
 		}
+		tableNames = append(tableNames, tblName)
+	}
+	rows.Close()
 
+	for _, tblName := range tableNames {
 		cols := make(map[string]string)
 		infoRows, err := ref.Query("PRAGMA table_info(\"" + tblName + "\")")
 		if err != nil {
@@ -321,7 +334,6 @@ func parseSchemaColumns(schema string) (map[string]map[string]string, error) {
 				infoRows.Close()
 				return nil, err
 			}
-			// 重建类型表达式供 ALTER TABLE ADD COLUMN 使用
 			var parts []string
 			if colType != "" {
 				parts = append(parts, colType)
@@ -536,31 +548,120 @@ func execSchemaStatements(ctx context.Context, db *sql.DB, sqlText string) error
 }
 
 // splitSQLStatements 按分号拆分 SQL 文本为独立语句。
-// 跳过空行和纯注释行。
+// 跳过空行和纯注释行。正确处理 BEGIN...END 块内的分号——
+// 只在嵌套深度为 0 时才在分号处拆分，避免触发器定义被截断。
 func splitSQLStatements(sqlText string) []string {
-	raw := strings.Split(sqlText, ";")
 	var result []string
-	for _, s := range raw {
-		s = strings.TrimSpace(s)
-		if s == "" {
+	var current strings.Builder
+	depth := 0
+
+	for i := 0; i < len(sqlText); i++ {
+		ch := sqlText[i]
+
+		// 跳过单引号字符串
+		if ch == '\'' {
+			current.WriteByte(ch)
+			for i++; i < len(sqlText); i++ {
+				current.WriteByte(sqlText[i])
+				if sqlText[i] == '\'' {
+					// 检查转义引号 ''
+					if i+1 < len(sqlText) && sqlText[i+1] == '\'' {
+						i++
+						current.WriteByte(sqlText[i])
+						continue
+					}
+					break
+				}
+			}
 			continue
 		}
-		// 跳过纯注释语句
-		lines := strings.Split(s, "\n")
-		allComments := true
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if trimmed != "" && !strings.HasPrefix(trimmed, "--") {
-				allComments = false
-				break
+
+		// 跳过双引号标识符
+		if ch == '"' {
+			current.WriteByte(ch)
+			for i++; i < len(sqlText); i++ {
+				current.WriteByte(sqlText[i])
+				if sqlText[i] == '"' {
+					break
+				}
+			}
+			continue
+		}
+
+		// 跳过 -- 单行注释
+		if ch == '-' && i+1 < len(sqlText) && sqlText[i+1] == '-' {
+			for ; i < len(sqlText) && sqlText[i] != '\n'; i++ {
+				current.WriteByte(sqlText[i])
+			}
+			if i < len(sqlText) {
+				current.WriteByte('\n')
+			}
+			continue
+		}
+
+		// 追踪 BEGIN/END 嵌套深度
+		if ch == 'B' || ch == 'b' {
+			upper := strings.ToUpper(sqlText[i:])
+			if strings.HasPrefix(upper, "BEGIN") {
+				// 确认后面不是标识符的一部分
+				after := ""
+				if len(upper) > 5 {
+					after = string(upper[5])
+				}
+				if after == "" || after == " " || after == "\t" || after == "\n" || after == "\r" {
+					depth++
+				}
 			}
 		}
-		if allComments {
+		if (ch == 'E' || ch == 'e') && depth > 0 {
+			upper := strings.ToUpper(sqlText[i:])
+			if strings.HasPrefix(upper, "END") {
+				after := ""
+				if len(upper) > 3 {
+					after = string(upper[3])
+				}
+				if after == "" || after == ";" || after == " " || after == "\t" || after == "\n" || after == "\r" {
+					depth--
+				}
+			}
+		}
+
+		// 只在嵌套深度为 0 时在分号处拆分
+		if ch == ';' && depth == 0 {
+			stmt := strings.TrimSpace(current.String())
+			current.Reset()
+			if stmt == "" {
+				continue
+			}
+			if isCommentOnly(stmt) {
+				continue
+			}
+			result = append(result, stmt)
 			continue
 		}
-		result = append(result, s)
+
+		current.WriteByte(ch)
 	}
+
+	// 处理末尾没有分号的语句
+	stmt := strings.TrimSpace(current.String())
+	if stmt != "" && !isCommentOnly(stmt) {
+		result = append(result, stmt)
+	}
+
 	return result
+}
+
+// isCommentOnly 检查语句是否仅包含注释
+func isCommentOnly(stmt string) bool {
+	lines := strings.Split(stmt, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "--") {
+			return false
+		}
+	}
+	return true
 }
 
 // tableExists 检查指定名称的表在数据库中是否存在
@@ -580,7 +681,7 @@ func getSchemaVersion(ctx context.Context, db *sql.DB) (int, error) {
 		"SELECT version FROM schema_version LIMIT 1",
 	).Scan(&version)
 	if err != nil {
-		if strings.Contains(err.Error(), "no such table") {
+		if strings.Contains(err.Error(), "no such table") || err == sql.ErrNoRows {
 			return 0, nil
 		}
 		return 0, err
@@ -590,10 +691,14 @@ func getSchemaVersion(ctx context.Context, db *sql.DB) (int, error) {
 
 // setSchemaVersion 设置数据库模式版本号
 func setSchemaVersion(ctx context.Context, db *sql.DB, version int) error {
-	_, err := db.ExecContext(ctx,
-		`INSERT INTO schema_version (version) VALUES (?)
-		 ON CONFLICT DO UPDATE SET version = excluded.version`,
-		version,
-	)
+	// 先尝试更新，如果没有行则插入
+	result, err := db.ExecContext(ctx, "UPDATE schema_version SET version = ?", version)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		_, err = db.ExecContext(ctx, "INSERT INTO schema_version (version) VALUES (?)", version)
+	}
 	return err
 }

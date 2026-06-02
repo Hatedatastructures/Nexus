@@ -43,7 +43,7 @@ func NewChecker(policy *Policy, approvalChecker *approval.Checker) *Checker {
 // Check 检查工具调用的权限。
 // 返回权限决策结果，包含级别、原因和匹配到的规则。
 // 这是权限系统的主要入口点。
-func (c *Checker) Check(toolName string, args map[string]any) Decision {
+func (c *Checker) Check(ctx context.Context, toolName string, args map[string]any) Decision {
 	// 1. 策略引擎评估 (读锁保护 policy 读取)
 	c.mu.RLock()
 	policy := c.policy
@@ -66,7 +66,7 @@ func (c *Checker) Check(toolName string, args map[string]any) Decision {
 
 	// 3. 终端命令: 与原有审批引擎联动
 	if toolName == "terminal" && c.approval != nil && !decision.IsDenied() {
-		decision = c.mergeApprovalDecision(decision, args)
+		decision = c.mergeApprovalDecision(ctx, decision, args)
 	}
 
 	return decision
@@ -75,7 +75,7 @@ func (c *Checker) Check(toolName string, args map[string]any) Decision {
 // CheckWithReason 检查权限并返回格式化的权限描述。
 // 适用于需要向用户展示权限状态的场景。
 func (c *Checker) CheckWithReason(ctx context.Context, toolName string, args map[string]any) (Level, string) {
-	decision := c.Check(toolName, args)
+	decision := c.Check(ctx, toolName, args)
 	return decision.Level, decision.String()
 }
 
@@ -129,13 +129,13 @@ func (c *Checker) checkSessionMemory(toolName string, args map[string]any) *Leve
 // mergeApprovalDecision 将五级权限决策与原有审批引擎的结果合并。
 // 合并策略: 取更严格的决策。
 // 仅终端命令会触发此逻辑。
-func (c *Checker) mergeApprovalDecision(permDecision Decision, args map[string]any) Decision {
+func (c *Checker) mergeApprovalDecision(ctx context.Context, permDecision Decision, args map[string]any) Decision {
 	command, _ := args["command"].(string)
 	if command == "" {
 		return permDecision
 	}
 
-	approvalResult, approvalReason := c.approval.Check(context.Background(), command)
+	approvalResult, approvalReason := c.approval.Check(ctx, command)
 
 	// 审批引擎拒绝 = 权限系统中的 auto_deny
 	if approvalResult == approval.Denied {

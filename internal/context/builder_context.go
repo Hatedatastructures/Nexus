@@ -3,6 +3,7 @@
 package context
 
 import (
+	"html"
 	"encoding/base64"
 	"log/slog"
 	"os"
@@ -42,8 +43,8 @@ var contextThreatPatterns = []contextThreatPattern{
 	// ── 中文模式 ──
 	{regexp.MustCompile(`忽略(之前|上面|以上|先前)(的)?(指令|提示|规则|指示)`), "prompt_injection_zh"},
 	{regexp.MustCompile(`你(现在|从现在开始)(是|扮演|叫做)`), "role_override_zh"},
-	{regexp.MustCompile(`(?i)无视(之前|上面|以上|先前)(的)?(指令|提示|规则|指示)`), "prompt_injection_zh"},
-	{regexp.MustCompile(`(?i)抛弃(之前|上面|以上|先前)(的)?(指令|提示|规则|指示)`), "prompt_injection_zh"},
+		{regexp.MustCompile(`无视(之前|上面|以上|先前)(的)?(指令|提示|规则|指示)`), "prompt_injection_zh"},
+	{regexp.MustCompile(`抛弃(之前|上面|以上|先前)(的)?(指令|提示|规则|指示)`), "prompt_injection_zh"},
 	// ── 俄语模式 ──
 	{regexp.MustCompile(`(?i)игнориру(й|ть)\s+(предыдущие|все)\s+(инструкции|указания)`), "prompt_injection_ru"},
 	{regexp.MustCompile(`(?i)забудь\s+(все|предыдущие)\s+(инструкции|правила)`), "memory_injection_ru"},
@@ -141,11 +142,19 @@ func sanitizeContextContent(content string) (string, []string) {
 		return content, nil
 	}
 
-	// 记录检测到的威胁并继续，但移除可能的恶意标记
+	// Remove malicious markers
 	cleaned := content
-	// 移除类似角色注入的标记
 	for _, tp := range contextThreatPatterns {
 		cleaned = tp.re.ReplaceAllString(cleaned, "[已移除: "+tp.label+"]")
+	}
+
+	// Defense-in-depth: decode HTML entities and rescan for evaded patterns
+	decoded := html.UnescapeString(cleaned)
+	if decoded != cleaned {
+		for _, tp := range contextThreatPatterns {
+			decoded = tp.re.ReplaceAllString(decoded, "[已移除: "+tp.label+"]")
+		}
+		cleaned = decoded
 	}
 
 	return cleaned, threats

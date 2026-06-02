@@ -4,6 +4,7 @@ package llm
 import (
 	"context"
 	"io"
+	"net/http"
 )
 
 // ───────────────────────────── 提供者接口 ─────────────────────────────
@@ -37,7 +38,7 @@ type Transport interface {
 
 	// BuildRequest 构建提供者特定的 HTTP 请求。
 	// 包括认证头、Content-Type 和请求体转换。
-	BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (any, error) // 返回 *http.Request 构建器
+	BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (*http.Request, error) // 返回 *http.Request 构建器
 
 	// ParseResponse 将提供者的 HTTP 响应解析为统一的 ChatResponse。
 	ParseResponse(body []byte) (*ChatResponse, error)

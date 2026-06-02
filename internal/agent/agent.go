@@ -59,7 +59,7 @@ type AIAgent struct {
 	mu                sync.Mutex           // 并发保护
 	iterationBudget   *IterationBudget     // 迭代预算
 	guardrails        *ToolCallGuardrails  // 工具调用安全护栏
-		recoveryEngine    *RecoveryEngine      // 错误恢复引擎
+	recoveryEngine    *RecoveryEngine      // 错误恢复引擎
 	cachedSystemPrompt string              // 缓存的系统提示词
 	messages          []llm.Message        // 当前对话消息列表
 	maxRetries        int                  // 最大重试次数

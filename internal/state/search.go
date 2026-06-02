@@ -223,10 +223,7 @@ func (s *Store) ListRecentSessions(ctx context.Context, limit int) ([]*Session, 
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT s.id, s.source, s.user_id, s.model, s.system_prompt, s.parent_session_id,
-		        s.started_at, s.ended_at, s.end_reason, s.title,
-		        s.message_count, s.tool_call_count, s.input_tokens, s.output_tokens,
-		        s.cache_read_tokens, s.cache_write_tokens, s.estimated_cost_usd, s.api_call_count
+		`SELECT `+sessionColumns+`
 		 FROM sessions s
 		 LEFT JOIN (
 		     SELECT session_id, MAX(timestamp) AS last_active
@@ -244,38 +241,10 @@ func (s *Store) ListRecentSessions(ctx context.Context, limit int) ([]*Session, 
 
 	var sessions []*Session
 	for rows.Next() {
-		sess := &Session{}
-		var endedAt, estimatedCost sql.NullFloat64
-		var userID, model, systemPrompt, parentSessionID, endReason, title sql.NullString
-		var messageCount, toolCallCount, inputTokens, outputTokens sql.NullInt64
-		var cacheReadTokens, cacheWriteTokens, apiCallCount sql.NullInt64
-
-		if err := rows.Scan(
-			&sess.ID, &sess.Source,
-			&userID, &model, &systemPrompt, &parentSessionID,
-			&sess.StartedAt, &endedAt, &endReason, &title,
-			&messageCount, &toolCallCount, &inputTokens, &outputTokens,
-			&cacheReadTokens, &cacheWriteTokens, &estimatedCost, &apiCallCount,
-		); err != nil {
+		sess, err := scanSessionRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("扫描会话行失败: %w", err)
 		}
-
-		sess.UserID = nullStr(userID)
-		sess.Model = nullStr(model)
-		sess.SystemPrompt = nullStr(systemPrompt)
-		sess.ParentSessionID = nullStr(parentSessionID)
-		sess.EndedAt = nullFloat(endedAt)
-		sess.EndReason = nullStr(endReason)
-		sess.Title = nullStr(title)
-		sess.MessageCount = int(nullInt(messageCount))
-		sess.ToolCallCount = int(nullInt(toolCallCount))
-		sess.InputTokens = int(nullInt(inputTokens))
-		sess.OutputTokens = int(nullInt(outputTokens))
-		sess.CacheReadTokens = int(nullInt(cacheReadTokens))
-		sess.CacheWriteTokens = int(nullInt(cacheWriteTokens))
-		sess.APICallCount = int(nullInt(apiCallCount))
-		sess.EstimatedCostUSD = nullFloat(estimatedCost)
-
 		sessions = append(sessions, sess)
 	}
 	if err := rows.Err(); err != nil {
@@ -287,6 +256,18 @@ func (s *Store) ListRecentSessions(ctx context.Context, limit int) ([]*Session, 
 	}
 	return sessions, nil
 }
+
+// ── 预编译正则 (sanitizeFTS5Query 使用) ──
+
+var (
+	ftsQuoteRe       = regexp.MustCompile(`"[^"]*"`)
+	ftsSpecialRe     = regexp.MustCompile(`[+{}()"^]`)
+	ftsMultiStarRe   = regexp.MustCompile(`\*+`)
+	ftsLeadingStarRe = regexp.MustCompile(`(^|\s)\*`)
+	ftsDanglingStart = regexp.MustCompile(`(?i)^(AND|OR|NOT)\b\s*`)
+	ftsDanglingEnd   = regexp.MustCompile(`(?i)\s+(AND|OR|NOT)\s*$`)
+	ftsDotDashRe     = regexp.MustCompile(`\b(\w+(?:[._-]\w+)+\b)`)
+)
 
 // ── FTS5 查询清理 ───────────────────────────────────────────
 
@@ -307,34 +288,27 @@ func sanitizeFTS5Query(query string) string {
 	}
 	quotedParts := []quotePart{}
 
-	quoteRe := regexp.MustCompile(`"[^"]*"`)
-	sanitized := quoteRe.ReplaceAllStringFunc(query, func(m string) string {
+	sanitized := ftsQuoteRe.ReplaceAllStringFunc(query, func(m string) string {
 		idx := len(quotedParts)
 		quotedParts = append(quotedParts, quotePart{text: m})
 		return fmt.Sprintf("\x00Q%d\x00", idx)
 	})
 
 	// 步骤 2: 去除剩余的 FTS5 特殊字符
-	specialRe := regexp.MustCompile(`[+{}()"^]`)
-	sanitized = specialRe.ReplaceAllString(sanitized, " ")
+	sanitized = ftsSpecialRe.ReplaceAllString(sanitized, " ")
 
 	// 步骤 3: 折叠重复的 *
-	multiStarRe := regexp.MustCompile(`\*+`)
-	sanitized = multiStarRe.ReplaceAllString(sanitized, "*")
+	sanitized = ftsMultiStarRe.ReplaceAllString(sanitized, "*")
 
 	// 步骤 4: 去除开头和空格后的 *
-	leadingStarRe := regexp.MustCompile(`(^|\s)\*`)
-	sanitized = leadingStarRe.ReplaceAllString(sanitized, "$1")
+	sanitized = ftsLeadingStarRe.ReplaceAllString(sanitized, "$1")
 
 	// 步骤 5: 去除开头/结尾的悬挂布尔操作符
-	danglingStart := regexp.MustCompile(`(?i)^(AND|OR|NOT)\b\s*`)
-	sanitized = danglingStart.ReplaceAllString(strings.TrimSpace(sanitized), "")
-	danglingEnd := regexp.MustCompile(`(?i)\s+(AND|OR|NOT)\s*$`)
-	sanitized = danglingEnd.ReplaceAllString(strings.TrimSpace(sanitized), "")
+	sanitized = ftsDanglingStart.ReplaceAllString(strings.TrimSpace(sanitized), "")
+	sanitized = ftsDanglingEnd.ReplaceAllString(strings.TrimSpace(sanitized), "")
 
 	// 步骤 6: 用双引号包裹无引号连字符/点分隔的术语
-	dotDashRe := regexp.MustCompile(`\b(\w+(?:[._-]\w+)+\b)`)
-	sanitized = dotDashRe.ReplaceAllString(sanitized, `"$1"`)
+	sanitized = ftsDotDashRe.ReplaceAllString(sanitized, `"$1"`)
 
 	// 步骤 7: 恢复保护的引用短语
 	for i, qp := range quotedParts {
@@ -385,4 +359,3 @@ func escapeLikePattern(s string) string {
 	s = strings.ReplaceAll(s, "_", "\\_")
 	return s
 }
-

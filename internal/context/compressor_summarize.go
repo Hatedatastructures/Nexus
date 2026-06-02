@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"nexus-agent/internal/llm"
@@ -247,7 +248,7 @@ func (c *Compressor) serializeForSummary(messages []llm.Message) string {
 			if len(msg.ToolCalls) > 0 {
 				var tcParts []string
 				for _, tc := range msg.ToolCalls {
-					args := tc.Arguments
+					args := redactSensitiveData(tc.Arguments)
 					// 截断过长的参数
 					if len(args) > toolArgsMax {
 						args = args[:toolArgsHead] + "..."
@@ -330,7 +331,7 @@ func FormatSummary(messages []llm.Message) string {
 			// 提取工具调用信息
 			for _, tc := range msg.ToolCalls {
 				toolName := tc.Name
-				args := tc.Arguments
+				args := redactSensitiveData(tc.Arguments)
 				// 提取简短参数描述
 				argDesc := extractArgSummary(args)
 				entry := fmt.Sprintf("- [%s] %s", toolName, argDesc)
@@ -549,6 +550,24 @@ func inferFileOperation(toolName string) string {
 	default:
 		return "已读取"
 	}
+}
+
+// sensitivePatterns 匹配 API key、token、password、secret 等敏感值的正则模式。
+var sensitivePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(api[_-]?key|apikey)\s*[:=]\s*\S+`),
+	regexp.MustCompile(`(?i)(token|access[_-]?token|auth[_-]?token|bearer)\s*[:=]\s*\S+`),
+	regexp.MustCompile(`(?i)(password|passwd|pwd|secret)\s*[:=]\s*\S+`),
+	regexp.MustCompile(`(?i)(credential|connection[_-]?string)\s*[:=]\s*\S+`),
+	regexp.MustCompile(`sk-[a-zA-Z0-9]{20,}`),
+	regexp.MustCompile(`eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}`),
+}
+
+// redactSensitiveData 将输入中的敏感数据替换为 [REDACTED]。
+func redactSensitiveData(input string) string {
+	for _, re := range sensitivePatterns {
+		input = re.ReplaceAllString(input, "[REDACTED]")
+	}
+	return input
 }
 
 // truncateStr 将字符串截断到指定长度，超出时追加 "..."。

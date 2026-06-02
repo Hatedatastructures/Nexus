@@ -93,9 +93,12 @@ func forbidsSamplingParams(model string) bool {
 	return false
 }
 
-// SupportsExtendedThinking 检测模型是否支持扩展思维（排除 Haiku）。
+// SupportsExtendedThinking 检测模型是否支持扩展思维（仅限 Claude 非 Haiku 模型）。
 func SupportsExtendedThinking(model string) bool {
 	modelLower := strings.ToLower(model)
+	if !strings.Contains(modelLower, "claude") {
+		return false
+	}
 	if strings.Contains(modelLower, "haiku") {
 		return false
 	}

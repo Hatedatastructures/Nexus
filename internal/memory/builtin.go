@@ -779,16 +779,7 @@ func (p *BuiltinProvider) acquireLock(lockPath string) (func(), error) {
 		return nil, fmt.Errorf("创建锁目录失败: %w", err)
 	}
 
-	// Windows 锁文件需要存在且非空
-	if isWindows() {
-		if _, err := os.Stat(lockPath); os.IsNotExist(err) {
-			if err := os.WriteFile(lockPath, []byte(" "), 0600); err != nil {
-				return nil, fmt.Errorf("创建锁文件失败: %w", err)
-			}
-		}
-	}
-
-	// 打开锁文件
+	// 打开/创建锁文件 (O_CREATE 原子创建，消除 TOCTOU)
 	flag := os.O_RDWR | os.O_CREATE
 	if !isWindows() {
 		// Unix: 使用 O_APPEND 以兼容 fcntl
@@ -797,6 +788,13 @@ func (p *BuiltinProvider) acquireLock(lockPath string) (func(), error) {
 	fd, err := os.OpenFile(lockPath, flag, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("打开锁文件失败: %w", err)
+	}
+
+	// Windows 锁文件需要非空：加锁前确保文件有内容
+	if isWindows() {
+		if fi, err := fd.Stat(); err == nil && fi.Size() == 0 {
+			fd.Write([]byte(" "))
+		}
 	}
 
 	// 获取锁

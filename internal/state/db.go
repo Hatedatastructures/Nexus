@@ -18,6 +18,7 @@ type Session struct {
 	Source           string  `json:"source"`
 	UserID           string  `json:"user_id"`
 	Model            string  `json:"model"`
+	ModelConfig      string  `json:"model_config"`
 	SystemPrompt     string  `json:"system_prompt"`
 	ParentSessionID  string  `json:"parent_session_id"`
 	StartedAt        float64 `json:"started_at"`
@@ -30,6 +31,7 @@ type Session struct {
 	OutputTokens     int     `json:"output_tokens"`
 	CacheReadTokens  int     `json:"cache_read_tokens"`
 	CacheWriteTokens int     `json:"cache_write_tokens"`
+	ReasoningTokens  int     `json:"reasoning_tokens"`
 	EstimatedCostUSD float64 `json:"estimated_cost_usd"`
 	APICallCount     int     `json:"api_call_count"`
 }
@@ -73,7 +75,8 @@ type SessionFilter struct {
 type Store struct {
 	db         *sql.DB
 	mu         sync.RWMutex
-	writeCount int // 写操作计数器，用于定期触发 WAL checkpoint（受 mu 保护）
+	writeCount int  // 写操作计数器，用于定期触发 WAL checkpoint（受 mu 保护）
+	closed     bool // 防止 Close 后继续访问 db
 }
 
 // NewStore 创建或打开 SQLite 数据库。
@@ -86,8 +89,14 @@ func NewStore(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// Close 关闭数据库连接。
+// Close 安全关闭数据库连接。
 func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	return s.db.Close()
 }
 

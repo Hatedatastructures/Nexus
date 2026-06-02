@@ -114,7 +114,7 @@ func (p *CopilotProvider) CreateChatCompletion(ctx context.Context, req *ChatReq
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("Copilot API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
+		return nil, fmt.Errorf("Copilot API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
 	}
 
 	return p.transport.ParseResponse(body)
@@ -145,7 +145,7 @@ func (p *CopilotProvider) CreateChatCompletionStream(ctx context.Context, req *C
 		resp.Body.Close()
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("Copilot 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
+		return nil, fmt.Errorf("Copilot 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
 	}
 
 	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。

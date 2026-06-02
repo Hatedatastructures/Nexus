@@ -171,10 +171,14 @@ func (sp *SessionPersister) rotateIfNeeded() error {
 
 	// Flush and close the current file.
 	if sp.writer != nil {
-		_ = sp.writer.Flush()
+		if err := sp.writer.Flush(); err != nil {
+			return fmt.Errorf("flush during rotation: %w", err)
+		}
 	}
 	if sp.file != nil {
-		_ = sp.file.Close()
+		if err := sp.file.Close(); err != nil {
+			return fmt.Errorf("close during rotation: %w", err)
+		}
 	}
 
 	base := sp.filePath()

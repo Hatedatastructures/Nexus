@@ -59,7 +59,7 @@ func (t *AnthropicTransport) APIMode() string {
 
 // BuildRequest 构建 Anthropic Messages API HTTP 请求。
 // 将统一消息格式转换为 Anthropic 原生格式。
-func (t *AnthropicTransport) BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (any, error) {
+func (t *AnthropicTransport) BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (*http.Request, error) {
 	body := buildAnthropicRequestBody(req)
 
 	bodyBytes, err := json.Marshal(body)
@@ -302,12 +302,7 @@ func (p *AnthropicProvider) CreateChatCompletion(ctx context.Context, req *ChatR
 		return nil, err
 	}
 
-	httpReqTyped, ok := httpReq.(*http.Request)
-	if !ok {
-		return nil, fmt.Errorf("BuildRequest 返回类型不是 *http.Request")
-	}
-
-	resp, err := p.transport.httpClient.Do(httpReqTyped)
+	resp, err := p.transport.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 	}
@@ -321,7 +316,7 @@ func (p *AnthropicProvider) CreateChatCompletion(ctx context.Context, req *ChatR
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("Anthropic API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
+		return nil, fmt.Errorf("Anthropic API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
 	}
 
 	return p.transport.ParseResponse(body)
@@ -329,30 +324,31 @@ func (p *AnthropicProvider) CreateChatCompletion(ctx context.Context, req *ChatR
 
 // CreateChatCompletionStream 发送流式聊天补全请求。
 func (p *AnthropicProvider) CreateChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan *StreamDelta, error) {
-	if req.Model == "" {
-		reqCopy := *req
+	// 深拷贝请求，避免修改调用方的原始数据
+	reqCopy := *req
+	if reqCopy.Model == "" {
 		reqCopy.Model = p.model
-		req = &reqCopy
 	}
-
-	if req.Metadata == nil {
-		req.Metadata = make(map[string]any)
+	if reqCopy.Metadata == nil {
+		reqCopy.Metadata = make(map[string]any)
+	} else {
+		md := make(map[string]any, len(reqCopy.Metadata)+1)
+		for k, v := range reqCopy.Metadata {
+			md[k] = v
+		}
+		reqCopy.Metadata = md
 	}
-	req.Metadata["stream"] = true
+	reqCopy.Metadata["stream"] = true
+	req = &reqCopy
 
 	httpReq, err := p.transport.BuildRequest(ctx, req, p.apiKey)
 	if err != nil {
 		return nil, err
 	}
 
-	httpReqTyped, ok := httpReq.(*http.Request)
-	if !ok {
-		return nil, fmt.Errorf("BuildRequest 返回类型不是 *http.Request")
-	}
+	httpReq.Header.Set("Accept", "text/event-stream")
 
-	httpReqTyped.Header.Set("Accept", "text/event-stream")
-
-	resp, err := p.transport.httpClient.Do(httpReqTyped)
+	resp, err := p.transport.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 流式请求失败: %w", err)
 	}
@@ -362,7 +358,7 @@ func (p *AnthropicProvider) CreateChatCompletionStream(ctx context.Context, req 
 		resp.Body.Close()
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("Anthropic 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
+		return nil, fmt.Errorf("Anthropic 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
 	}
 
 	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。
@@ -872,7 +868,10 @@ func sanitizeAnthropicID(id string) string {
 					}
 				}
 				if len(curr.ToolCalls) > 0 {
-					last.ToolCalls = append(last.ToolCalls, curr.ToolCalls...)
+					merged := make([]ToolCall, len(last.ToolCalls)+len(curr.ToolCalls))
+					copy(merged, last.ToolCalls)
+					copy(merged[len(last.ToolCalls):], curr.ToolCalls)
+					last.ToolCalls = merged
 				}
 			} else {
 				result = append(result, curr)

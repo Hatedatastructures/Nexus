@@ -88,6 +88,15 @@ func MaybeAutoTitle(ctx context.Context, provider llm.Provider, store *state.Sto
 	}
 
 	// 异步生成（不传递 session 指针，避免跨 goroutine 数据竞争）
+	// deep copy messages to avoid data race with caller
+	msgs := make([]llm.Message, len(messages))
+	copy(msgs, messages)
+	for i := range msgs {
+		if len(msgs[i].ToolCalls) > 0 {
+			msgs[i].ToolCalls = make([]llm.ToolCall, len(msgs[i].ToolCalls))
+			copy(msgs[i].ToolCalls, messages[i].ToolCalls)
+		}
+	}
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -97,7 +106,7 @@ func MaybeAutoTitle(ctx context.Context, provider llm.Provider, store *state.Sto
 		titleCtx, titleCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer titleCancel()
 
-		title, err := GenerateTitle(titleCtx, provider, messages)
+		title, err := GenerateTitle(titleCtx, provider, msgs)
 		if err != nil {
 			slog.Warn("auto title generation failed", "session_id", sessionID, "err", err)
 			return

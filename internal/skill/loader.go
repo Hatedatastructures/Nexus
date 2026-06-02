@@ -280,7 +280,8 @@ func (l *SkillLoader) discoverInDir(dir string) ([]*Skill, error) {
 
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil // 跳过无法访问的路径
+			slog.Warn("skill: skip inaccessible path", "path", path, "error", err)
+			return nil
 		}
 
 		// 跳过排除的目录

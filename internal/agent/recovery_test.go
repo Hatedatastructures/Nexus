@@ -3,6 +3,8 @@ package agent
 import (
 	"errors"
 	"testing"
+
+	"nexus-agent/internal/llm"
 )
 
 // ───────────────────────────── TestClassifyAndRecoverContextOverflow ─────────────────────────────
@@ -216,5 +218,80 @@ func TestClassifyAndRecoverOthers(t *testing.T) {
 				t.Errorf("策略 = %q, want %q (message: %s)", action.Strategy, tt.wantStrategy, action.Message)
 			}
 		})
+	}
+}
+
+// ───────────────────────── AddRecipe 测试 ─────────────────────────
+
+func TestAddRecipe(t *testing.T) {
+	engine := NewRecoveryEngine()
+	baseCount := len(engine.recipes)
+
+	custom := RecoveryRecipe{
+		Name:     "custom_handler",
+		Priority: 0, // 最高优先级
+		Condition: func(_ error, classified *llm.ClassifiedError) bool {
+			return classified.Reason == llm.ReasonUnknown
+		},
+		Build: func(_ error, classified *llm.ClassifiedError) RecoveryAction {
+			return RecoveryAction{Strategy: StrategyAbort, Message: "custom handled"}
+		},
+	}
+	engine.AddRecipe(custom)
+
+	if len(engine.recipes) != baseCount+1 {
+		t.Fatalf("recipes = %d, want %d", len(engine.recipes), baseCount+1)
+	}
+
+	// 自定义配方优先级最高 (Priority=0)，应排在最前面
+	if engine.recipes[0].Name != "custom_handler" {
+		t.Errorf("first recipe = %q, want custom_handler", engine.recipes[0].Name)
+	}
+}
+
+func TestAddRecipe_SortedByPriority(t *testing.T) {
+	engine := NewRecoveryEngine()
+
+	engine.AddRecipe(RecoveryRecipe{Name: "low", Priority: 100})
+	engine.AddRecipe(RecoveryRecipe{Name: "high", Priority: 1})
+	engine.AddRecipe(RecoveryRecipe{Name: "mid", Priority: 50})
+
+	// 找到自定义配方，验证相对顺序
+	var names []string
+	for _, r := range engine.recipes {
+		if r.Name == "low" || r.Name == "high" || r.Name == "mid" {
+			names = append(names, r.Name)
+		}
+	}
+	if len(names) != 3 {
+		t.Fatalf("custom recipes = %v, want 3 entries", names)
+	}
+	if names[0] != "high" || names[1] != "mid" || names[2] != "low" {
+		t.Errorf("order = %v, want [high mid low]", names)
+	}
+}
+
+func TestAddRecipe_CustomRecipeMatches(t *testing.T) {
+	engine := NewRecoveryEngine()
+	called := false
+
+	engine.AddRecipe(RecoveryRecipe{
+		Name:     "catch_all",
+		Priority: -1, // 比所有内置配方优先级更高
+		Condition: func(_ error, classified *llm.ClassifiedError) bool {
+			return true
+		},
+		Build: func(_ error, classified *llm.ClassifiedError) RecoveryAction {
+			called = true
+			return RecoveryAction{Strategy: StrategyAbort, Message: "custom"}
+		},
+	})
+
+	action := engine.ClassifyAndRecover(errors.New("any error"))
+	if !called {
+		t.Error("custom recipe should have been called")
+	}
+	if action.Message != "custom" {
+		t.Errorf("message = %q, want custom", action.Message)
 	}
 }

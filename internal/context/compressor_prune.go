@@ -7,7 +7,6 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"nexus-agent/internal/llm"
@@ -29,9 +28,15 @@ func (c *Compressor) pruneOldToolResults(messages []llm.Message, protectTailCoun
 		return messages, 0
 	}
 
-	// 创建消息副本
+	// 创建消息深拷贝副本
 	result := make([]llm.Message, len(messages))
 	copy(result, messages)
+	for i := range result {
+		if len(result[i].ToolCalls) > 0 {
+			result[i].ToolCalls = make([]llm.ToolCall, len(messages[i].ToolCalls))
+			copy(result[i].ToolCalls, messages[i].ToolCalls)
+		}
+	}
 	pruned := 0
 
 	// 构建 call_id → (tool_name, arguments) 索引
@@ -201,7 +206,7 @@ func summarizeToolResult(toolName, toolArgs, content string) string {
 		pattern := argStr(args, "pattern")
 		path := argStr(args, "path")
 		target := argStr(args, "target")
-		if target == "" {
+		if target == "" || target == "?" {
 			target = "content"
 		}
 		count := extractJSONInt(content, "total_count")
@@ -210,7 +215,7 @@ func summarizeToolResult(toolName, toolArgs, content string) string {
 	case "patch":
 		path := argStr(args, "path")
 		mode := argStr(args, "mode")
-		if mode == "" {
+		if mode == "" || mode == "?" {
 			mode = "replace"
 		}
 		return fmt.Sprintf("[patch] %s in %s (%d chars result)", mode, path, contentLen)
@@ -314,15 +319,22 @@ func argInt(args map[string]any, key string, defaultVal int) int {
 }
 
 // extractJSONInt 尝试从 JSON 字符串中提取整数字段值。
+// 使用 json.Unmarshal 代替正则以避免每次调用的编译开销。
 func extractJSONInt(content, key string) int {
-	re := regexp.MustCompile(fmt.Sprintf(`"%s"\s*:\s*(-?\d+)`, regexp.QuoteMeta(key)))
-	matches := re.FindStringSubmatch(content)
-	if len(matches) < 2 {
+	var obj map[string]any
+	if json.Unmarshal([]byte(content), &obj) != nil {
 		return -1
 	}
-	var val int
-	fmt.Sscanf(matches[1], "%d", &val)
-	return val
+	switch v := obj[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	default:
+		return -1
+	}
 }
 
 // truncateToolCallArgsJSON 截断工具调用参数 JSON 到指定长度。

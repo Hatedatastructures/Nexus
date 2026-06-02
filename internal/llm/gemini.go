@@ -48,7 +48,7 @@ func (t *GeminiTransport) APIMode() string {
 
 // BuildRequest 构建 Gemini generateContent HTTP 请求。
 // API key 通过查询参数 ?key= 传递。
-func (t *GeminiTransport) BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (any, error) {
+func (t *GeminiTransport) BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (*http.Request, error) {
 	body := buildGeminiRequestBody(req)
 
 	bodyBytes, err := json.Marshal(body)
@@ -342,12 +342,7 @@ func (p *GeminiProvider) CreateChatCompletion(ctx context.Context, req *ChatRequ
 		return nil, err
 	}
 
-	httpReqTyped, ok := httpReq.(*http.Request)
-	if !ok {
-		return nil, fmt.Errorf("BuildRequest 返回类型不是 *http.Request")
-	}
-
-	resp, err := p.transport.httpClient.Do(httpReqTyped)
+	resp, err := p.transport.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 	}
@@ -361,7 +356,7 @@ func (p *GeminiProvider) CreateChatCompletion(ctx context.Context, req *ChatRequ
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("Gemini API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
+		return nil, fmt.Errorf("Gemini API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
 	}
 
 	return p.transport.ParseResponse(body)
@@ -369,36 +364,37 @@ func (p *GeminiProvider) CreateChatCompletion(ctx context.Context, req *ChatRequ
 
 // CreateChatCompletionStream 发送流式聊天补全请求。
 func (p *GeminiProvider) CreateChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan *StreamDelta, error) {
-	if req.Model == "" {
-		reqCopy := *req
+	// 深拷贝请求，避免修改调用方的原始数据
+	reqCopy := *req
+	if reqCopy.Model == "" {
 		reqCopy.Model = p.model
-		req = &reqCopy
 	}
-
-	if req.Metadata == nil {
-		req.Metadata = make(map[string]any)
+	if reqCopy.Metadata == nil {
+		reqCopy.Metadata = make(map[string]any)
+	} else {
+		md := make(map[string]any, len(reqCopy.Metadata)+1)
+		for k, v := range reqCopy.Metadata {
+			md[k] = v
+		}
+		reqCopy.Metadata = md
 	}
-	req.Metadata["stream"] = true
+	reqCopy.Metadata["stream"] = true
+	req = &reqCopy
 
 	httpReq, err := p.transport.BuildRequest(ctx, req, p.apiKey)
 	if err != nil {
 		return nil, err
 	}
 
-	httpReqTyped, ok := httpReq.(*http.Request)
-	if !ok {
-		return nil, fmt.Errorf("BuildRequest 返回类型不是 *http.Request")
-	}
-
 	// Gemini 流式端点：将 generateContent 替换为 streamGenerateContent?alt=sse
-	streamURL := strings.Replace(httpReqTyped.URL.String(), ":generateContent", ":streamGenerateContent?alt=sse", 1)
-	if parsed, err := httpReqTyped.URL.Parse(streamURL); err == nil {
-		httpReqTyped.URL = parsed
+	streamURL := strings.Replace(httpReq.URL.String(), ":generateContent", ":streamGenerateContent?alt=sse", 1)
+	if parsed, err := httpReq.URL.Parse(streamURL); err == nil {
+		httpReq.URL = parsed
 	}
-	httpReqTyped.RequestURI = "" // 清空 RequestURI 以避免与 URL 冲突
-	httpReqTyped.Header.Set("Accept", "text/event-stream")
+	httpReq.RequestURI = "" // 清空 RequestURI 以避免与 URL 冲突
+	httpReq.Header.Set("Accept", "text/event-stream")
 
-	resp, err := p.transport.httpClient.Do(httpReqTyped)
+	resp, err := p.transport.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 流式请求失败: %w", err)
 	}
@@ -408,7 +404,7 @@ func (p *GeminiProvider) CreateChatCompletionStream(ctx context.Context, req *Ch
 		resp.Body.Close()
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("Gemini 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
+		return nil, fmt.Errorf("Gemini 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
 	}
 
 	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。
@@ -445,7 +441,7 @@ func (p *GeminiProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if resp.StatusCode != http.StatusOK {
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("Gemini 模型列表 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
+		return nil, fmt.Errorf("Gemini 模型列表 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
 	}
 
 	var listResp geminiModelListResponse
@@ -825,7 +821,7 @@ func convertMessageToGemini(msg *Message, callIDToName map[string]string) *gemin
 // mapGeminiStopReason 将 Gemini finishReason 映射为统一的停止原因。
 func mapGeminiStopReason(reason string, hasToolCalls bool) string {
 	if hasToolCalls {
-		return StopToolCalls
+		return StopToolUse
 	}
 	switch strings.ToUpper(reason) {
 	case "STOP":
@@ -855,7 +851,9 @@ func convertGeminiUsage(meta *geminiUsageMetadata) *TokenUsage {
 // generateShortID 生成简短的唯一 ID (使用 crypto/rand)。
 func generateShortID() string {
 	b := make([]byte, 8)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%016x", time.Now().UnixNano())
+	}
 	return fmt.Sprintf("%016x", b)
 }
 

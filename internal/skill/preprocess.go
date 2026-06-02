@@ -2,14 +2,21 @@
 package skill
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
+
+	"nexus-agent/internal/approval"
 )
 
-// ───────────────────────────── 模板变量 ─────────────────────────────
+// 敏感环境变量前缀，用于过滤
+var sensitiveEnvPrefixes = []string{"API_KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH", "PRIVATE"}
 
 // defaultVars 返回默认的模板变量映射。
 // 这些变量在技能正文中被替换。
@@ -98,9 +105,11 @@ func expandVariables(text string, vars map[string]string) string {
 //   - 执行超时: 30 秒
 //   - 最大输出: 4096 字节
 //   - 命令在技能目录中执行 (工作目录)
+//   - 敏感环境变量已过滤
+//   - 需通过 approval.Checker 审批
 //
 // 返回展开后的文本和可能的错误。
-func ExpandInlineShell(body string) (string, error) {
+func ExpandInlineShell(body string, checker *approval.Checker) (string, error) {
 	var result strings.Builder
 	i := 0
 
@@ -126,9 +135,21 @@ func ExpandInlineShell(body string) (string, error) {
 
 		command := strings.TrimSpace(body[cmdStart : cmdStart+cmdEnd])
 
+		// 安全验证：禁止空字节，限制长度
+		if strings.ContainsRune(command, 0) {
+			result.WriteString("[!` 命令包含非法空字节 ]")
+			i = cmdStart + cmdEnd + 1
+			continue
+		}
+		if len(command) > 4096 {
+			result.WriteString("[!` 命令过长 (>4096 字符) ]")
+			i = cmdStart + cmdEnd + 1
+			continue
+		}
+
 		// 执行命令并替换
 		if command != "" {
-			output, err := executeInlineCommand(command)
+			output, err := executeInlineCommand(command, checker)
 			if err != nil {
 				result.WriteString(fmt.Sprintf("[!`%s` 执行失败: %v]", command, err))
 			} else {
@@ -143,8 +164,23 @@ func ExpandInlineShell(body string) (string, error) {
 }
 
 // executeInlineCommand 执行内联 Shell 命令。
-// 限制超时 30 秒，最大输出 4096 字节。
-func executeInlineCommand(command string) (string, error) {
+// 安全限制: 审批门、30 秒超时、敏感环境变量过滤、最大输出 4096 字节。
+func executeInlineCommand(command string, checker *approval.Checker) (string, error) {
+	// 审批检查
+	result, reason := checker.Check(context.Background(), command)
+	if result == approval.Denied {
+		slog.Warn("inline shell blocked by approval", "command", command, "reason", reason)
+		return "", fmt.Errorf("命令被安全策略拒绝: %s", reason)
+	}
+	if result == approval.Pending {
+		slog.Warn("inline shell requires approval, denying in batch mode", "command", command, "reason", reason)
+		return "", fmt.Errorf("命令需要用户审批（批处理模式下不可用）: %s", reason)
+	}
+
+	// 30 秒超时
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// 选择 shell
 	shell := "/bin/sh"
 	shellArg := "-c"
@@ -153,19 +189,49 @@ func executeInlineCommand(command string) (string, error) {
 		shellArg = "/c"
 	}
 
-	cmd := exec.Command(shell, shellArg, command)
-	cmd.Env = os.Environ()
+	cmd := exec.CommandContext(ctx, shell, shellArg, command)
+
+	// 过滤敏感环境变量
+	cmd.Env = filterSensitiveEnv(os.Environ())
+
+	// 限制工作目录
+	if skillDir := os.Getenv("HERMES_SKILL_DIR"); skillDir != "" {
+		cmd.Dir = skillDir
+	} else if home, err := os.UserHomeDir(); err == nil {
+		cmd.Dir = filepath.Join(home, ".nexus", "skills")
+	}
 
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("命令退出码异常: %w", err)
 	}
 
-	// 限制输出长度
-	result := string(output)
-	if len(result) > 4096 {
-		result = result[:4096] + "\n[... 输出已截断 ...]"
+	// 限制输出长度 (rune 安全截断)
+	result2 := string(output)
+	runes := []rune(result2)
+	if len(runes) > 4096 {
+		result2 = string(runes[:4093]) + "\n[... 输出已截断 ...]"
 	}
 
-	return result, nil
+	return result2, nil
+}
+
+// filterSensitiveEnv 过滤掉敏感环境变量。
+func filterSensitiveEnv(env []string) []string {
+	var safe []string
+	for _, e := range env {
+		parts := strings.SplitN(e, "=", 2)
+		key := strings.ToUpper(parts[0])
+		isSensitive := false
+		for _, prefix := range sensitiveEnvPrefixes {
+			if strings.HasPrefix(key, prefix) {
+				isSensitive = true
+				break
+			}
+		}
+		if !isSensitive {
+			safe = append(safe, e)
+		}
+	}
+	return safe
 }

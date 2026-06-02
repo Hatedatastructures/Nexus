@@ -34,6 +34,8 @@ type AgentCache struct {
 	maxSize int                     // 最大缓存条目数 (默认 128)
 	idleTTL time.Duration           // 空闲超时 (默认 1 小时)
 	lruList *list.List              // LRU 链表 (最近使用在前)
+	wg     sync.WaitGroup           // track background goroutines
+	closed bool                     // prevent use after Close
 }
 
 // NewAgentCache 创建代理缓存。
@@ -86,7 +88,9 @@ func (c *AgentCache) GetOrCreate(sessionKey string, factory func() (*agent.AIAge
 		}
 		// 泄露的 agent 实例需要清理
 		if newAgent != nil {
+			c.wg.Add(1)
 			go func() {
+				defer c.wg.Done()
 				defer func() {
 					if r := recover(); r != nil {
 						slog.Warn("agent shutdown panicked", "err", r)
@@ -156,7 +160,9 @@ func (c *AgentCache) SweepIdle(ctx context.Context) int {
 
 	// 异步清理被驱逐的代理
 	for _, entry := range expired {
+		c.wg.Add(1)
 		go func(e *cacheEntry) {
+			defer c.wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
 					slog.Warn("agent shutdown panicked", "err", r)
@@ -199,6 +205,30 @@ func (c *AgentCache) Size() int {
 	return len(c.entries)
 }
 
+// Close waits for all background goroutines to finish and shuts down cached agents.
+func (c *AgentCache) Close() {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.closed = true
+	c.mu.Unlock()
+
+	c.wg.Wait()
+
+	// Shutdown all remaining agents
+	c.mu.Lock()
+	for key, entry := range c.entries {
+		if entry.agent != nil {
+			entry.agent.Shutdown()
+		}
+		delete(c.entries, key)
+	}
+	c.lruList.Init()
+	c.mu.Unlock()
+}
+
 // ───────────────────────────── 内部方法 ─────────────────────────────
 
 // evictLRU 驱逐一个最少使用的条目。
@@ -228,8 +258,10 @@ func (c *AgentCache) evictLRU() bool {
 			"cache_size", len(c.entries),
 		)
 
-				// 异步清理被驱逐的代理
+			// 异步清理被驱逐的代理
+			c.wg.Add(1)
 			go func(e *cacheEntry) {
+				defer c.wg.Done()
 				if e.agent != nil {
 					e.agent.Shutdown()
 				}

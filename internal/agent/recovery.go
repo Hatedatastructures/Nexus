@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"sync"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -53,6 +54,7 @@ type RecoveryRecipe struct {
 // RecoveryEngine 是错误恢复引擎，维护一组有序配方。
 // 遇到错误时按优先级依次匹配配方，返回第一个命中的恢复动作。
 type RecoveryEngine struct {
+	mu      sync.RWMutex
 	recipes []RecoveryRecipe
 }
 
@@ -67,6 +69,8 @@ func NewRecoveryEngine() *RecoveryEngine {
 // ClassifyAndRecover 对错误进行分类并返回最匹配的恢复动作。
 // 如果没有配方命中，返回 abort 策略作为安全兜底。
 func (e *RecoveryEngine) ClassifyAndRecover(err error) RecoveryAction {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	if err == nil {
 		return RecoveryAction{
 			Strategy: StrategyAbort,
@@ -93,6 +97,8 @@ func (e *RecoveryEngine) ClassifyAndRecover(err error) RecoveryAction {
 
 // AddRecipe 添加自定义恢复配方。配方按优先级自动排序。
 func (e *RecoveryEngine) AddRecipe(recipe RecoveryRecipe) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.recipes = append(e.recipes, recipe)
 	// 按优先级升序排列
 	sortRecipes(e.recipes)

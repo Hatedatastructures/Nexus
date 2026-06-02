@@ -85,6 +85,18 @@ type ProviderConfig struct {
 	OAuthURL string `yaml:"oauth_url"` // OAuth 令牌端点 (可选)
 }
 
+
+// String 返回 ProviderConfig 的安全字符串表示，API 密钥被脱敏。
+func (p ProviderConfig) String() string {
+	apiKey := p.APIKey
+	if len(apiKey) > 8 {
+		apiKey = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+	} else if len(apiKey) > 0 {
+		apiKey = "****"
+	}
+	return fmt.Sprintf("ProviderConfig{BaseURL: %s, APIKey: %s, APIMode: %s, OAuthURL: %s}",
+		p.BaseURL, apiKey, p.APIMode, p.OAuthURL)
+}
 // ───────────────────────────── 模型配置 ─────────────────────────────
 
 // ModelConfig 定义单个模型的行为参数

@@ -52,7 +52,7 @@ func (t *LMStudioTransport) APIMode() string {
 
 // BuildRequest 构建 LM Studio Chat Completions HTTP 请求。
 // 使用与 OpenAI 兼容的请求格式，LM Studio 本地服务通常不需要 API Key。
-func (t *LMStudioTransport) BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (any, error) {
+func (t *LMStudioTransport) BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (*http.Request, error) {
 	body := buildOpenAIRequestBody(req)
 
 	bodyBytes, err := json.Marshal(body)
@@ -118,8 +118,8 @@ func (t *LMStudioTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 			})
 		}
 		// 如果停止原因为空且存在工具调用，推断为 tool_calls
-		if response.StopReason == "" {
-			response.StopReason = StopToolCalls
+		if choice.FinishReason == "" {
+			response.StopReason = StopToolUse
 		}
 	}
 
@@ -255,6 +255,29 @@ func (t *LMStudioTransport) ParseStream(ctx context.Context, body io.ReadCloser)
 				return
 			}
 		}
+			// 检查 context 是否已取消，避免取消后仍发送 Done 增量
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			// 流通道关闭后（ParseSSEStream 遇到 [DONE] 或 EOF），发送最终 Done 增量
+			toolCalls = make([]ToolCall, 0, len(toolCallBuilders))
+			for _, builder := range toolCallBuilders {
+				toolCalls = append(toolCalls, ToolCall{
+					ID:        builder.ID,
+					Name:      builder.Name,
+					Arguments: builder.Arguments.String(),
+				})
+			}
+			ch <- &StreamDelta{
+				Content:    contentBuilder.String(),
+				Reasoning:  reasoningBuilder.String(),
+				ToolCalls:  toolCalls,
+				Usage:      finalUsage,
+				StopReason: StopEndTurn,
+				Done:       true,
+			}
 	}()
 
 	return ch
@@ -299,12 +322,7 @@ func (p *LMStudioProvider) CreateChatCompletion(ctx context.Context, req *ChatRe
 		return nil, err
 	}
 
-	httpReqTyped, ok := httpReq.(*http.Request)
-	if !ok {
-		return nil, fmt.Errorf("BuildRequest 返回类型不是 *http.Request")
-	}
-
-	resp, err := p.transport.httpClient.Do(httpReqTyped)
+	resp, err := p.transport.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("LM Studio HTTP 请求失败: %w", err)
 	}
@@ -318,7 +336,7 @@ func (p *LMStudioProvider) CreateChatCompletion(ctx context.Context, req *ChatRe
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("LM Studio API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
+		return nil, fmt.Errorf("LM Studio API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
 	}
 
 	return p.transport.ParseResponse(body)
@@ -326,33 +344,32 @@ func (p *LMStudioProvider) CreateChatCompletion(ctx context.Context, req *ChatRe
 
 // CreateChatCompletionStream 发送流式聊天补全请求。
 func (p *LMStudioProvider) CreateChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan *StreamDelta, error) {
-	// 确保模型已设置且启用流式
-	if req.Model == "" {
-		reqCopy := *req
+	// 深拷贝请求，避免修改调用方的原始数据
+	reqCopy := *req
+	if reqCopy.Model == "" {
 		reqCopy.Model = p.model
-		req = &reqCopy
 	}
-
-	// 通过 Metadata 传递 stream 参数
-	if req.Metadata == nil {
-		req.Metadata = make(map[string]any)
+	if reqCopy.Metadata == nil {
+		reqCopy.Metadata = make(map[string]any)
+	} else {
+		md := make(map[string]any, len(reqCopy.Metadata)+1)
+		for k, v := range reqCopy.Metadata {
+			md[k] = v
+		}
+		reqCopy.Metadata = md
 	}
-	req.Metadata["stream"] = true
+	reqCopy.Metadata["stream"] = true
+	req = &reqCopy
 
 	httpReq, err := p.transport.BuildRequest(ctx, req, p.apiKey)
 	if err != nil {
 		return nil, err
 	}
 
-	httpReqTyped, ok := httpReq.(*http.Request)
-	if !ok {
-		return nil, fmt.Errorf("BuildRequest 返回类型不是 *http.Request")
-	}
-
 	// 设置流式 Accept 头
-	httpReqTyped.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("Accept", "text/event-stream")
 
-	resp, err := p.transport.httpClient.Do(httpReqTyped)
+	resp, err := p.transport.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("LM Studio 流式请求失败: %w", err)
 	}
@@ -362,7 +379,7 @@ func (p *LMStudioProvider) CreateChatCompletionStream(ctx context.Context, req *
 		resp.Body.Close()
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("LM Studio 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
+		return nil, fmt.Errorf("LM Studio 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
 	}
 
 	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。

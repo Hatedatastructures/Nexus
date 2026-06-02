@@ -55,7 +55,7 @@ func (t *BedrockTransport) APIMode() string {
 
 // BuildRequest 构建 Bedrock Converse HTTP 请求。
 // 使用环境变量中的 AWS credentials 进行 SigV4 签名。
-func (t *BedrockTransport) BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (any, error) {
+func (t *BedrockTransport) BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (*http.Request, error) {
 	// 确定模型 ID
 	modelID := req.Model
 	if modelID == "" {
@@ -112,7 +112,7 @@ func (t *BedrockTransport) BuildRequest(ctx context.Context, req *ChatRequest, a
 			return nil, fmt.Errorf("AWS SigV4 签名失败: %w", err)
 		}
 	} else {
-		slog.Debug("AWS credentials not found, sending unsigned request (assuming proxy or IAM role)")
+		return nil, fmt.Errorf("AWS 凭证缺失: 请设置 AWS_ACCESS_KEY_ID 和 AWS_SECRET_ACCESS_KEY 环境变量，或配置 IAM 角色")
 	}
 
 	// 支持 GetBody 以便重试
@@ -195,24 +195,25 @@ func (t *BedrockTransport) ParseStream(ctx context.Context, body io.ReadCloser) 
 			default:
 			}
 
-			if event.Data == "" || event.Data == "[DONE]" {
+			if event.Data == "" {
+				continue
+			}
+			if event.Data == "[DONE]" {
 				// 流结束
-				if event.Data == "[DONE]" {
-					var toolCalls []ToolCall
-					for _, b := range toolCallBuilders {
-						toolCalls = append(toolCalls, ToolCall{
-							ID:        b.ID,
-							Name:      b.Name,
-							Arguments: b.Arguments.String(),
-						})
-					}
-					ch <- &StreamDelta{
-						Content:   contentBuilder.String(),
-						ToolCalls: toolCalls,
-						Reasoning: reasoningBuilder.String(),
-						Usage:     finalUsage,
-						Done:      true,
-					}
+				var toolCalls []ToolCall
+				for _, b := range toolCallBuilders {
+					toolCalls = append(toolCalls, ToolCall{
+						ID:        b.ID,
+						Name:      b.Name,
+						Arguments: b.Arguments.String(),
+					})
+				}
+				ch <- &StreamDelta{
+					Content:   contentBuilder.String(),
+					ToolCalls: toolCalls,
+					Reasoning: reasoningBuilder.String(),
+					Usage:     finalUsage,
+					Done:      true,
 				}
 				return
 			}
@@ -270,6 +271,7 @@ func (t *BedrockTransport) ParseStream(ctx context.Context, body io.ReadCloser) 
 					Content:    contentBuilder.String(),
 					ToolCalls:  toolCalls,
 					Reasoning:  reasoningBuilder.String(),
+					Usage:      finalUsage,
 					StopReason: "end_turn",
 					Done:       true,
 				}
@@ -278,6 +280,11 @@ func (t *BedrockTransport) ParseStream(ctx context.Context, body io.ReadCloser) 
 		}
 
 		// 如果循环正常结束而没有 Done，发送最终增量
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		var toolCalls []ToolCall
 		for _, b := range toolCallBuilders {
 			toolCalls = append(toolCalls, ToolCall{
@@ -290,6 +297,7 @@ func (t *BedrockTransport) ParseStream(ctx context.Context, body io.ReadCloser) 
 			Content:   contentBuilder.String(),
 			ToolCalls: toolCalls,
 			Reasoning: reasoningBuilder.String(),
+			Usage:     finalUsage,
 			Done:      true,
 		}
 	}()
@@ -343,12 +351,7 @@ func (p *BedrockProvider) CreateChatCompletion(ctx context.Context, req *ChatReq
 		return nil, err
 	}
 
-	httpReqTyped, ok := httpReq.(*http.Request)
-	if !ok {
-		return nil, fmt.Errorf("BuildRequest 返回类型不是 *http.Request")
-	}
-
-	resp, err := p.transport.httpClient.Do(httpReqTyped)
+	resp, err := p.transport.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 	}
@@ -362,7 +365,7 @@ func (p *BedrockProvider) CreateChatCompletion(ctx context.Context, req *ChatReq
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("Bedrock API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
+		return nil, fmt.Errorf("Bedrock API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
 	}
 
 	return p.transport.ParseResponse(body)
@@ -370,30 +373,31 @@ func (p *BedrockProvider) CreateChatCompletion(ctx context.Context, req *ChatReq
 
 // CreateChatCompletionStream 发送流式聊天补全请求。
 func (p *BedrockProvider) CreateChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan *StreamDelta, error) {
-	if req.Model == "" {
-		reqCopy := *req
+	// 深拷贝请求，避免修改调用方的原始数据
+	reqCopy := *req
+	if reqCopy.Model == "" {
 		reqCopy.Model = p.model
-		req = &reqCopy
 	}
-
-	if req.Metadata == nil {
-		req.Metadata = make(map[string]any)
+	if reqCopy.Metadata == nil {
+		reqCopy.Metadata = make(map[string]any)
+	} else {
+		md := make(map[string]any, len(reqCopy.Metadata)+1)
+		for k, v := range reqCopy.Metadata {
+			md[k] = v
+		}
+		reqCopy.Metadata = md
 	}
-	req.Metadata["stream"] = true
+	reqCopy.Metadata["stream"] = true
+	req = &reqCopy
 
 	httpReq, err := p.transport.BuildRequest(ctx, req, p.apiKey)
 	if err != nil {
 		return nil, err
 	}
 
-	httpReqTyped, ok := httpReq.(*http.Request)
-	if !ok {
-		return nil, fmt.Errorf("BuildRequest 返回类型不是 *http.Request")
-	}
+	httpReq.Header.Set("Accept", "application/vnd.amazon.eventstream")
 
-	httpReqTyped.Header.Set("Accept", "application/vnd.amazon.eventstream")
-
-	resp, err := p.transport.httpClient.Do(httpReqTyped)
+	resp, err := p.transport.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 流式请求失败: %w", err)
 	}
@@ -403,7 +407,7 @@ func (p *BedrockProvider) CreateChatCompletionStream(ctx context.Context, req *C
 		resp.Body.Close()
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("Bedrock 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
+		return nil, fmt.Errorf("Bedrock 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
 	}
 
 	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。
@@ -531,7 +535,7 @@ func hmacSHA256(key, data []byte) []byte {
 type bedrockConverseResponse struct {
 	Output     bedrockOutput    `json:"output"`
 	StopReason string           `json:"stopReason,omitempty"`
-	Usage      bedrockUsage     `json:"usage,omitempty"`
+	Usage      bedrockUsage     `json:"usage"`
 	Metrics    *bedrockMetrics  `json:"metrics,omitempty"`
 }
 

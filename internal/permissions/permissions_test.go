@@ -1,6 +1,7 @@
 package permissions
 
 import (
+	"context"
 	"testing"
 
 	"nexus-agent/internal/approval"
@@ -190,7 +191,7 @@ func TestCheckerSessionMemory(t *testing.T) {
 	args := map[string]any{"path": "/tmp/test.txt"}
 
 	// 第一次检查: 应为 AskOnce
-	decision1 := checker.Check("file_write", args)
+	decision1 := checker.Check(context.Background(), "file_write", args)
 	if decision1.Level != LevelAskOnce {
 		t.Errorf("第一次 Check() level = %v, want %v", decision1.Level, LevelAskOnce)
 	}
@@ -199,7 +200,7 @@ func TestCheckerSessionMemory(t *testing.T) {
 	checker.RememberDecision("file_write", args, LevelAutoAllow)
 
 	// 第二次检查: 应通过会话记忆自动放行
-	decision2 := checker.Check("file_write", args)
+	decision2 := checker.Check(context.Background(), "file_write", args)
 	if decision2.Level != LevelAutoAllow {
 		t.Errorf("第二次 Check() level = %v, want %v (会话记忆应生效)", decision2.Level, LevelAutoAllow)
 	}
@@ -208,7 +209,7 @@ func TestCheckerSessionMemory(t *testing.T) {
 	checker.ClearSession()
 
 	// 第三次检查: 清除后应恢复为 AskOnce
-	decision3 := checker.Check("file_write", args)
+	decision3 := checker.Check(context.Background(), "file_write", args)
 	if decision3.Level != LevelAskOnce {
 		t.Errorf("清除记忆后 Check() level = %v, want %v", decision3.Level, LevelAskOnce)
 	}

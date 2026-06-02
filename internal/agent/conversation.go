@@ -60,7 +60,7 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 
 	// 会话持久化: 记录用户输入
 	if a.persister != nil {
-if err := a.persister.RecordPromptHistory(userMessage); err != nil {
+		if err := a.persister.RecordPromptHistory(userMessage); err != nil {
 			slog.Warn("failed to record prompt history", "session_id", a.sessionID, "err", err)
 		}
 	}
@@ -317,7 +317,7 @@ if err := a.persister.RecordPromptHistory(userMessage); err != nil {
 
 	// ── 5. 同步记忆 (异步) ──
 	if a.memoryManager != nil {
-		// 异步同步记忆上下文，添加 panic recover 防止 goroutine 崩溃导致进程退出
+		// async sync memory with timeout to prevent goroutine leak
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -327,7 +327,7 @@ if err := a.persister.RecordPromptHistory(userMessage); err != nil {
 					)
 				}
 			}()
-			a.memoryManager.SystemPromptBlock()
+			_ = a.memoryManager.SystemPromptBlock()
 		}()
 	}
 
@@ -635,46 +635,55 @@ func (a *AIAgent) handleStreamCall(ctx context.Context, req *llm.ChatRequest) (*
 		reasoningBuilder strings.Builder
 	)
 
-	for delta := range deltaCh {
-		if delta.Error != nil {
-			return nil, delta.Error
-		}
+	Loop:
+	for {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case delta, ok := <-deltaCh:
+				if !ok {
+					break Loop
+				}
+				if delta.Error != nil {
+					return nil, delta.Error
+				}
 
-		if delta.Done {
-			if len(delta.ToolCalls) > 0 {
-				toolCalls = delta.ToolCalls
+				if delta.Done {
+					if len(delta.ToolCalls) > 0 {
+						toolCalls = delta.ToolCalls
+					}
+					if delta.Usage != nil {
+						finalUsage = delta.Usage
+					}
+					if delta.Reasoning != "" {
+						reasoningBuilder.WriteString(delta.Reasoning)
+					}
+					break Loop
+				}
+
+				if delta.Content != "" {
+					contentBuilder.WriteString(delta.Content)
+					a.mu.Lock()
+					streamCb := a.streamCallback
+					a.mu.Unlock()
+					if streamCb != nil {
+						streamCb(delta.Content)
+					}
+				}
+
+				if delta.Reasoning != "" {
+					reasoningBuilder.WriteString(delta.Reasoning)
+				}
+
+				if len(delta.ToolCalls) > 0 {
+					toolCalls = delta.ToolCalls
+				}
+
+				if delta.Usage != nil {
+					finalUsage = delta.Usage
+				}
 			}
-			if delta.Usage != nil {
-				finalUsage = delta.Usage
-			}
-			if delta.Reasoning != "" {
-				reasoningBuilder.WriteString(delta.Reasoning)
-			}
-			break
 		}
-
-		if delta.Content != "" {
-			contentBuilder.WriteString(delta.Content)
-			a.mu.Lock()
-			streamCb := a.streamCallback
-			a.mu.Unlock()
-			if streamCb != nil {
-				streamCb(delta.Content)
-			}
-		}
-
-		if delta.Reasoning != "" {
-			reasoningBuilder.WriteString(delta.Reasoning)
-		}
-
-		if len(delta.ToolCalls) > 0 {
-			toolCalls = delta.ToolCalls
-		}
-
-		if delta.Usage != nil {
-			finalUsage = delta.Usage
-		}
-	}
 
 	// 使用 LLM 返回的 stop reason，仅在没有工具调用时回退
 	stopReason := llm.StopEndTurn
@@ -699,18 +708,43 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 	}
 
 	// 解析所有工具调用的参数
-	parsed := make([]toolCall, len(toolCalls))
-	for i, tc := range toolCalls {
-		parsed[i] = toolCall{call: tc, args: parseToolArguments(tc.Arguments)}
+	var parseFailed []toolResult
+	parsed := make([]toolCall, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		args, err := parseToolArguments(tc.Arguments)
+		if err != nil {
+			slog.Warn("skipping tool call with unparseable arguments",
+				"session_id", a.sessionID,
+				"tool", tc.Name,
+				"call_id", tc.ID,
+				"err", err,
+			)
+			parseFailed = append(parseFailed, toolResult{
+				CallID: tc.ID,
+				Name:   tc.Name,
+				Result: fmt.Sprintf(`{"error": "工具参数解析失败: %s"}`, err.Error()),
+				Error:  fmt.Errorf("工具参数解析失败: %w", err),
+			})
+			continue
+		}
+		parsed = append(parsed, toolCall{call: tc, args: args})
+	}
+
+	if len(parsed) == 0 {
+		return parseFailed
 	}
 
 	// 判断是否可以并行执行
 	shouldParallel := a.shouldParallelize(toolCalls)
 
+	var execResults []toolResult
 	if shouldParallel && len(toolCalls) > 1 {
-		return a.executeParallel(ctx, parsed)
+		execResults = a.executeParallel(ctx, parsed)
+	} else {
+		execResults = a.executeSequential(ctx, parsed)
 	}
-	return a.executeSequential(ctx, parsed)
+
+	return append(parseFailed, execResults...)
 }
 
 func (a *AIAgent) executeParallel(ctx context.Context, calls []toolCall) []toolResult {
@@ -820,7 +854,7 @@ func (a *AIAgent) executeSequential(ctx context.Context, calls []toolCall) []too
 				Result: result,
 				Error:  err,
 			}
-	
+
 			a.mu.Lock()
 			toolCb2 := a.toolCallback
 			a.mu.Unlock()
@@ -838,7 +872,15 @@ func (a *AIAgent) executeSequential(ctx context.Context, calls []toolCall) []too
 func (a *AIAgent) applyGuardrails(toolCalls []llm.ToolCall) []llm.ToolCall {
 	var filtered []llm.ToolCall
 	for _, tc := range toolCalls {
-		args := parseToolArguments(tc.Arguments)
+		args, err := parseToolArguments(tc.Arguments)
+		if err != nil {
+			slog.Warn("guardrails: skipping tool call with unparseable arguments",
+				"session_id", a.sessionID,
+				"tool", tc.Name,
+				"err", err,
+			)
+			continue
+		}
 		allowed, reason := a.guardrails.Check(tc.Name, args)
 		if allowed {
 			filtered = append(filtered, tc)
@@ -906,15 +948,15 @@ func (a *AIAgent) shouldParallelize(toolCalls []llm.ToolCall) bool {
 	}
 
 	parallelSafe := map[string]bool{
-		"read_file":        true,
-		"search_files":     true,
-		"web_search":       true,
-		"web_extract":      true,
+		"file_read":       true,
+		"file_search":     true,
+		"web_search":      true,
+		"web_extract":     true,
 		"browser_snapshot": true,
-		"vision_analyze":   true,
-		"skills_list":      true,
-		"skill_view":       true,
-		"list_directory":   true,
+		"vision_analyze":  true,
+		"skills_list":     true,
+		"skill_view":      true,
+		"list_directory":  true,
 	}
 
 	for _, tc := range toolCalls {
@@ -927,16 +969,16 @@ func (a *AIAgent) shouldParallelize(toolCalls []llm.ToolCall) bool {
 
 // ───────────────────────────── 工具参数解析 ─────────────────────────────
 
-func parseToolArguments(argsJSON string) map[string]any {
+func parseToolArguments(argsJSON string) (map[string]any, error) {
 	if argsJSON == "" {
-		return make(map[string]any)
+		return make(map[string]any), nil
 	}
 	var args map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		slog.Warn("tool arguments JSON parse failed", "err", err)
-		return make(map[string]any)
+		return nil, fmt.Errorf("tool arguments JSON parse failed: %w", err)
 	}
-	return args
+	return args, nil
 }
 
 // ───────────────────────────── 辅助函数 ─────────────────────────────

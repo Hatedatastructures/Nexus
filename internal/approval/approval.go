@@ -67,48 +67,63 @@ func (c *Checker) Mode() string {
 	return c.mode
 }
 
-// SetMode 设置审批模式。
-func (c *Checker) SetMode(mode string) {
-	c.modeMu.Lock()
-	defer c.modeMu.Unlock()
-	c.mode = mode
+// SetMode 设置审批模式。仅接受 "off"/"smart"/"always"，其他值被拒绝。
+func (c *Checker) SetMode(mode string) bool {
+	switch mode {
+	case "off", "smart", "always":
+		c.modeMu.Lock()
+		c.mode = mode
+		c.modeMu.Unlock()
+		return true
+	default:
+		return false
+	}
 }
 
 // ───────────────────────────── 硬封锁模式 (绝对禁止) ─────────────────────────────
 
-// hardBlocked 包含绝对禁止的破坏性命令模式。
-// 匹配这些模式的命令在任何审批模式下都会直接拒绝。
+// hardBlockedPattern 描述一个绝对禁止的命令模式。
 type hardBlockedPattern struct {
 	pattern *regexp.Regexp
 	desc    string
 }
 
-var hardBlocked = []hardBlockedPattern{
-	// rm -rf / — 递归强制删除根目录
-	{regexp.MustCompile(`\brm\s+.*(-rf|-fr)\s+(/\s*|/\*|~/\s*|~/\*)`), "递归删除根目录 (rm -rf /)"},
-	{regexp.MustCompile(`\brm\s+(-rf|-fr)\s+/(\S*/?)`), "递归删除根目录下的系统路径"},
+var (
+	// rmTargetRe 预编译 isSafeDelete 使用的正则。
+	rmTargetRe = regexp.MustCompile(`\brm\s+(-rf|-fr|-r)\s+([^\s;|&]+)`)
 
-	// mkfs — 创建文件系统 (格式化磁盘)
-	{regexp.MustCompile(`\bmkfs\b`), "创建文件系统/格式化 (mkfs)"},
+	// hardBlocked 包含绝对禁止的破坏性命令模式。
+	// 匹配这些模式的命令在任何审批模式下都会直接拒绝。
+	hardBlocked = []hardBlockedPattern{
+		// rm -rf / — 递归强制删除根目录
+		{regexp.MustCompile(`\brm\s+.*(-rf|-fr)\s+(/\s*|/\*|~/\s*|~/\*)`), "递归删除根目录 (rm -rf /)"},
+		{regexp.MustCompile(`\brm\s+(-rf|-fr)\s+/(\S*/?)`), "递归删除根目录下的系统路径"},
 
-	// dd 写入设备
-	{regexp.MustCompile(`\bdd\s+.*of=/dev/sd[a-z]`), "dd 直接写入块设备"},
-	{regexp.MustCompile(`\bdd\s+.*of=/dev/nvme`), "dd 写入 NVMe 设备"},
-	{regexp.MustCompile(`\bdd\s+.*of=/dev/mmcblk`), "dd 写入 MMC 块设备"},
+		// mkfs — 创建文件系统 (格式化磁盘)
+		{regexp.MustCompile(`\bmkfs\b`), "创建文件系统/格式化 (mkfs)"},
 
-	// shutdown/reboot/poweroff
-	{regexp.MustCompile(`\b(shutdown|reboot|poweroff|halt)\s`), "系统关机/重启"},
+		// dd 写入设备
+		{regexp.MustCompile(`\bdd\s+.*of=/dev/sd[a-z]`), "dd 直接写入块设备"},
+		{regexp.MustCompile(`\bdd\s+.*of=/dev/nvme`), "dd 写入 NVMe 设备"},
+		{regexp.MustCompile(`\bdd\s+.*of=/dev/mmcblk`), "dd 写入 MMC 块设备"},
 
-	// fork bomb
-	{regexp.MustCompile(`:\s*\(\s*\)\s*{\s*:\s*\|\s*:\s*&\s*}\s*;`), "fork bomb (shell 函数递归)"},
-	{regexp.MustCompile(`(?i)\bperl\s+-e\s+.*fork\s+while\b`), "Perl fork bomb"},
+		// shutdown/reboot/poweroff
+		{regexp.MustCompile(`\b(shutdown|reboot|poweroff|halt)\s`), "系统关机/重启"},
 
-	// fdisk/parted 修改分区表
-	{regexp.MustCompile(`\b(fdisk|parted)\s+/dev/`), "修改磁盘分区表"},
+		// fork bomb
+		{regexp.MustCompile(`:\s*\(\s*\)\s*{\s*:\s*\|\s*:\s*&\s*}\s*;`), "fork bomb (shell 函数递归)"},
+		{regexp.MustCompile(`(?i)\bperl\s+-e\s+.*fork\s+while\b`), "Perl fork bomb"},
 
-	// chmod 777 / 等危险权限修改
-	{regexp.MustCompile(`\bchmod\s+.*777\s+/`), "危险权限修改 (chmod 777 系统路径)"},
-}
+		// fdisk/parted 修改分区表
+		{regexp.MustCompile(`\b(fdisk|parted)\s+/dev/`), "修改磁盘分区表"},
+
+		// chmod 777 / 等危险权限修改
+		{regexp.MustCompile(`\bchmod\s+.*777\s+/`), "危险权限修改 (chmod 777 系统路径)"},
+
+		// find -exec 配合破坏性命令
+		{regexp.MustCompile(`\bfind\s+.*\s+-exec\s+.*\b(rm|chmod|chown|mkfs|dd|shutdown|reboot|poweroff|halt)\b`), "find -exec 配合破坏性命令"},
+	}
+)
 
 // ───────────────────────────── 危险模式 (需要审批) ─────────────────────────────
 
@@ -156,6 +171,12 @@ var dangerousPatterns = []dangerousPattern{
 
 // ───────────────────────────── 安全模式 (自动通过) ─────────────────────────────
 
+// dangerousFlagPatterns matches dangerous command flags that bypass safe pattern checks.
+var dangerousFlagPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`-(delete|exec|execdir|ok)`),
+	regexp.MustCompile(`xargs`),
+}
+
 // safePatterns 包含明确安全的命令模式。
 // 匹配这些模式的命令在任何模式下都自动通过。
 var safePatterns = []*regexp.Regexp{
@@ -194,6 +215,16 @@ func (c *Checker) Check(ctx context.Context, command string) (Result, string) {
 	mode := c.mode
 	c.modeMu.RUnlock()
 
+	// 硬封锁检查 — 所有模式都必须先检查，不可绕过
+	if result, reason := c.checkHardBlocked(command); result == Denied {
+		slog.Warn("command matched hard-block pattern",
+			"command", truncateForLog(command, 200),
+			"reason", reason,
+			"mode", mode,
+		)
+		return Denied, reason
+	}
+
 	// off 模式: 始终通过
 	if mode == "off" {
 		return Approved, "审批模式为 off"
@@ -213,26 +244,8 @@ func (c *Checker) Check(ctx context.Context, command string) (Result, string) {
 	// 检查自定义白名单
 	for _, allowed := range c.allowlist {
 		if strings.Contains(command, allowed) {
-			// 白名单不能绕过硬阻止检查
-			if result, reason := c.checkHardBlocked(command); result == Denied {
-				slog.Warn("allowlist bypass blocked by hard-blocked check",
-					"command", truncateForLog(command, 200),
-					"allowlist_pattern", allowed,
-					"hard_blocked_reason", reason,
-				)
-				return Denied, reason
-			}
 			return Approved, fmt.Sprintf("自定义白名单: 匹配 '%s'", allowed)
 		}
-	}
-
-	// 硬封锁检查 (任何模式下都拒绝)
-	if result, reason := c.checkHardBlocked(command); result == Denied {
-		slog.Warn("command matched hard-block pattern",
-			"command", truncateForLog(command, 200),
-			"reason", reason,
-		)
-		return Denied, reason
 	}
 
 	// always 模式: 始终需要审批 (除非安全模式)
@@ -262,8 +275,8 @@ func (c *Checker) Check(ctx context.Context, command string) (Result, string) {
 		return Approved, "smart 模式: 未检测到危险模式"
 	}
 
-	// 默认通过 (未知模式)
-	return Approved, fmt.Sprintf("未知审批模式: %s", mode)
+	// 未知模式默认拒绝
+	return Denied, fmt.Sprintf("未知审批模式: %s", mode)
 }
 
 // CheckTool 检查工具调用是否安全。
@@ -286,15 +299,6 @@ func (c *Checker) checkHardBlocked(command string) (Result, string) {
 			return Denied, fmt.Sprintf("硬封锁: %s", hp.desc)
 		}
 	}
-
-	// 特殊检查: find ... -exec 危险
-	if findExecDangerous := regexp.MustCompile(`\bfind\s+.*\s+-exec\s+`); findExecDangerous.MatchString(command) {
-		// find -exec 可能执行危险命令，但 find -exec rm -rf / 应被硬封锁拦截
-		if strings.Contains(command, "rm -rf /") || strings.Contains(command, "rm -fr /") {
-			return Denied, "硬封锁: find -exec 配合递归删除根目录"
-		}
-	}
-
 	return Approved, ""
 }
 
@@ -317,6 +321,12 @@ func (c *Checker) checkDangerous(command string) (Result, string) {
 // isSafe 检查命令是否为明确安全的操作。
 // 即使匹配安全模式，也拒绝包含 shell 链式元字符的命令。
 func (c *Checker) isSafe(command string) bool {
+	// Check dangerous flags first
+	for _, dp := range dangerousFlagPatterns {
+		if dp.MatchString(command) {
+			return false
+		}
+	}
 	for _, sp := range safePatterns {
 		if sp.MatchString(command) {
 			// 匹配安全模式后，检查是否包含 shell 链式元字符
@@ -333,7 +343,7 @@ func (c *Checker) isSafe(command string) bool {
 // containsShellMetacharacters 检查命令是否包含 shell 链式元字符。
 // 这些字符可用于在看似安全的命令后追加危险操作。
 func containsShellMetacharacters(cmd string) bool {
-	return strings.ContainsAny(cmd, ";|`$") ||
+	return strings.ContainsAny(cmd, ";\n\r|`$<>") ||
 		strings.Contains(cmd, "&&") ||
 		strings.Contains(cmd, "||") ||
 		strings.Contains(cmd, "$(")
@@ -343,8 +353,7 @@ func containsShellMetacharacters(cmd string) bool {
 // 仅在不以 /、~、.. 开头的相对路径中删除时返回 true。
 func (c *Checker) isSafeDelete(command string) bool {
 	// 提取删除目标路径
-	re := regexp.MustCompile(`\brm\s+(-rf|-fr|-r)\s+([^\s;|&]+)`)
-	matches := re.FindStringSubmatch(command)
+	matches := rmTargetRe.FindStringSubmatch(command)
 	if len(matches) < 3 {
 		return false
 	}

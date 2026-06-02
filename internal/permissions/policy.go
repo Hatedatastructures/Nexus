@@ -6,7 +6,37 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
+
+// regexCache 缓存已编译的正则表达式，避免每次调用都重新编译。
+var (
+	regexCache   = make(map[string]*regexp.Regexp)
+	regexCacheMu sync.RWMutex
+)
+
+// getCompiledRegex 返回缓存编译后的正则表达式。
+func getCompiledRegex(pat string) (*regexp.Regexp, error) {
+	regexCacheMu.RLock()
+	re, ok := regexCache[pat]
+	regexCacheMu.RUnlock()
+	if ok {
+		return re, nil
+	}
+
+	regexCacheMu.Lock()
+	defer regexCacheMu.Unlock()
+	// 双重检查
+	if re, ok = regexCache[pat]; ok {
+		return re, nil
+	}
+	re, err := regexp.Compile(pat)
+	if err != nil {
+		return nil, err
+	}
+	regexCache[pat] = re
+	return re, nil
+}
 
 // ───────────────────────────── 策略规则 ─────────────────────────────
 
@@ -36,8 +66,8 @@ func (r *Rule) Match(toolName string, args map[string]any) bool {
 	// 匹配工具名 (glob 模式)
 	matched, err := filepath.Match(r.ToolPattern, toolName)
 	if err != nil {
-		// 无效的 glob 模式，视为不匹配
-		slog.Debug("permission rule glob pattern invalid", "pattern", r.ToolPattern, "err", err)
+		// 无效 glob 模式: 不匹配，让默认策略 (AskAlways) 兜底
+		slog.Warn("permission rule glob pattern invalid, skipping", "pattern", r.ToolPattern, "err", err)
 		return false
 	}
 	if !matched {
@@ -78,11 +108,11 @@ func matchArgPattern(pattern string, args map[string]any) bool {
 			return false
 		}
 		s := fmt.Sprintf("%v", val)
-		matched, err := regexp.MatchString(pat, s)
+		re, err := getCompiledRegex(pat)
 		if err != nil {
 			return false
 		}
-		return matched
+		return re.MatchString(s)
 	}
 
 	// 解析模式: key!=value (不等于)

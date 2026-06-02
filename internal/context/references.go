@@ -26,6 +26,7 @@ const (
 var sensitivePathPrefixes = []string{
 	".ssh", ".aws", ".gnupg", ".gpg", ".nexus/.env",
 	".env", "credentials", ".netrc", ".npmrc",
+	".kube", ".docker", "id_rsa", "id_ed25519", ".pgpass",
 }
 
 // ───────────────────────────── 数据结构 ─────────────────────────────
@@ -126,8 +127,16 @@ func ParseReferences(message string) []ContextReference {
 			ref.Target = ref.Target[:idx]
 			parts := strings.SplitN(rangePart, "-", 2)
 			if len(parts) == 2 {
-				fmt.Sscanf(parts[0], "%d", &ref.LineStart)
-				fmt.Sscanf(parts[1], "%d", &ref.LineEnd)
+				if n, err := fmt.Sscanf(parts[0], "%d", &ref.LineStart); n != 1 || err != nil {
+					ref.LineStart = 0
+				}
+				end := parts[1]
+				if len(end) > 0 && end[0] == 'L' {
+					end = end[1:]
+				}
+				if n, err := fmt.Sscanf(end, "%d", &ref.LineEnd); n != 1 || err != nil {
+					ref.LineEnd = 0
+				}
 			}
 		}
 
@@ -210,6 +219,7 @@ func expandFolder(path string) (string, error) {
 	var b strings.Builder
 	err = filepath.Walk(absPath, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
+			slog.Warn("context: skip inaccessible path", "path", p, "error", err)
 			return nil
 		}
 
@@ -290,10 +300,15 @@ func expandURL(ctx context.Context, url string) (string, error) {
 // ───────────────────────────── 辅助函数 ─────────────────────────────
 
 // isSensitivePath 检查路径是否包含敏感目录。
+// 使用路径段匹配避免子串误匹配 (如 .env 匹配 test_environment.go)。
 func isSensitivePath(path string) bool {
 	lower := strings.ToLower(path)
+	// Normalize path separators to / for cross-platform matching
+	normalized := strings.ReplaceAll(lower, string(os.PathSeparator), "/")
 	for _, prefix := range sensitivePathPrefixes {
-		if strings.Contains(lower, prefix) {
+		if strings.Contains(normalized, "/"+prefix) ||
+			strings.HasPrefix(normalized, prefix+"/") ||
+			strings.HasSuffix(normalized, prefix) {
 			return true
 		}
 	}

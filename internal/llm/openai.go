@@ -41,7 +41,7 @@ func (t *OpenAITransport) APIMode() string {
 
 // BuildRequest 构建 OpenAI Chat Completions HTTP 请求。
 // 返回 *http.Request 实例。
-func (t *OpenAITransport) BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (any, error) {
+func (t *OpenAITransport) BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (*http.Request, error) {
 	// 转换为 OpenAI 格式的请求体
 	body := buildOpenAIRequestBody(req)
 
@@ -92,10 +92,7 @@ func (t *OpenAITransport) ParseResponse(body []byte) (*ChatResponse, error) {
 		Usage:   convertOpenAIUsage(&oaiResp.Usage),
 	}
 
-	// 映射停止原因
-	response.StopReason = mapOpenAIStopReason(choice.FinishReason)
-
-	// 转换工具调用
+	// 转换工具调用（必须在映射停止原因之前，以便推断逻辑生效）
 	if len(msg.ToolCalls) > 0 {
 		response.ToolCalls = make([]ToolCall, 0, len(msg.ToolCalls))
 		for _, tc := range msg.ToolCalls {
@@ -105,10 +102,13 @@ func (t *OpenAITransport) ParseResponse(body []byte) (*ChatResponse, error) {
 				Arguments: tc.Function.Arguments,
 			})
 		}
-		// 如果停止原因为空且存在工具调用，推断为 tool_calls
-		if response.StopReason == "" {
-			response.StopReason = StopToolCalls
-		}
+	}
+
+	// 映射停止原因
+	response.StopReason = mapOpenAIStopReason(choice.FinishReason)
+	// 如果停止原因为默认值且存在工具调用，修正为 tool_use
+	if len(msg.ToolCalls) > 0 && response.StopReason == StopEndTurn && choice.FinishReason == "" {
+		response.StopReason = StopToolUse
 	}
 
 	// 提取推理内容（DeepSeek / Moonshot 等使用 reasoning_content 字段）
@@ -139,6 +139,7 @@ func (t *OpenAITransport) ParseStream(ctx context.Context, body io.ReadCloser) <
 		var toolCalls []ToolCall
 		toolCallBuilders := make(map[int]*toolCallBuilder)
 		var finalUsage *TokenUsage // 流式响应的累积 token 用量
+		sentDone := false
 
 		for event := range ParseSSEStream(ctx, body) {
 			// 检查 context 取消
@@ -149,12 +150,13 @@ func (t *OpenAITransport) ParseStream(ctx context.Context, body io.ReadCloser) <
 			}
 
 			if event.Data == "[DONE]" {
-				// 流结束，发送最终增量
-				ch <- &StreamDelta{
-					Content:   contentBuilder.String(),
-					ToolCalls: toolCalls,
-					Usage:     finalUsage,
-					Done:      true,
+				if !sentDone {
+					ch <- &StreamDelta{
+						Content:   contentBuilder.String(),
+						ToolCalls: toolCalls,
+						Usage:     finalUsage,
+						Done:      true,
+					}
 				}
 				return
 			}
@@ -214,6 +216,7 @@ func (t *OpenAITransport) ParseStream(ctx context.Context, body io.ReadCloser) <
 			// 停止原因
 			finishReason := chunk.Choices[0].FinishReason
 			if finishReason != "" {
+				sentDone = true
 				// 完成所有工具调用
 				toolCalls = make([]ToolCall, 0, len(toolCallBuilders))
 				for _, builder := range toolCallBuilders {
@@ -278,12 +281,8 @@ func (p *OpenAIProvider) CreateChatCompletion(ctx context.Context, req *ChatRequ
 		return nil, err
 	}
 
-	httpReqTyped, ok := httpReq.(*http.Request)
-	if !ok {
-		return nil, fmt.Errorf("BuildRequest 返回类型不是 *http.Request")
-	}
 
-	resp, err := p.transport.httpClient.Do(httpReqTyped)
+	resp, err := p.transport.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 	}
@@ -297,7 +296,7 @@ func (p *OpenAIProvider) CreateChatCompletion(ctx context.Context, req *ChatRequ
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("OpenAI API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
+		return nil, fmt.Errorf("OpenAI API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
 	}
 
 	return p.transport.ParseResponse(body)
@@ -305,33 +304,33 @@ func (p *OpenAIProvider) CreateChatCompletion(ctx context.Context, req *ChatRequ
 
 // CreateChatCompletionStream 发送流式聊天补全请求。
 func (p *OpenAIProvider) CreateChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan *StreamDelta, error) {
-	// 确保模型已设置且启用流式
-	if req.Model == "" {
-		reqCopy := *req
+	// 深拷贝请求，避免修改调用方的原始数据
+	reqCopy := *req
+	if reqCopy.Model == "" {
 		reqCopy.Model = p.model
-		req = &reqCopy
 	}
-
-	// 通过 Metadata 传递 stream 参数
-	if req.Metadata == nil {
-		req.Metadata = make(map[string]any)
+	if reqCopy.Metadata == nil {
+		reqCopy.Metadata = make(map[string]any)
+	} else {
+		md := make(map[string]any, len(reqCopy.Metadata)+1)
+		for k, v := range reqCopy.Metadata {
+			md[k] = v
+		}
+		reqCopy.Metadata = md
 	}
-	req.Metadata["stream"] = true
+	reqCopy.Metadata["stream"] = true
+	req = &reqCopy
 
 	httpReq, err := p.transport.BuildRequest(ctx, req, p.apiKey)
 	if err != nil {
 		return nil, err
 	}
 
-	httpReqTyped, ok := httpReq.(*http.Request)
-	if !ok {
-		return nil, fmt.Errorf("BuildRequest 返回类型不是 *http.Request")
-	}
 
 	// 设置流式 Accept 头
-	httpReqTyped.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("Accept", "text/event-stream")
 
-	resp, err := p.transport.httpClient.Do(httpReqTyped)
+	resp, err := p.transport.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 流式请求失败: %w", err)
 	}
@@ -341,7 +340,7 @@ func (p *OpenAIProvider) CreateChatCompletionStream(ctx context.Context, req *Ch
 		resp.Body.Close()
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("OpenAI 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, bodyStr)
+		return nil, fmt.Errorf("OpenAI 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
 	}
 
 	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。
@@ -627,11 +626,11 @@ func mapOpenAIStopReason(reason string) string {
 	case "length":
 		return StopLength
 	case "tool_calls":
-		return StopToolCalls
+		return StopToolUse
 	case "content_filter":
 		return StopContentFilter
 	case "function_call":
-		return StopToolCalls
+		return StopToolUse
 	default:
 		if reason == "" {
 			return StopEndTurn
@@ -676,7 +675,9 @@ func init() {
 //	→ "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 func buildAPIURL(baseURL, endpoint string) string {
 	base := strings.TrimRight(baseURL, "/")
-	if strings.Contains(base, "/v1") || strings.Contains(base, "/compatible-mode") {
+	hasV1Suffix := strings.HasSuffix(base, "/v1") || strings.Contains(base, "/v1/")
+	hasCompat := strings.Contains(base, "/compatible-mode")
+	if hasV1Suffix || hasCompat {
 		return base + "/" + strings.TrimLeft(endpoint, "/")
 	}
 	return base + "/v1/" + strings.TrimLeft(endpoint, "/")

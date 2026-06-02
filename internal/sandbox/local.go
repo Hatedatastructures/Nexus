@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"nexus-agent/internal/approval"
 )
 
 // ───────────────────────────── 本地环境 ─────────────────────────────
@@ -108,10 +110,19 @@ func (e *LocalEnvironment) Execute(ctx context.Context, command string, opts *Ex
 		}
 	}
 
-	// Sudo 模式
+	// Sudo 模式 — 需要用户审批
 	if opts.Sudo {
+		checker := approval.NewChecker("smart", nil, nil)
+		result, reason := checker.Check(ctx, command)
+		if result != approval.Approved {
+			return nil, fmt.Errorf("sudo 权限提升被拒绝: %s", reason)
+		}
 		cmd.Args = append([]string{"sudo"}, cmd.Args...)
-		cmd.Path, _ = exec.LookPath("sudo")
+			sudoPath, lookErr := exec.LookPath("sudo")
+			if lookErr != nil {
+				return nil, fmt.Errorf("sudo 不可用: %w", lookErr)
+			}
+			cmd.Path = sudoPath
 	}
 
 	// 标准输入
@@ -177,18 +188,18 @@ func (e *LocalEnvironment) ExecuteBackground(ctx context.Context, command string
 	setSysProcAttr(cmd)
 	cmd.Env = os.Environ()
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	handle := &OSProcessHandle{
+		cmd:       cmd,
+		stdoutBuf: &bytes.Buffer{},
+		stderrBuf: &bytes.Buffer{},
+	}
+	cmd.Stdout = handle.stdoutBuf
+	cmd.Stderr = handle.stderrBuf
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("后台进程启动失败: %w", err)
 	}
-
-	handle := &OSProcessHandle{
-		cmd:     cmd,
-		process: cmd.Process,
-	}
+	handle.process = cmd.Process
 
 	slog.Info("background process started", "pid", cmd.Process.Pid, "command", truncateShellCmd(command, 100))
 	return handle, nil
@@ -251,9 +262,11 @@ func (e *LocalEnvironment) extractCWDMarker(output string) (string, string) {
 // ───────────────────────────── 辅助函数 ─────────────────────────────
 
 // truncateShellCmd 截断命令字符串用于日志。
+// 按 rune 截断以避免在多字节 UTF-8 字符中间切断。
 func truncateShellCmd(cmd string, maxLen int) string {
-	if len(cmd) <= maxLen {
+	runes := []rune(cmd)
+	if len(runes) <= maxLen {
 		return cmd
 	}
-	return cmd[:maxLen] + "..."
+	return string(runes[:maxLen]) + "..."
 }

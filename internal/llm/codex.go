@@ -30,7 +30,7 @@ func NewCodexTransport(httpClient *http.Client, baseURL string) *CodexTransport 
 
 func (t *CodexTransport) APIMode() string { return "codex_responses" }
 
-func (t *CodexTransport) BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (any, error) {
+func (t *CodexTransport) BuildRequest(ctx context.Context, req *ChatRequest, apiKey string) (*http.Request, error) {
 	type codexInput struct {
 		Type    string `json:"type"`
 		Content string `json:"content"`
@@ -137,7 +137,12 @@ func (t *CodexTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 
 func (t *CodexTransport) ParseStream(ctx context.Context, body io.ReadCloser) <-chan *StreamDelta {
 	ch := make(chan *StreamDelta, 1)
-	ch <- &StreamDelta{Done: true, Error: fmt.Errorf("Codex Responses API does not support streaming, use non-streaming call")}
+	select {
+	case <-ctx.Done():
+		// Context cancelled, close body and return empty channel
+	default:
+		ch <- &StreamDelta{Done: true, Error: fmt.Errorf("Codex Responses API does not support streaming, use non-streaming call")}
+	}
 	close(ch)
 	body.Close()
 	return ch

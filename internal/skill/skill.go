@@ -9,10 +9,32 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
 )
+
+// sanitizeSkillName 验证技能名称安全性，防止路径遍历攻击。
+// 拒绝包含 ".."、"/"、"\" 或空字节的名称。
+func sanitizeSkillName(name string) error {
+	if name == "" {
+		return fmt.Errorf("技能名称为空")
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("技能名称不能包含 '..'")
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return fmt.Errorf("技能名称不能包含路径分隔符")
+	}
+	if strings.ContainsRune(name, 0) {
+		return fmt.Errorf("技能名称不能包含空字节")
+	}
+	if len(name) > 64 {
+		return fmt.Errorf("技能名称长度不能超过 64 字符")
+	}
+	return nil
+}
 
 // ───────────────────────────── 技能数据模型 ─────────────────────────────
 
@@ -141,6 +163,9 @@ func (m *Manager) Create(skill *Skill) error {
 	}
 	if skill.Name == "" {
 		return fmt.Errorf("技能名称为空")
+	}
+	if err := sanitizeSkillName(skill.Name); err != nil {
+		return fmt.Errorf("无效的技能名称: %w", err)
 	}
 	if skill.Description == "" {
 		return fmt.Errorf("技能描述为空")

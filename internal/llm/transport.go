@@ -2,6 +2,7 @@
 package llm
 
 import (
+	"fmt"
 	"sync"
 )
 
@@ -20,11 +21,15 @@ func NewTransportRegistry() *TransportRegistry {
 }
 
 // Register 注册一个 Transport 实现。
-// 如果 apiMode 已被注册，则覆盖旧实现。
-func (r *TransportRegistry) Register(apiMode string, transport Transport) {
+// 如果 apiMode 已被注册，返回错误。
+func (r *TransportRegistry) Register(apiMode string, transport Transport) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if _, exists := r.transports[apiMode]; exists {
+		return fmt.Errorf("transport already registered for api mode: %s", apiMode)
+	}
 	r.transports[apiMode] = transport
+	return nil
 }
 
 // Get 根据 apiMode 获取已注册的 Transport 实现。

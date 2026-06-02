@@ -142,10 +142,19 @@ func ClassifyFromError(err error) *ClassifiedError {
 }
 
 // ExtractHTTPStatus 从错误字符串中提取 HTTP 状态码。
-// 匹配 400-599 范围内的三位数字。
+// 仅匹配独立的三位数字 (前后不能有其他数字)，避免误匹配更大数字中的子串。
 func ExtractHTTPStatus(errStr string) int {
 	for i := 0; i+2 < len(errStr); i++ {
-		if isDigit(errStr[i]) && isDigit(errStr[i+1]) && isDigit(errStr[i+2]) {
+		if !isDigit(errStr[i]) {
+			continue
+		}
+		if i > 0 && isDigit(errStr[i-1]) {
+			continue
+		}
+		if i+3 < len(errStr) && isDigit(errStr[i+3]) {
+			continue
+		}
+		if isDigit(errStr[i+1]) && isDigit(errStr[i+2]) {
 			code := (int(errStr[i]-'0'))*100 + (int(errStr[i+1]-'0'))*10 + (int(errStr[i+2]) - '0')
 			if code >= 400 && code < 600 {
 				return code

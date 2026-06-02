@@ -132,21 +132,31 @@ func (s *Store) tryCheckpoint(ctx context.Context) {
 
 // ── 会话 CRUD ───────────────────────────────────────────────
 
+const sessionColumns = `id, source, user_id, model, model_config, system_prompt, parent_session_id,
+started_at, ended_at, end_reason, title,
+message_count, tool_call_count, input_tokens, output_tokens,
+cache_read_tokens, cache_write_tokens, reasoning_tokens, estimated_cost_usd, api_call_count`
+
 // CreateSession 创建新的会话记录。
 // 如果 session.ID 已存在（INSERT OR IGNORE），则不执行任何操作。
 func (s *Store) CreateSession(ctx context.Context, session *Session) error {
 	return s.executeWrite(ctx, func(db *sql.DB) error {
+		startedAt := session.StartedAt
+		if startedAt == 0 {
+			startedAt = float64(time.Now().Unix())
+		}
 		_, err := db.ExecContext(ctx,
 			`INSERT OR IGNORE INTO sessions
-			 (id, source, user_id, model, system_prompt, parent_session_id, started_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			 (id, source, user_id, model, model_config, system_prompt, parent_session_id, started_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			session.ID,
 			session.Source,
 			session.UserID,
 			session.Model,
+			session.ModelConfig,
 			session.SystemPrompt,
 			session.ParentSessionID,
-			time.Now().Unix(), // 如果 session.StartedAt 为 0，则使用当前时间
+			startedAt,
 		)
 		return err
 	})
@@ -158,53 +168,7 @@ func (s *Store) GetSession(ctx context.Context, id string) (*Session, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	row := s.db.QueryRowContext(ctx,
-		`SELECT id, source, user_id, model, system_prompt, parent_session_id,
-		        started_at, ended_at, end_reason, title,
-		        message_count, tool_call_count, input_tokens, output_tokens,
-		        cache_read_tokens, cache_write_tokens, estimated_cost_usd, api_call_count
-		 FROM sessions WHERE id = ?`,
-		id,
-	)
-
-	session := &Session{}
-	var endedAt, estimatedCost sql.NullFloat64
-	var userID, model, systemPrompt, parentSessionID, endReason, title sql.NullString
-	var messageCount, toolCallCount, inputTokens, outputTokens sql.NullInt64
-	var cacheReadTokens, cacheWriteTokens, apiCallCount sql.NullInt64
-
-	err := row.Scan(
-		&session.ID, &session.Source,
-		&userID, &model, &systemPrompt, &parentSessionID,
-		&session.StartedAt, &endedAt, &endReason, &title,
-		&messageCount, &toolCallCount, &inputTokens, &outputTokens,
-		&cacheReadTokens, &cacheWriteTokens, &estimatedCost, &apiCallCount,
-	)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("查询会话失败: %w", err)
-	}
-
-	// 填充可空字段
-	session.UserID = nullStr(userID)
-	session.Model = nullStr(model)
-	session.SystemPrompt = nullStr(systemPrompt)
-	session.ParentSessionID = nullStr(parentSessionID)
-	session.EndedAt = nullFloat(endedAt)
-	session.EndReason = nullStr(endReason)
-	session.Title = nullStr(title)
-	session.MessageCount = int(nullInt(messageCount))
-	session.ToolCallCount = int(nullInt(toolCallCount))
-	session.InputTokens = int(nullInt(inputTokens))
-	session.OutputTokens = int(nullInt(outputTokens))
-	session.CacheReadTokens = int(nullInt(cacheReadTokens))
-	session.CacheWriteTokens = int(nullInt(cacheWriteTokens))
-	session.APICallCount = int(nullInt(apiCallCount))
-	session.EstimatedCostUSD = nullFloat(estimatedCost)
-
-	return session, nil
+	return s.getSessionLocked(ctx, id)
 }
 
 // UpdateSession 更新会话的全部可变字段。
@@ -213,15 +177,16 @@ func (s *Store) UpdateSession(ctx context.Context, session *Session) error {
 	return s.executeWrite(ctx, func(db *sql.DB) error {
 		_, err := db.ExecContext(ctx,
 			`UPDATE sessions SET
-			 source = ?, user_id = ?, model = ?, system_prompt = ?,
+			 source = ?, user_id = ?, model = ?, model_config = ?, system_prompt = ?,
 			 parent_session_id = ?, ended_at = ?, end_reason = ?, title = ?,
 			 message_count = ?, tool_call_count = ?, input_tokens = ?,
 			 output_tokens = ?, cache_read_tokens = ?, cache_write_tokens = ?,
-			 estimated_cost_usd = ?, api_call_count = ?
+			 reasoning_tokens = ?, estimated_cost_usd = ?, api_call_count = ?
 			 WHERE id = ?`,
 			session.Source,
 			session.UserID,
 			session.Model,
+			session.ModelConfig,
 			session.SystemPrompt,
 			session.ParentSessionID,
 			session.EndedAt,
@@ -233,6 +198,7 @@ func (s *Store) UpdateSession(ctx context.Context, session *Session) error {
 			session.OutputTokens,
 			session.CacheReadTokens,
 			session.CacheWriteTokens,
+			session.ReasoningTokens,
 			session.EstimatedCostUSD,
 			session.APICallCount,
 			session.ID,
@@ -287,11 +253,7 @@ func (s *Store) ListSessions(ctx context.Context, filter *SessionFilter) ([]*Ses
 		}
 	}
 
-	query := "SELECT id, source, user_id, model, system_prompt, parent_session_id, " +
-		"started_at, ended_at, end_reason, title, " +
-		"message_count, tool_call_count, input_tokens, output_tokens, " +
-		"cache_read_tokens, cache_write_tokens, estimated_cost_usd, api_call_count " +
-		"FROM sessions"
+	query := "SELECT " + sessionColumns + " FROM sessions"
 
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
@@ -319,38 +281,10 @@ func (s *Store) ListSessions(ctx context.Context, filter *SessionFilter) ([]*Ses
 
 	var sessions []*Session
 	for rows.Next() {
-		sess := &Session{}
-		var endedAt, estimatedCost sql.NullFloat64
-		var userID, model, systemPrompt, parentSessionID, endReason, title sql.NullString
-		var messageCount, toolCallCount, inputTokens, outputTokens sql.NullInt64
-		var cacheReadTokens, cacheWriteTokens, apiCallCount sql.NullInt64
-
-		if err := rows.Scan(
-			&sess.ID, &sess.Source,
-			&userID, &model, &systemPrompt, &parentSessionID,
-			&sess.StartedAt, &endedAt, &endReason, &title,
-			&messageCount, &toolCallCount, &inputTokens, &outputTokens,
-			&cacheReadTokens, &cacheWriteTokens, &estimatedCost, &apiCallCount,
-		); err != nil {
+		sess, err := scanSessionRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("扫描会话行失败: %w", err)
 		}
-
-		sess.UserID = nullStr(userID)
-		sess.Model = nullStr(model)
-		sess.SystemPrompt = nullStr(systemPrompt)
-		sess.ParentSessionID = nullStr(parentSessionID)
-		sess.EndedAt = nullFloat(endedAt)
-		sess.EndReason = nullStr(endReason)
-		sess.Title = nullStr(title)
-		sess.MessageCount = int(nullInt(messageCount))
-		sess.ToolCallCount = int(nullInt(toolCallCount))
-		sess.InputTokens = int(nullInt(inputTokens))
-		sess.OutputTokens = int(nullInt(outputTokens))
-		sess.CacheReadTokens = int(nullInt(cacheReadTokens))
-		sess.CacheWriteTokens = int(nullInt(cacheWriteTokens))
-		sess.APICallCount = int(nullInt(apiCallCount))
-		sess.EstimatedCostUSD = nullFloat(estimatedCost)
-
 		sessions = append(sessions, sess)
 	}
 	if err := rows.Err(); err != nil {
@@ -406,11 +340,7 @@ func (s *Store) GetCompressionTip(ctx context.Context, id string) (*Session, err
 // getSessionLocked 在持有锁的情况下查询会话（内部使用）
 func (s *Store) getSessionLocked(ctx context.Context, id string) (*Session, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, source, user_id, model, system_prompt, parent_session_id,
-		        started_at, ended_at, end_reason, title,
-		        message_count, tool_call_count, input_tokens, output_tokens,
-		        cache_read_tokens, cache_write_tokens, estimated_cost_usd, api_call_count
-		 FROM sessions WHERE id = ?`,
+		"SELECT "+sessionColumns+" FROM sessions WHERE id = ?",
 		id,
 	)
 	return scanSession(row)
@@ -420,16 +350,16 @@ func (s *Store) getSessionLocked(ctx context.Context, id string) (*Session, erro
 func scanSession(row *sql.Row) (*Session, error) {
 	session := &Session{}
 	var endedAt, estimatedCost sql.NullFloat64
-	var userID, model, systemPrompt, parentSessionID, endReason, title sql.NullString
+	var userID, model, modelConfig, systemPrompt, parentSessionID, endReason, title sql.NullString
 	var messageCount, toolCallCount, inputTokens, outputTokens sql.NullInt64
-	var cacheReadTokens, cacheWriteTokens, apiCallCount sql.NullInt64
+	var cacheReadTokens, cacheWriteTokens, reasoningTokens, apiCallCount sql.NullInt64
 
 	err := row.Scan(
 		&session.ID, &session.Source,
-		&userID, &model, &systemPrompt, &parentSessionID,
+		&userID, &model, &modelConfig, &systemPrompt, &parentSessionID,
 		&session.StartedAt, &endedAt, &endReason, &title,
 		&messageCount, &toolCallCount, &inputTokens, &outputTokens,
-		&cacheReadTokens, &cacheWriteTokens, &estimatedCost, &apiCallCount,
+		&cacheReadTokens, &cacheWriteTokens, &reasoningTokens, &estimatedCost, &apiCallCount,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -440,6 +370,7 @@ func scanSession(row *sql.Row) (*Session, error) {
 
 	session.UserID = nullStr(userID)
 	session.Model = nullStr(model)
+	session.ModelConfig = nullStr(modelConfig)
 	session.SystemPrompt = nullStr(systemPrompt)
 	session.ParentSessionID = nullStr(parentSessionID)
 	session.EndedAt = nullFloat(endedAt)
@@ -451,6 +382,47 @@ func scanSession(row *sql.Row) (*Session, error) {
 	session.OutputTokens = int(nullInt(outputTokens))
 	session.CacheReadTokens = int(nullInt(cacheReadTokens))
 	session.CacheWriteTokens = int(nullInt(cacheWriteTokens))
+	session.ReasoningTokens = int(nullInt(reasoningTokens))
+	session.APICallCount = int(nullInt(apiCallCount))
+	session.EstimatedCostUSD = nullFloat(estimatedCost)
+
+	return session, nil
+}
+
+// scanSessionRow 从 sql.Rows 扫描一个 Session 对象
+func scanSessionRow(rows *sql.Rows) (*Session, error) {
+	session := &Session{}
+	var endedAt, estimatedCost sql.NullFloat64
+	var userID, model, modelConfig, systemPrompt, parentSessionID, endReason, title sql.NullString
+	var messageCount, toolCallCount, inputTokens, outputTokens sql.NullInt64
+	var cacheReadTokens, cacheWriteTokens, reasoningTokens, apiCallCount sql.NullInt64
+
+	err := rows.Scan(
+		&session.ID, &session.Source,
+		&userID, &model, &modelConfig, &systemPrompt, &parentSessionID,
+		&session.StartedAt, &endedAt, &endReason, &title,
+		&messageCount, &toolCallCount, &inputTokens, &outputTokens,
+		&cacheReadTokens, &cacheWriteTokens, &reasoningTokens, &estimatedCost, &apiCallCount,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	session.UserID = nullStr(userID)
+	session.Model = nullStr(model)
+	session.ModelConfig = nullStr(modelConfig)
+	session.SystemPrompt = nullStr(systemPrompt)
+	session.ParentSessionID = nullStr(parentSessionID)
+	session.EndedAt = nullFloat(endedAt)
+	session.EndReason = nullStr(endReason)
+	session.Title = nullStr(title)
+	session.MessageCount = int(nullInt(messageCount))
+	session.ToolCallCount = int(nullInt(toolCallCount))
+	session.InputTokens = int(nullInt(inputTokens))
+	session.OutputTokens = int(nullInt(outputTokens))
+	session.CacheReadTokens = int(nullInt(cacheReadTokens))
+	session.CacheWriteTokens = int(nullInt(cacheWriteTokens))
+	session.ReasoningTokens = int(nullInt(reasoningTokens))
 	session.APICallCount = int(nullInt(apiCallCount))
 	session.EstimatedCostUSD = nullFloat(estimatedCost)
 

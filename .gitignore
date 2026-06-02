@@ -34,3 +34,7 @@ nexus.db
 
 # Cron output
 cron-output/
+
+# Claude Code
+.claude/
+CLAUDE.md

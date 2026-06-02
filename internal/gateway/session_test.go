@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -106,6 +107,112 @@ func TestSessionManager_SweepExpired(t *testing.T) {
 	if len(removed) == 0 {
 		t.Error("expected at least 1 removed")
 	}
+}
+
+func TestSessionManager_Delete(t *testing.T) {
+	t.Parallel()
+
+	t.Run("deletes existing session", func(t *testing.T) {
+		t.Parallel()
+		mgr := NewSessionManager()
+		source := &platforms.SessionSource{
+			Platform: platforms.PlatformTelegram,
+			ChatID:   "del-1",
+			UserID:   "u1",
+			ChatType: "dm",
+		}
+		sess := mgr.GetOrCreate(source)
+
+		mgr.Delete(sess.Key)
+
+		_, ok := mgr.Get(sess.Key)
+		if ok {
+			t.Error("expected session to be deleted")
+		}
+		if mgr.Size() != 0 {
+			t.Errorf("size = %d, want 0", mgr.Size())
+		}
+	})
+
+	t.Run("delete non-existent key is no-op", func(t *testing.T) {
+		t.Parallel()
+		mgr := NewSessionManager()
+		source := &platforms.SessionSource{
+			Platform: platforms.PlatformDiscord,
+			ChatID:   "del-2",
+			UserID:   "u2",
+			ChatType: "dm",
+		}
+		mgr.GetOrCreate(source)
+
+		mgr.Delete("nonexistent")
+
+		if mgr.Size() != 1 {
+			t.Errorf("size = %d, want 1", mgr.Size())
+		}
+	})
+
+	t.Run("delete empty key is no-op", func(t *testing.T) {
+		t.Parallel()
+		mgr := NewSessionManager()
+		mgr.Delete("")
+		if mgr.Size() != 0 {
+			t.Errorf("size = %d, want 0", mgr.Size())
+		}
+	})
+}
+
+func TestSessionManager_StartAutoSweep(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sweeps expired sessions periodically", func(t *testing.T) {
+		t.Parallel()
+		mgr := NewSessionManager()
+
+		mgr.GetOrCreate(&platforms.SessionSource{
+			Platform: platforms.PlatformTelegram,
+			ChatID:   "auto-1",
+			UserID:   "u1",
+			ChatType: "dm",
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// 50ms interval, 1ns maxIdle → first tick sweeps everything
+		mgr.StartAutoSweep(ctx, 50*time.Millisecond, 1*time.Nanosecond)
+
+		// Wait for at least one sweep tick
+		time.Sleep(150 * time.Millisecond)
+
+		if mgr.Size() != 0 {
+			t.Errorf("expected 0 sessions after auto-sweep, got %d", mgr.Size())
+		}
+	})
+
+	t.Run("stops on context cancellation", func(t *testing.T) {
+		t.Parallel()
+		mgr := NewSessionManager()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		mgr.StartAutoSweep(ctx, 10*time.Millisecond, 1*time.Hour)
+
+		// Create session after sweep starts
+		mgr.GetOrCreate(&platforms.SessionSource{
+			Platform: platforms.PlatformDiscord,
+			ChatID:   "auto-2",
+			UserID:   "u2",
+			ChatType: "group",
+		})
+
+		cancel()
+		time.Sleep(50 * time.Millisecond)
+
+		// Session should still exist (not idle enough to be swept before cancel)
+		if mgr.Size() != 1 {
+			t.Errorf("expected 1 session after cancel, got %d", mgr.Size())
+		}
+	})
 }
 
 func TestSessionManager_Size(t *testing.T) {

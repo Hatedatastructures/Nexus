@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -161,17 +162,8 @@ func (s *Store) CheckpointWAL(ctx context.Context) error {
 
 // ── 辅助 ────────────────────────────────────────────────────
 
-// joinStrings 连接字符串切片
+// joinStrings 连接字符串切片。
+// strings.Join 的简单包装，便于测试替换。
 func joinStrings(parts []string, sep string) string {
-	if len(parts) == 0 {
-		return ""
-	}
-	if len(parts) == 1 {
-		return parts[0]
-	}
-	result := parts[0]
-	for i := 1; i < len(parts); i++ {
-		result += sep + parts[i]
-	}
-	return result
+	return strings.Join(parts, sep)
 }

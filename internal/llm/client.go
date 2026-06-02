@@ -79,6 +79,10 @@ func NewHTTPClient(cfg *ClientConfig) *http.Client {
 	// 确定代理函数: 优先使用配置中的代理，其次回退到环境变量
 	proxyFunc := resolveProxyFunc(cfg.Proxy)
 
+	if cfg.InsecureSkipVerify {
+		slog.Error("TLS certificate verification is DISABLED — connections are vulnerable to man-in-the-middle attacks. Set InsecureSkipVerify=false in config.")
+	}
+
 	transport := &http.Transport{
 		Proxy: proxyFunc,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {

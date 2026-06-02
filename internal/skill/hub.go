@@ -16,6 +16,55 @@ import (
 	"time"
 )
 
+// ───────────────────────────── 安全扫描预编译正则 ─────────────────────────────
+
+// 危险命令模式 (dangerous level)
+var dangerousPatterns = []struct {
+	re  *regexp.Regexp
+	msg string
+}{
+	{regexp.MustCompile(`(?i)rm\s+(-[rf]+\s+){1,2}/`), "rm -rf / 类命令"},
+	{regexp.MustCompile(`(?i)rm\s+-rf\s+\*`), "rm -rf * 类命令"},
+	{regexp.MustCompile(`(?i)mkfs\.`), "mkfs 格式化文件系统"},
+	{regexp.MustCompile(`(?i)dd\s+if=`), "dd 原始磁盘写入"},
+	{regexp.MustCompile(`(?i)>\s*/dev/sd[a-z]`), "直接写入块设备"},
+	{regexp.MustCompile(`(?i)>\s*/dev/[hv]da`), "直接写入磁盘设备"},
+	{regexp.MustCompile(`(?i)(?:chmod|chown)\s+777\s+/`), "对根目录设置 777 权限"},
+	{regexp.MustCompile(`(?i):\(\)\s*\{\s*:\|\s*:&\s*\}\s*;`), "Shell Fork Bomb"},
+	{regexp.MustCompile(`(?i)(?:wget|curl)\s+.*\|\s*(?:sudo\s+)?(?:ba)?sh`), "curl/wget | bash 管道执行"},
+	{regexp.MustCompile(`(?i)(?:wget|curl)\s+.*\|\s*bash`), "远程脚本管道执行"},
+	{regexp.MustCompile(`(?i)eval\s*` + "`"), "eval 反引号命令执行"},
+	{regexp.MustCompile(`(?i)exec\s*\(`), "exec 系统调用"},
+	{regexp.MustCompile(`(?i)base64\s+(-d|--decode)`), "base64 解码 (可能用于混淆恶意载荷)"},
+	{regexp.MustCompile(`\\x[0-9a-fA-F]{2}`), "十六进制编码 (可能用于混淆)"},
+	{regexp.MustCompile(`\$\{[^}]+\}`), "环境变量扩展 (可能用于命令注入)"},
+	{regexp.MustCompile(`\$\([^)]+\)`), "命令替换 $(...) (可能用于命令注入)"},
+	{regexp.MustCompile(`(?i)\b(eval|exec|spawn|subprocess)\s*[\(\[]`), "动态代码执行函数"},
+	{regexp.MustCompile(`(?i)\bnc\s+(-l|-lk|-lp)`), "netcat 监听 (可能的反弹 shell)"},
+	{regexp.MustCompile(`(?i)\bncat\s+(-l|--listen)`), "ncat 监听 (可能的反弹 shell)"},
+	{regexp.MustCompile(`(?i)\bsocat\s+`), "socat 网络转发 (可能的反弹 shell)"},
+}
+
+// 中等风险模式 (warning level)
+var warningPatterns = []struct {
+	re  *regexp.Regexp
+	msg string
+}{
+	{regexp.MustCompile(`(?i)\bsudo\b`), "使用 sudo 提权"},
+	{regexp.MustCompile(`(?i)\bwget\s+`), "使用 wget 下载"},
+	{regexp.MustCompile(`(?i)\bcurl\s+.*-[oO]\b`), "使用 curl 下载文件"},
+	{regexp.MustCompile(`(?i)chmod\s+[0-7]{3,4}`), "文件权限修改"},
+	{regexp.MustCompile(`(?i)(?:/etc/|/var/|/usr/|/boot/)`), "访问系统目录"},
+	{regexp.MustCompile(`(?i)(?:\.env\b|credentials|\.secret)`), "可能访问敏感文件"},
+}
+
+// 组合检测模式
+var (
+	reDownload = regexp.MustCompile(`(?i)(?:wget|curl)\s+`)
+	reSudo     = regexp.MustCompile(`(?i)\bsudo\b`)
+	reFSOps    = regexp.MustCompile(`(?i)(?:rm\s+|mv\s+|cp\s+|mkdir\s+|touch\s+|ln\s+)`)
+)
+
 // ───────────────────────────── 技能搜索结果 ─────────────────────────────
 
 // SkillMeta 技能搜索结果的元信息。
@@ -59,8 +108,7 @@ func (h *SkillsHub) Search(ctx context.Context, query string) ([]*SkillMeta, err
 	var results []*SkillMeta
 
 	// 检查是否为显式的 GitHub 仓库引用
-	if strings.HasPrefix(query, "github:") {
-		repo := strings.TrimPrefix(query, "github:")
+	if repo, ok := strings.CutPrefix(query, "github:"); ok {
 		meta, err := h.searchGitHubRepo(ctx, repo)
 		if err != nil {
 			slog.Warn("skill hub: GitHub search failed", "repo", repo, "error", err)
@@ -234,9 +282,17 @@ func (h *SkillsHub) Install(ctx context.Context, identifier string) (*Skill, err
 		return nil, fmt.Errorf("解析 SKILL.md 失败: %w", err)
 	}
 
-	// 3. 安全扫描 (存根 — 未来实现)
+	// 3. 安全扫描 — 阻断危险技能
 	if warn := securityScan(skill, content); warn != "" {
 		slog.Warn("skill: security scan warning", "name", skill.Name, "warning", warn)
+		if strings.HasPrefix(warn, "dangerous:") {
+			return nil, fmt.Errorf("安全扫描拒绝安装: %s", warn)
+		}
+	}
+
+	// 3.5 验证技能名称安全性 (防止路径遍历)
+	if err := sanitizeSkillName(skill.Name); err != nil {
+		return nil, fmt.Errorf("无效的技能名称: %w", err)
 	}
 
 	// 4. 安装到技能目录
@@ -298,10 +354,10 @@ func (h *SkillsHub) downloadFromGitHub(ctx context.Context, identifier string) (
 	if err != nil {
 		return nil, "", err
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode == 404 {
-		// 尝试 master 分支
+		// 关闭第一个响应体，再尝试 master 分支
+		resp.Body.Close()
 		url = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s", owner, repo, filePath)
 		req, err = http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
@@ -311,8 +367,8 @@ func (h *SkillsHub) downloadFromGitHub(ctx context.Context, identifier string) (
 		if err != nil {
 			return nil, "", err
 		}
-		defer resp.Body.Close()
 	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", fmt.Errorf("GitHub raw 返回 %d", resp.StatusCode)
@@ -366,56 +422,14 @@ func securityScan(skill *Skill, content []byte) string {
 		return "dangerous: 技能内容过大 (" + fmt.Sprintf("%d 字节", len(content)) + "), 可能包含恶意载荷"
 	}
 
-	// 2. 危险命令检测 (direct dangerous commands)
-	dangerousPatterns := []struct {
-		re  *regexp.Regexp
-		msg string
-	}{
-		{regexp.MustCompile(`(?i)rm\s+(-[rf]+\s+){1,2}/`), "rm -rf / 类命令"},
-		{regexp.MustCompile(`(?i)rm\s+-rf\s+\*`), "rm -rf * 类命令"},
-		{regexp.MustCompile(`(?i)mkfs\.`), "mkfs 格式化文件系统"},
-		{regexp.MustCompile(`(?i)dd\s+if=`), "dd 原始磁盘写入"},
-		{regexp.MustCompile(`(?i)>\s*/dev/sd[a-z]`), "直接写入块设备"},
-		{regexp.MustCompile(`(?i)>\s*/dev/[hv]da`), "直接写入磁盘设备"},
-		{regexp.MustCompile(`(?i)(?:chmod|chown)\s+777\s+/`), "对根目录设置 777 权限"},
-		{regexp.MustCompile(`(?i):\(\)\s*\{\s*:\|\s*:&\s*\}\s*;`), "Shell Fork Bomb"},
-		{regexp.MustCompile(`(?i)(?:wget|curl)\s+.*\|\s*(?:sudo\s+)?(?:ba)?sh`), "curl/wget | bash 管道执行"},
-		{regexp.MustCompile(`(?i)(?:wget|curl)\s+.*\|\s*bash`), "远程脚本管道执行"},
-		{regexp.MustCompile(`(?i)eval\s*` + "`"), "eval 反引号命令执行"},
-		{regexp.MustCompile(`(?i)exec\s*\(`), "exec 系统调用"},
-		// 编码混淆检测
-		{regexp.MustCompile(`(?i)base64\s+(-d|--decode)`), "base64 解码 (可能用于混淆恶意载荷)"},
-		{regexp.MustCompile(`\\x[0-9a-fA-F]{2}`), "十六进制编码 (可能用于混淆)"},
-		// 命令注入模式
-		{regexp.MustCompile(`\$\{[^}]+\}`), "环境变量扩展 (可能用于命令注入)"},
-		{regexp.MustCompile(`\$\([^)]+\)`), "命令替换 $(...) (可能用于命令注入)"},
-		// 常见混淆函数
-		{regexp.MustCompile(`(?i)\b(eval|exec|spawn|subprocess)\s*[\(\[]`), "动态代码执行函数"},
-		// 反弹 shell 模式
-		{regexp.MustCompile(`(?i)\bnc\s+(-l|-lk|-lp)`), "netcat 监听 (可能的反弹 shell)"},
-		{regexp.MustCompile(`(?i)\bncat\s+(-l|--listen)`), "ncat 监听 (可能的反弹 shell)"},
-		{regexp.MustCompile(`(?i)\bsocat\s+`), "socat 网络转发 (可能的反弹 shell)"},
-	}
-
+	// 2. 危险命令检测 (使用预编译正则)
 	for _, p := range dangerousPatterns {
 		if p.re.MatchString(text) {
 			return "dangerous: 技能包含潜在危险命令模式: " + p.msg
 		}
 	}
 
-	// 3. 中等风险检测 (warning level)
-	warningPatterns := []struct {
-		re  *regexp.Regexp
-		msg string
-	}{
-		{regexp.MustCompile(`(?i)\bsudo\b`), "使用 sudo 提权"},
-		{regexp.MustCompile(`(?i)\bwget\s+`), "使用 wget 下载"},
-		{regexp.MustCompile(`(?i)\bcurl\s+.*-[oO]\b`), "使用 curl 下载文件"},
-		{regexp.MustCompile(`(?i)chmod\s+[0-7]{3,4}`), "文件权限修改"},
-		{regexp.MustCompile(`(?i)(?:/etc/|/var/|/usr/|/boot/)`), "访问系统目录"},
-		{regexp.MustCompile(`(?i)(?:\.env\b|credentials|\.secret)`), "可能访问敏感文件"},
-	}
-
+	// 3. 中等风险检测 (使用预编译正则)
 	var warnings []string
 	for _, p := range warningPatterns {
 		if p.re.MatchString(text) {
@@ -424,15 +438,12 @@ func securityScan(skill *Skill, content []byte) string {
 	}
 
 	// 4. 危险组合检测 (如 wget + sudo)
-	hasDownload := regexp.MustCompile(`(?i)(?:wget|curl)\s+`).MatchString(text)
-	hasSudo := regexp.MustCompile(`(?i)\bsudo\b`).MatchString(text)
-	if hasDownload && hasSudo {
+	if reDownload.MatchString(text) && reSudo.MatchString(text) {
 		warnings = append(warnings, "下载 + sudo 提权组合 (可能下载并执行恶意脚本)")
 	}
 
 	// 5. 文件系统操作检测
-	hasFSOps := regexp.MustCompile(`(?i)(?:rm\s+|mv\s+|cp\s+|mkdir\s+|touch\s+|ln\s+)`).MatchString(text)
-	if hasFSOps {
+	if reFSOps.MatchString(text) {
 		warnings = append(warnings, "包含文件系统操作命令")
 	}
 

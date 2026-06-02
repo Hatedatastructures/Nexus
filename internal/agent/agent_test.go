@@ -32,9 +32,9 @@ func TestShouldFallback(t *testing.T) {
 		msg      string
 		expected bool
 	}{
-		// 精确匹配分类器模式的计费错误 → ShouldFallback=true
-		{"insufficient credits", true},
-		{"payment required", true},
+		// 计费耗尽 → ShouldFallback=false (同一账户切换提供者无法解决)
+		{"insufficient credits", false},
+		{"payment required", false},
 		// 速率限制模式 → ShouldFallback=true
 		{"rate limit exceeded", true},
 		// 认证错误 (401) → ShouldFallback=true
@@ -47,7 +47,7 @@ func TestShouldFallback(t *testing.T) {
 		{"network timeout", false},
 		{"quota exceeded", false},
 		// 纯 500 不含具体模式 → 不触发 fallback (仅重试)
-		{"500 server error", false},
+		{"500 server error", true},
 	}
 	for _, tt := range tests {
 		err := fmt.Errorf("%s", tt.msg)

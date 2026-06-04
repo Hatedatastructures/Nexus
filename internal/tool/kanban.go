@@ -31,32 +31,32 @@ func generateTaskID() string {
 type TaskStatus string
 
 const (
-	StatusTriage  TaskStatus = "triage"
-	StatusTodo    TaskStatus = "todo"
-	StatusReady   TaskStatus = "ready"
-	StatusRunning TaskStatus = "running"
-	StatusBlocked TaskStatus = "blocked"
-	StatusDone    TaskStatus = "done"
+	StatusTriage   TaskStatus = "triage"
+	StatusTodo     TaskStatus = "todo"
+	StatusReady    TaskStatus = "ready"
+	StatusRunning  TaskStatus = "running"
+	StatusBlocked  TaskStatus = "blocked"
+	StatusDone     TaskStatus = "done"
 	StatusArchived TaskStatus = "archived"
 )
 
 // KanbanTask 看板任务
 type KanbanTask struct {
-	ID          string            `json:"id"`
-	Title       string            `json:"title"`
-	Body        string            `json:"body,omitempty"`
-	Assignee    string            `json:"assignee"`
-	Status      TaskStatus        `json:"status"`
-	Priority    int               `json:"priority,omitempty"`
-	Parents     []string          `json:"parents,omitempty"`
-	Children    []string          `json:"children,omitempty"`
-	Comments    []KanbanComment   `json:"comments,omitempty"`
-	Events      []KanbanEvent     `json:"events,omitempty"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	ID            string          `json:"id"`
+	Title         string          `json:"title"`
+	Body          string          `json:"body,omitempty"`
+	Assignee      string          `json:"assignee"`
+	Status        TaskStatus      `json:"status"`
+	Priority      int             `json:"priority,omitempty"`
+	Parents       []string        `json:"parents,omitempty"`
+	Children      []string        `json:"children,omitempty"`
+	Comments      []KanbanComment `json:"comments,omitempty"`
+	Events        []KanbanEvent   `json:"events,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 	LastHeartbeat time.Time       `json:"last_heartbeat,omitempty"`
-	Metadata    map[string]any    `json:"metadata,omitempty"`
-	Board       string            `json:"board,omitempty"`
+	Metadata      map[string]any  `json:"metadata,omitempty"`
+	Board         string          `json:"board,omitempty"`
 }
 
 // KanbanComment 任务评论
@@ -98,7 +98,6 @@ func sanitizeBoardName(board string) string {
 	if board == "" {
 		return "default"
 	}
-	// 只允许字母、数字、下划线、短横线
 	var b strings.Builder
 	for _, r := range board {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
@@ -116,6 +115,10 @@ func (s *KanbanStore) boardPath(board string) string {
 	board = sanitizeBoardName(board)
 	return filepath.Join(s.boardDir, board+".json")
 }
+
+// Lock 获取看板存储的互斥锁，用于保护 load-modify-save 原子操作。
+func (s *KanbanStore) Lock()   { s.mu.Lock() }
+func (s *KanbanStore) Unlock() { s.mu.Unlock() }
 
 func (s *KanbanStore) loadBoard(board string) (map[string]*KanbanTask, error) {
 	data, err := os.ReadFile(s.boardPath(board))
@@ -165,12 +168,12 @@ func (s *KanbanStore) saveBoard(board string, tasks map[string]*KanbanTask) erro
 // KanbanListTool 列出看板任务 (编排者专用)
 type KanbanListTool struct{}
 
-func (t *KanbanListTool) Name() string        { return "kanban_list" }
-func (t *KanbanListTool) Description() string  { return "列出看板任务，支持按状态、分配者筛选。" }
-func (t *KanbanListTool) Toolset() string      { return "kanban" }
-func (t *KanbanListTool) Emoji() string        { return "📋" }
-func (t *KanbanListTool) IsAvailable() bool    { return true }
-func (t *KanbanListTool) MaxResultChars() int  { return 20000 }
+func (t *KanbanListTool) Name() string       { return "kanban_list" }
+func (t *KanbanListTool) Description() string { return "列出看板任务，支持按状态、分配者筛选。" }
+func (t *KanbanListTool) Toolset() string     { return "kanban" }
+func (t *KanbanListTool) Emoji() string       { return "📋" }
+func (t *KanbanListTool) IsAvailable() bool   { return true }
+func (t *KanbanListTool) MaxResultChars() int { return 20000 }
 
 func (t *KanbanListTool) Schema() *ToolSchema {
 	return &ToolSchema{
@@ -211,16 +214,21 @@ func (t *KanbanListTool) Execute(ctx context.Context, args map[string]any) (stri
 		limit = 200
 	}
 
+	store.Lock()
 	tasks, err := store.loadBoard(board)
 	if err != nil {
+		store.Unlock()
 		return ToolError(fmt.Sprintf("加载看板失败: %v", err)), nil
 	}
 
 	// 检查 ready 状态提升 (所有 parent 完成的 todo 任务提升为 ready)
 	promoteReadyTasks(tasks)
+
 	if err := store.saveBoard(board, tasks); err != nil {
-		slog.Warn("kanban: failed to save board after promotion", "err", err)
+		store.Unlock()
+		return ToolError(fmt.Sprintf("保存看板失败: %v", err)), nil
 	}
+	store.Unlock()
 
 	var rows []map[string]any
 	for _, task := range tasks {
@@ -256,12 +264,12 @@ func (t *KanbanListTool) Execute(ctx context.Context, args map[string]any) (stri
 // KanbanShowTool 查看单个任务详情
 type KanbanShowTool struct{}
 
-func (t *KanbanShowTool) Name() string        { return "kanban_show" }
-func (t *KanbanShowTool) Description() string  { return "查看指定看板任务的完整状态和上下文。" }
-func (t *KanbanShowTool) Toolset() string      { return "kanban" }
-func (t *KanbanShowTool) Emoji() string        { return "🔍" }
-func (t *KanbanShowTool) IsAvailable() bool    { return true }
-func (t *KanbanShowTool) MaxResultChars() int  { return 20000 }
+func (t *KanbanShowTool) Name() string       { return "kanban_show" }
+func (t *KanbanShowTool) Description() string { return "查看指定看板任务的完整状态和上下文。" }
+func (t *KanbanShowTool) Toolset() string     { return "kanban" }
+func (t *KanbanShowTool) Emoji() string       { return "🔍" }
+func (t *KanbanShowTool) IsAvailable() bool   { return true }
+func (t *KanbanShowTool) MaxResultChars() int { return 20000 }
 
 func (t *KanbanShowTool) Schema() *ToolSchema {
 	return &ToolSchema{
@@ -292,7 +300,9 @@ func (t *KanbanShowTool) Execute(ctx context.Context, args map[string]any) (stri
 
 	store := getKanbanStore()
 	board := getKanbanStringFromArgs(args, "board")
+	store.Lock()
 	tasks, err := store.loadBoard(board)
+	store.Unlock()
 	if err != nil {
 		return ToolError(fmt.Sprintf("加载看板失败: %v", err)), nil
 	}
@@ -312,12 +322,12 @@ func (t *KanbanShowTool) Execute(ctx context.Context, args map[string]any) (stri
 // KanbanCreateTool 创建新的子任务
 type KanbanCreateTool struct{}
 
-func (t *KanbanCreateTool) Name() string        { return "kanban_create" }
-func (t *KanbanCreateTool) Description() string  { return "在看板上创建新的子任务，支持父子依赖。" }
-func (t *KanbanCreateTool) Toolset() string      { return "kanban" }
-func (t *KanbanCreateTool) Emoji() string        { return "➕" }
-func (t *KanbanCreateTool) IsAvailable() bool    { return true }
-func (t *KanbanCreateTool) MaxResultChars() int  { return 10000 }
+func (t *KanbanCreateTool) Name() string       { return "kanban_create" }
+func (t *KanbanCreateTool) Description() string { return "在看板上创建新的子任务，支持父子依赖。" }
+func (t *KanbanCreateTool) Toolset() string     { return "kanban" }
+func (t *KanbanCreateTool) Emoji() string       { return "➕" }
+func (t *KanbanCreateTool) IsAvailable() bool   { return true }
+func (t *KanbanCreateTool) MaxResultChars() int { return 10000 }
 
 func (t *KanbanCreateTool) Schema() *ToolSchema {
 	return &ToolSchema{
@@ -369,6 +379,10 @@ func (t *KanbanCreateTool) Execute(ctx context.Context, args map[string]any) (st
 
 	store := getKanbanStore()
 	board := getKanbanStringFromArgs(args, "board")
+
+	store.Lock()
+	defer store.Unlock()
+
 	tasks, err := store.loadBoard(board)
 	if err != nil {
 		return ToolError(fmt.Sprintf("加载看板失败: %v", err)), nil
@@ -389,21 +403,20 @@ func (t *KanbanCreateTool) Execute(ctx context.Context, args map[string]any) (st
 	now := time.Now()
 	id := generateTaskID()
 
-	// 有父任务时初始状态为 todo，否则为 ready
 	status := StatusReady
 	if len(parents) > 0 {
 		status = StatusTodo
 	}
 
 	task := &KanbanTask{
-		ID:        id,
-		Title:     title,
-		Body:      body,
-		Assignee:  assignee,
-		Status:    status,
-		Priority:  priority,
-		Parents:   parents,
-		Comments:  []KanbanComment{},
+		ID:       id,
+		Title:    title,
+		Body:     body,
+		Assignee: assignee,
+		Status:   status,
+		Priority: priority,
+		Parents:  parents,
+		Comments: []KanbanComment{},
 		Events: []KanbanEvent{
 			{Type: "created", Timestamp: now, Detail: "任务创建"},
 		},
@@ -426,10 +439,10 @@ func (t *KanbanCreateTool) Execute(ctx context.Context, args map[string]any) (st
 	}
 
 	return ToolResult(map[string]any{
-		"success":  true,
-		"task_id":  id,
-		"status":   string(status),
-		"message":  fmt.Sprintf("任务 %q 已创建", title),
+		"success": true,
+		"task_id": id,
+		"status":  string(status),
+		"message": fmt.Sprintf("任务 %q 已创建", title),
 	}), nil
 }
 
@@ -438,12 +451,12 @@ func (t *KanbanCreateTool) Execute(ctx context.Context, args map[string]any) (st
 // KanbanCompleteTool 标记任务为完成
 type KanbanCompleteTool struct{}
 
-func (t *KanbanCompleteTool) Name() string        { return "kanban_complete" }
-func (t *KanbanCompleteTool) Description() string  { return "标记看板任务为已完成，需提供摘要或结果。" }
-func (t *KanbanCompleteTool) Toolset() string      { return "kanban" }
-func (t *KanbanCompleteTool) Emoji() string        { return "✅" }
-func (t *KanbanCompleteTool) IsAvailable() bool    { return true }
-func (t *KanbanCompleteTool) MaxResultChars() int  { return 10000 }
+func (t *KanbanCompleteTool) Name() string       { return "kanban_complete" }
+func (t *KanbanCompleteTool) Description() string { return "标记看板任务为已完成，需提供摘要或结果。" }
+func (t *KanbanCompleteTool) Toolset() string     { return "kanban" }
+func (t *KanbanCompleteTool) Emoji() string       { return "✅" }
+func (t *KanbanCompleteTool) IsAvailable() bool   { return true }
+func (t *KanbanCompleteTool) MaxResultChars() int { return 10000 }
 
 func (t *KanbanCompleteTool) Schema() *ToolSchema {
 	return &ToolSchema{
@@ -488,6 +501,10 @@ func (t *KanbanCompleteTool) Execute(ctx context.Context, args map[string]any) (
 
 	store := getKanbanStore()
 	board := getKanbanStringFromArgs(args, "board")
+
+	store.Lock()
+	defer store.Unlock()
+
 	tasks, err := store.loadBoard(board)
 	if err != nil {
 		return ToolError(fmt.Sprintf("加载看板失败: %v", err)), nil
@@ -506,7 +523,6 @@ func (t *KanbanCompleteTool) Execute(ctx context.Context, args map[string]any) (
 		Detail: fmt.Sprintf("summary=%s result=%s", summary, result),
 	})
 
-	// 检查子任务是否可以提升为 ready
 	promoteReadyTasks(tasks)
 
 	if err := store.saveBoard(board, tasks); err != nil {
@@ -525,12 +541,12 @@ func (t *KanbanCompleteTool) Execute(ctx context.Context, args map[string]any) (
 // KanbanBlockTool 将任务标记为阻塞
 type KanbanBlockTool struct{}
 
-func (t *KanbanBlockTool) Name() string        { return "kanban_block" }
-func (t *KanbanBlockTool) Description() string  { return "将看板任务标记为阻塞状态，需提供阻塞原因。" }
-func (t *KanbanBlockTool) Toolset() string      { return "kanban" }
-func (t *KanbanBlockTool) Emoji() string        { return "🚫" }
-func (t *KanbanBlockTool) IsAvailable() bool    { return true }
-func (t *KanbanBlockTool) MaxResultChars() int  { return 10000 }
+func (t *KanbanBlockTool) Name() string       { return "kanban_block" }
+func (t *KanbanBlockTool) Description() string { return "将看板任务标记为阻塞状态，需提供阻塞原因。" }
+func (t *KanbanBlockTool) Toolset() string     { return "kanban" }
+func (t *KanbanBlockTool) Emoji() string       { return "🚫" }
+func (t *KanbanBlockTool) IsAvailable() bool   { return true }
+func (t *KanbanBlockTool) MaxResultChars() int { return 10000 }
 
 func (t *KanbanBlockTool) Schema() *ToolSchema {
 	return &ToolSchema{
@@ -569,6 +585,10 @@ func (t *KanbanBlockTool) Execute(ctx context.Context, args map[string]any) (str
 
 	store := getKanbanStore()
 	board := getKanbanStringFromArgs(args, "board")
+
+	store.Lock()
+	defer store.Unlock()
+
 	tasks, err := store.loadBoard(board)
 	if err != nil {
 		return ToolError(fmt.Sprintf("加载看板失败: %v", err)), nil
@@ -603,12 +623,12 @@ func (t *KanbanBlockTool) Execute(ctx context.Context, args map[string]any) (str
 // KanbanUnblockTool 解除任务的阻塞状态 (编排者专用)
 type KanbanUnblockTool struct{}
 
-func (t *KanbanUnblockTool) Name() string        { return "kanban_unblock" }
-func (t *KanbanUnblockTool) Description() string  { return "解除看板任务的阻塞状态，将其恢复为 ready。" }
-func (t *KanbanUnblockTool) Toolset() string      { return "kanban" }
-func (t *KanbanUnblockTool) Emoji() string        { return "🔓" }
-func (t *KanbanUnblockTool) IsAvailable() bool    { return true }
-func (t *KanbanUnblockTool) MaxResultChars() int  { return 10000 }
+func (t *KanbanUnblockTool) Name() string       { return "kanban_unblock" }
+func (t *KanbanUnblockTool) Description() string { return "解除看板任务的阻塞状态，将其恢复为 ready。" }
+func (t *KanbanUnblockTool) Toolset() string     { return "kanban" }
+func (t *KanbanUnblockTool) Emoji() string       { return "🔓" }
+func (t *KanbanUnblockTool) IsAvailable() bool   { return true }
+func (t *KanbanUnblockTool) MaxResultChars() int { return 10000 }
 
 func (t *KanbanUnblockTool) Schema() *ToolSchema {
 	return &ToolSchema{
@@ -639,6 +659,10 @@ func (t *KanbanUnblockTool) Execute(ctx context.Context, args map[string]any) (s
 
 	store := getKanbanStore()
 	board := getKanbanStringFromArgs(args, "board")
+
+	store.Lock()
+	defer store.Unlock()
+
 	tasks, err := store.loadBoard(board)
 	if err != nil {
 		return ToolError(fmt.Sprintf("加载看板失败: %v", err)), nil
@@ -676,12 +700,12 @@ func (t *KanbanUnblockTool) Execute(ctx context.Context, args map[string]any) (s
 // KanbanHeartbeatTool 发送任务心跳 (延长任务占用)
 type KanbanHeartbeatTool struct{}
 
-func (t *KanbanHeartbeatTool) Name() string        { return "kanban_heartbeat" }
-func (t *KanbanHeartbeatTool) Description() string  { return "发送任务心跳，延长任务的执行占用时间。" }
-func (t *KanbanHeartbeatTool) Toolset() string      { return "kanban" }
-func (t *KanbanHeartbeatTool) Emoji() string        { return "💓" }
-func (t *KanbanHeartbeatTool) IsAvailable() bool    { return true }
-func (t *KanbanHeartbeatTool) MaxResultChars() int  { return 5000 }
+func (t *KanbanHeartbeatTool) Name() string       { return "kanban_heartbeat" }
+func (t *KanbanHeartbeatTool) Description() string { return "发送任务心跳，延长任务的执行占用时间。" }
+func (t *KanbanHeartbeatTool) Toolset() string     { return "kanban" }
+func (t *KanbanHeartbeatTool) Emoji() string       { return "💓" }
+func (t *KanbanHeartbeatTool) IsAvailable() bool   { return true }
+func (t *KanbanHeartbeatTool) MaxResultChars() int { return 5000 }
 
 func (t *KanbanHeartbeatTool) Schema() *ToolSchema {
 	return &ToolSchema{
@@ -717,6 +741,10 @@ func (t *KanbanHeartbeatTool) Execute(ctx context.Context, args map[string]any) 
 	store := getKanbanStore()
 	board := getKanbanStringFromArgs(args, "board")
 	note := getKanbanStringFromArgs(args, "note")
+
+	store.Lock()
+	defer store.Unlock()
+
 	tasks, err := store.loadBoard(board)
 	if err != nil {
 		return ToolError(fmt.Sprintf("加载看板失败: %v", err)), nil
@@ -743,9 +771,9 @@ func (t *KanbanHeartbeatTool) Execute(ctx context.Context, args map[string]any) 
 	}
 
 	return ToolResult(map[string]any{
-		"success":         true,
-		"task_id":         taskID,
-		"last_heartbeat":  now.Format(time.RFC3339),
+		"success":        true,
+		"task_id":        taskID,
+		"last_heartbeat": now.Format(time.RFC3339),
 	}), nil
 }
 
@@ -754,12 +782,12 @@ func (t *KanbanHeartbeatTool) Execute(ctx context.Context, args map[string]any) 
 // KanbanCommentTool 给任务添加评论
 type KanbanCommentTool struct{}
 
-func (t *KanbanCommentTool) Name() string        { return "kanban_comment" }
-func (t *KanbanCommentTool) Description() string  { return "给看板任务添加评论。" }
-func (t *KanbanCommentTool) Toolset() string      { return "kanban" }
-func (t *KanbanCommentTool) Emoji() string        { return "💬" }
-func (t *KanbanCommentTool) IsAvailable() bool    { return true }
-func (t *KanbanCommentTool) MaxResultChars() int  { return 10000 }
+func (t *KanbanCommentTool) Name() string       { return "kanban_comment" }
+func (t *KanbanCommentTool) Description() string { return "给看板任务添加评论。" }
+func (t *KanbanCommentTool) Toolset() string     { return "kanban" }
+func (t *KanbanCommentTool) Emoji() string       { return "💬" }
+func (t *KanbanCommentTool) IsAvailable() bool   { return true }
+func (t *KanbanCommentTool) MaxResultChars() int { return 10000 }
 
 func (t *KanbanCommentTool) Schema() *ToolSchema {
 	return &ToolSchema{
@@ -798,6 +826,10 @@ func (t *KanbanCommentTool) Execute(ctx context.Context, args map[string]any) (s
 
 	store := getKanbanStore()
 	board := getKanbanStringFromArgs(args, "board")
+
+	store.Lock()
+	defer store.Unlock()
+
 	tasks, err := store.loadBoard(board)
 	if err != nil {
 		return ToolError(fmt.Sprintf("加载看板失败: %v", err)), nil
@@ -830,8 +862,8 @@ func (t *KanbanCommentTool) Execute(ctx context.Context, args map[string]any) (s
 	}
 
 	return ToolResult(map[string]any{
-		"success":    true,
-		"task_id":    taskID,
+		"success":       true,
+		"task_id":       taskID,
 		"comment_count": len(task.Comments),
 	}), nil
 }
@@ -841,12 +873,12 @@ func (t *KanbanCommentTool) Execute(ctx context.Context, args map[string]any) (s
 // KanbanLinkTool 建立任务间的父子依赖关系
 type KanbanLinkTool struct{}
 
-func (t *KanbanLinkTool) Name() string        { return "kanban_link" }
-func (t *KanbanLinkTool) Description() string  { return "建立看板任务间的父子依赖关系。" }
-func (t *KanbanLinkTool) Toolset() string      { return "kanban" }
-func (t *KanbanLinkTool) Emoji() string        { return "🔗" }
-func (t *KanbanLinkTool) IsAvailable() bool    { return true }
-func (t *KanbanLinkTool) MaxResultChars() int  { return 5000 }
+func (t *KanbanLinkTool) Name() string       { return "kanban_link" }
+func (t *KanbanLinkTool) Description() string { return "建立看板任务间的父子依赖关系。" }
+func (t *KanbanLinkTool) Toolset() string     { return "kanban" }
+func (t *KanbanLinkTool) Emoji() string       { return "🔗" }
+func (t *KanbanLinkTool) IsAvailable() bool   { return true }
+func (t *KanbanLinkTool) MaxResultChars() int { return 5000 }
 
 func (t *KanbanLinkTool) Schema() *ToolSchema {
 	return &ToolSchema{
@@ -885,6 +917,10 @@ func (t *KanbanLinkTool) Execute(ctx context.Context, args map[string]any) (stri
 
 	store := getKanbanStore()
 	board := getKanbanStringFromArgs(args, "board")
+
+	store.Lock()
+	defer store.Unlock()
+
 	tasks, err := store.loadBoard(board)
 	if err != nil {
 		return ToolError(fmt.Sprintf("加载看板失败: %v", err)), nil

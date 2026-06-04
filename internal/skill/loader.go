@@ -229,6 +229,10 @@ func (l *SkillLoader) DiscoverAll() ([]*Skill, error) {
 // Load 按名称加载单个技能。
 // 在 skillsDir 和 externalDirs 中搜索名为 name 的 SKILL.md。
 func (l *SkillLoader) Load(name string) (*Skill, error) {
+	if err := sanitizeSkillName(name); err != nil {
+		return nil, fmt.Errorf("无效的技能名称: %w", err)
+	}
+
 	dirs := []string{}
 	if l.skillsDir != "" {
 		dirs = append(dirs, l.skillsDir)

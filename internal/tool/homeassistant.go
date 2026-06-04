@@ -366,9 +366,12 @@ func isBlockedDomain(domain string) bool {
 }
 
 func validateHAInput(s string) error {
-	if strings.Contains(s, "/") || strings.Contains(s, "..") ||
-		strings.Contains(s, "?") || strings.Contains(s, "#") {
+	if strings.Contains(s, "/") || strings.Contains(s, "\\") ||
+		strings.Contains(s, "..") || strings.ContainsAny(s, "?#") {
 		return fmt.Errorf("值包含非法字符: %s", s)
+	}
+	if strings.ContainsRune(s, 0) {
+		return fmt.Errorf("值包含空字节")
 	}
 	return nil
 }

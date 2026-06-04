@@ -76,15 +76,13 @@ func (c *MCPClient) Connect(ctx context.Context, command string, args []string, 
 	}
 
 	readerCtx, cancel := context.WithCancel(ctx)
-	c.cancel = cancel
 
 	c.mu.Lock()
+	c.cancel = cancel
 	c.connected = true
 	c.stdin = stdin
 	c.stdout = stdout
 	c.cmd = cmd
-
-	// 启动后台读取协程
 	c.mu.Unlock()
 
 	c.startReader(readerCtx, stdout)

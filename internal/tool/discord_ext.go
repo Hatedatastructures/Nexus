@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"time"
 )
 
@@ -20,7 +21,11 @@ const (
 	discordAPIBaseURL    = "https://discord.com/api/v10"
 	discordRequestTimeout = 15 * time.Second
 	discordMaxResultChars = 50000
+	discordMaxLimit       = 100
 )
+
+// discordIDRe 验证 Discord Snowflake ID 格式 (纯数字)。
+var discordIDRe = regexp.MustCompile(`^\d+$`)
 
 // 频道类型映射
 var discordChannelTypeNames = map[int]string{
@@ -240,8 +245,8 @@ func (t *DiscordExtTool) listGuilds(ctx context.Context) (string, error) {
 // serverInfo 获取服务器信息。
 func (t *DiscordExtTool) serverInfo(ctx context.Context, args map[string]any) (string, error) {
 	guildID := getString(args, "guild_id", "")
-	if guildID == "" {
-		return "", fmt.Errorf("guild_id 参数是必填项")
+	if err := validateDiscordID("guild_id", guildID); err != nil {
+		return "", err
 	}
 
 	resp, err := t.callAPI(ctx, "GET", "/guilds/"+guildID, nil)
@@ -258,8 +263,8 @@ func (t *DiscordExtTool) serverInfo(ctx context.Context, args map[string]any) (s
 // listChannels 列出频道。
 func (t *DiscordExtTool) listChannels(ctx context.Context, args map[string]any) (string, error) {
 	guildID := getString(args, "guild_id", "")
-	if guildID == "" {
-		return "", fmt.Errorf("guild_id 参数是必填项")
+	if err := validateDiscordID("guild_id", guildID); err != nil {
+		return "", err
 	}
 
 	resp, err := t.callAPI(ctx, "GET", "/guilds/"+guildID+"/channels", nil)
@@ -304,8 +309,8 @@ func (t *DiscordExtTool) listChannels(ctx context.Context, args map[string]any) 
 // channelInfo 获取频道信息。
 func (t *DiscordExtTool) channelInfo(ctx context.Context, args map[string]any) (string, error) {
 	channelID := getString(args, "channel_id", "")
-	if channelID == "" {
-		return "", fmt.Errorf("channel_id 参数是必填项")
+	if err := validateDiscordID("channel_id", channelID); err != nil {
+		return "", err
 	}
 
 	resp, err := t.callAPI(ctx, "GET", "/channels/"+channelID, nil)
@@ -322,8 +327,8 @@ func (t *DiscordExtTool) channelInfo(ctx context.Context, args map[string]any) (
 // listRoles 列出角色。
 func (t *DiscordExtTool) listRoles(ctx context.Context, args map[string]any) (string, error) {
 	guildID := getString(args, "guild_id", "")
-	if guildID == "" {
-		return "", fmt.Errorf("guild_id 参数是必填项")
+	if err := validateDiscordID("guild_id", guildID); err != nil {
+		return "", err
 	}
 
 	resp, err := t.callAPI(ctx, "GET", "/guilds/"+guildID+"/roles", nil)
@@ -363,8 +368,8 @@ func (t *DiscordExtTool) memberInfo(ctx context.Context, args map[string]any) (s
 	guildID := getString(args, "guild_id", "")
 	userID := getString(args, "user_id", "")
 
-	if guildID == "" || userID == "" {
-		return "", fmt.Errorf("guild_id 和 user_id 参数是必填项")
+	if err := validateDiscordIDs("guild_id", guildID, "user_id", userID); err != nil {
+		return "", err
 	}
 
 	resp, err := t.callAPI(ctx, "GET", "/guilds/"+guildID+"/members/"+userID, nil)
@@ -382,10 +387,10 @@ func (t *DiscordExtTool) memberInfo(ctx context.Context, args map[string]any) (s
 func (t *DiscordExtTool) searchMembers(ctx context.Context, args map[string]any) (string, error) {
 	guildID := getString(args, "guild_id", "")
 	query := getString(args, "query", "")
-	limit := getInt(args, "limit", 10)
+	limit := clampLimit(getInt(args, "limit", 10), discordMaxLimit)
 
-	if guildID == "" {
-		return "", fmt.Errorf("guild_id 参数是必填项")
+	if err := validateDiscordID("guild_id", guildID); err != nil {
+		return "", err
 	}
 
 	if query == "" {
@@ -430,10 +435,10 @@ func (t *DiscordExtTool) searchMembers(ctx context.Context, args map[string]any)
 // fetchMessages 获取消息。
 func (t *DiscordExtTool) fetchMessages(ctx context.Context, args map[string]any) (string, error) {
 	channelID := getString(args, "channel_id", "")
-	limit := getInt(args, "limit", 50)
+	limit := clampLimit(getInt(args, "limit", 50), discordMaxLimit)
 
-	if channelID == "" {
-		return "", fmt.Errorf("channel_id 参数是必填项")
+	if err := validateDiscordID("channel_id", channelID); err != nil {
+		return "", err
 	}
 
 	endpoint := fmt.Sprintf("/channels/%s/messages?limit=%d", channelID, limit)
@@ -475,8 +480,8 @@ func (t *DiscordExtTool) fetchMessages(ctx context.Context, args map[string]any)
 // listPins 列出置顶消息。
 func (t *DiscordExtTool) listPins(ctx context.Context, args map[string]any) (string, error) {
 	channelID := getString(args, "channel_id", "")
-	if channelID == "" {
-		return "", fmt.Errorf("channel_id 参数是必填项")
+	if err := validateDiscordID("channel_id", channelID); err != nil {
+		return "", err
 	}
 
 	resp, err := t.callAPI(ctx, "GET", "/channels/"+channelID+"/pins", nil)
@@ -504,8 +509,8 @@ func (t *DiscordExtTool) pinMessage(ctx context.Context, args map[string]any) (s
 	channelID := getString(args, "channel_id", "")
 	messageID := getString(args, "message_id", "")
 
-	if channelID == "" || messageID == "" {
-		return "", fmt.Errorf("channel_id 和 message_id 参数是必填项")
+	if err := validateDiscordIDs("channel_id", channelID, "message_id", messageID); err != nil {
+		return "", err
 	}
 
 	_, err := t.callAPI(ctx, "PUT", "/channels/"+channelID+"/pins/"+messageID, nil)
@@ -524,8 +529,8 @@ func (t *DiscordExtTool) unpinMessage(ctx context.Context, args map[string]any) 
 	channelID := getString(args, "channel_id", "")
 	messageID := getString(args, "message_id", "")
 
-	if channelID == "" || messageID == "" {
-		return "", fmt.Errorf("channel_id 和 message_id 参数是必填项")
+	if err := validateDiscordIDs("channel_id", channelID, "message_id", messageID); err != nil {
+		return "", err
 	}
 
 	_, err := t.callAPI(ctx, "DELETE", "/channels/"+channelID+"/pins/"+messageID, nil)
@@ -545,8 +550,16 @@ func (t *DiscordExtTool) createThread(ctx context.Context, args map[string]any) 
 	name := getString(args, "name", "")
 	messageID := getString(args, "message_id", "")
 
-	if channelID == "" || name == "" {
-		return "", fmt.Errorf("channel_id 和 name 参数是必填项")
+	if err := validateDiscordID("channel_id", channelID); err != nil {
+		return "", err
+	}
+	if name == "" {
+		return "", fmt.Errorf("name 参数是必填项")
+	}
+	if messageID != "" {
+		if err := validateDiscordID("message_id", messageID); err != nil {
+			return "", err
+		}
 	}
 
 	var endpoint string
@@ -582,8 +595,8 @@ func (t *DiscordExtTool) addRole(ctx context.Context, args map[string]any) (stri
 	userID := getString(args, "user_id", "")
 	roleID := getString(args, "role_id", "")
 
-	if guildID == "" || userID == "" || roleID == "" {
-		return "", fmt.Errorf("guild_id, user_id 和 role_id 参数是必填项")
+	if err := validateDiscordIDs("guild_id", guildID, "user_id", userID, "role_id", roleID); err != nil {
+		return "", err
 	}
 
 	_, err := t.callAPI(ctx, "PUT", "/guilds/"+guildID+"/members/"+userID+"/roles/"+roleID, nil)
@@ -603,8 +616,8 @@ func (t *DiscordExtTool) removeRole(ctx context.Context, args map[string]any) (s
 	userID := getString(args, "user_id", "")
 	roleID := getString(args, "role_id", "")
 
-	if guildID == "" || userID == "" || roleID == "" {
-		return "", fmt.Errorf("guild_id, user_id 和 role_id 参数是必填项")
+	if err := validateDiscordIDs("guild_id", guildID, "user_id", userID, "role_id", roleID); err != nil {
+		return "", err
 	}
 
 	_, err := t.callAPI(ctx, "DELETE", "/guilds/"+guildID+"/members/"+userID+"/roles/"+roleID, nil)
@@ -680,6 +693,38 @@ func init() {
 }
 
 // ───────────────────────────── 辅助函数 ─────────────────────────────
+
+// validateDiscordID 验证 Discord Snowflake ID 格式。
+func validateDiscordID(name, id string) error {
+	if id == "" {
+		return fmt.Errorf("%s 参数是必填项", name)
+	}
+	if !discordIDRe.MatchString(id) {
+		return fmt.Errorf("%s 格式无效: 必须为纯数字 Snowflake ID", name)
+	}
+	return nil
+}
+
+// validateDiscordIDs 批量验证 Discord ID。
+func validateDiscordIDs(pairs ...string) error {
+	for i := 0; i < len(pairs); i += 2 {
+		if err := validateDiscordID(pairs[i], pairs[i+1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// clampLimit 将 limit 限制在 [1, max] 范围内。
+func clampLimit(limit, maxVal int) int {
+	if limit < 1 {
+		return 1
+	}
+	if limit > maxVal {
+		return maxVal
+	}
+	return limit
+}
 
 func getInt(m map[string]any, key string, defaultVal int) int {
 	if m == nil {

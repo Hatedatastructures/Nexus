@@ -49,6 +49,9 @@ func (p *HonchoProvider) Initialize(ctx context.Context, sessionID string) error
 	if p.apiKey == "" {
 		return fmt.Errorf("HONCHO_API_KEY 未设置")
 	}
+	if p.baseURL == "" {
+		return fmt.Errorf("HONCHO_BASE_URL 未设置")
+	}
 	p.userID = sessionID
 	return nil
 }
@@ -87,8 +90,9 @@ func (p *HonchoProvider) SyncTurn(ctx context.Context, userContent, assistantCon
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("Honcho API 返回 HTTP %d: %s", resp.StatusCode, string(respBody))
+		io.ReadAll(io.LimitReader(resp.Body, 2048))
+		slog.Warn("Honcho SyncTurn API error", "status", resp.StatusCode)
+		return fmt.Errorf("Honcho API 返回 HTTP %d", resp.StatusCode)
 	}
 	io.Copy(io.Discard, resp.Body)
 
@@ -113,8 +117,9 @@ func (p *HonchoProvider) Prefetch(ctx context.Context, query string) (string, er
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return "", fmt.Errorf("Honcho API 返回 HTTP %d: %s", resp.StatusCode, string(respBody))
+		io.ReadAll(io.LimitReader(resp.Body, 2048))
+		slog.Warn("Honcho Prefetch API error", "status", resp.StatusCode)
+		return "", fmt.Errorf("Honcho API 返回 HTTP %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -195,8 +200,9 @@ func (p *Mem0Provider) SyncTurn(ctx context.Context, userContent, assistantConte
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("Mem0 API 返回 HTTP %d: %s", resp.StatusCode, string(respBody))
+		io.ReadAll(io.LimitReader(resp.Body, 2048))
+		slog.Warn("Mem0 SyncTurn API error", "status", resp.StatusCode)
+		return fmt.Errorf("Mem0 API 返回 HTTP %d", resp.StatusCode)
 	}
 	io.Copy(io.Discard, resp.Body)
 
@@ -228,8 +234,9 @@ func (p *Mem0Provider) Prefetch(ctx context.Context, query string) (string, erro
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return "", fmt.Errorf("Mem0 API 返回 HTTP %d: %s", resp.StatusCode, string(respBody))
+		io.ReadAll(io.LimitReader(resp.Body, 2048))
+		slog.Warn("Mem0 Prefetch API error", "status", resp.StatusCode)
+		return "", fmt.Errorf("Mem0 API 返回 HTTP %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -313,8 +320,9 @@ func (p *SupermemoryProvider) SyncTurn(ctx context.Context, userContent, assista
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("Supermemory API 返回 HTTP %d: %s", resp.StatusCode, string(respBody))
+		io.ReadAll(io.LimitReader(resp.Body, 2048))
+		slog.Warn("Supermemory SyncTurn API error", "status", resp.StatusCode)
+		return fmt.Errorf("Supermemory API 返回 HTTP %d", resp.StatusCode)
 	}
 	io.Copy(io.Discard, resp.Body)
 	return nil
@@ -345,8 +353,9 @@ func (p *SupermemoryProvider) Prefetch(ctx context.Context, query string) (strin
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return "", fmt.Errorf("Supermemory API 返回 HTTP %d: %s", resp.StatusCode, string(respBody))
+		io.ReadAll(io.LimitReader(resp.Body, 2048))
+		slog.Warn("Supermemory Prefetch API error", "status", resp.StatusCode)
+		return "", fmt.Errorf("Supermemory API 返回 HTTP %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -441,7 +450,9 @@ func (p *HolographicProvider) SyncTurn(ctx context.Context, userContent, assista
 		return fmt.Errorf("serialize holographic entry: %w", err)
 	}
 	data = append(data, '\n')
-	f.Write(data)
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("写入 holographic 条目失败: %w", err)
+	}
 	return nil
 }
 

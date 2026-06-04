@@ -146,7 +146,7 @@ func (t *BrowserHandleDialogTool) Execute(ctx context.Context, args map[string]a
 	globalDialogState.clearPending()
 
 	// 发送 CDP 命令
-	if err := handleDialogViaCDP(ctrlURL, accept, promptText); err != nil {
+	if err := handleDialogViaCDP(ctx, ctrlURL, accept, promptText); err != nil {
 		return ToolError(fmt.Sprintf("处理对话框失败: %v", err)), nil
 	}
 
@@ -171,9 +171,9 @@ func getBrowserControlURL() string {
 	return browserControlURL
 }
 
-func handleDialogViaCDP(ctrlURL string, accept bool, promptText string) error {
+func handleDialogViaCDP(ctx context.Context, ctrlURL string, accept bool, promptText string) error {
 	wsURL := ctrlURL
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("CDP WebSocket 连接失败: %w", err)
 	}

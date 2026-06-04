@@ -220,6 +220,9 @@ func (t *FeishuDocReadTool) Execute(ctx context.Context, args map[string]any) (s
 		return ToolError("参数 doc_token 是必填项。"), nil
 	}
 	docToken = strings.TrimSpace(docToken)
+	if strings.ContainsAny(docToken, "/\\?#") || strings.Contains(docToken, "..") {
+		return ToolError("doc_token 包含非法字符。"), nil
+	}
 
 	client := GetFeishuClient()
 	if client == nil {

@@ -128,7 +128,7 @@ func (m *MatrixAdapter) EditMessage(ctx context.Context, chatID, msgID, content 
 		},
 	}
 
-	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%s", url.PathEscape(chatID), msgID)
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%s", url.PathEscape(chatID), url.PathEscape(msgID))
 	resp, err := m.doAPI(ctx, "PUT", path, body)
 	if err != nil {
 		return &SendResult{Success: false, Error: err.Error()}, err
@@ -138,7 +138,7 @@ func (m *MatrixAdapter) EditMessage(ctx context.Context, chatID, msgID, content 
 
 func (m *MatrixAdapter) DeleteMessage(ctx context.Context, chatID, msgID string) error {
 	body := map[string]any{"reason": "deleted"}
-	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/redact/%s/%s", url.PathEscape(chatID), msgID, msgID)
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/redact/%s/%s", url.PathEscape(chatID), url.PathEscape(msgID), generateCryptoID())
 	_, err := m.doAPI(ctx, "PUT", path, body)
 	return err
 }

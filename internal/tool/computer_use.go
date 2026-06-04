@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -190,15 +191,9 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) (stri
 	var err error
 	switch cuOS() {
 	case "windows":
-		safePath := strings.ReplaceAll(path, "'", "''")
-		ps := fmt.Sprintf(
-			`Add-Type -AssemblyName System.Windows.Forms;`+
-				`$s=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds;`+
-				`$b=New-Object System.Drawing.Bitmap($s.Width,$s.Height);`+
-				`$g=[System.Drawing.Graphics]::FromImage($b);`+
-				`$g.CopyFromScreen($s.Location,[System.Drawing.Point]::Empty,$s.Size);`+
-				`$b.Save('%s');$g.Dispose();$b.Dispose()`, safePath)
-		_, err = cuRun(ctx, "powershell", "-NoProfile", "-Command", ps)
+		cleanPath := filepath.Clean(path)
+		ps := `$s=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds;$b=New-Object System.Drawing.Bitmap($s.Width,$s.Height);$g=[System.Drawing.Graphics]::FromImage($b);$g.CopyFromScreen($s.Location,[System.Drawing.Point]::Empty,$s.Size);$b.Save($args[0]);$g.Dispose();$b.Dispose()`
+		_, err = cuRun(ctx, "powershell", "-NoProfile", "-Command", ps, "-args", cleanPath)
 	case "darwin":
 		_, err = cuRun(ctx, "screencapture", "-x", path)
 	case "linux":

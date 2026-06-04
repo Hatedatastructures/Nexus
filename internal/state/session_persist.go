@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -40,10 +41,28 @@ const (
 func NewSessionPersister(dir, sessionID string) *SessionPersister {
 	return &SessionPersister{
 		dir:          dir,
-		sessionID:    sessionID,
+		sessionID:    sanitizeFilename(sessionID),
 		maxSize:      defaultMaxSize,
 		maxRotations: defaultMaxRotations,
 	}
+}
+
+// sanitizeFilename strips characters that could cause path traversal or confusion.
+func sanitizeFilename(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if r >= 0x20 && r != '/' && r != '\\' && r != ':' && r != '*' && r != '?' &&
+			r != '"' && r != '<' && r != '>' && r != '|' && r != 0 {
+			return r
+		}
+		return '_'
+	}, name)
+	if len(name) > 128 {
+		name = name[:128]
+	}
+	if name == "" || name == "." || name == ".." {
+		return "_invalid_"
+	}
+	return name
 }
 
 // Open creates or opens the JSONL file for the session. If the file already exists it is

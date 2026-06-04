@@ -408,9 +408,11 @@ func (b *Builder) buildEnvironmentInfo(opts *BuildOptions) string {
 		sb.WriteString(fmt.Sprintf("- 工作目录: %s\n", cwd))
 	}
 
-	// Git 仓库检测
+	// Git 仓库检测 (带超时，与 git_context.go 保持一致)
 	isGitRepo := false
-	if err := exec.Command("git", "rev-parse", "--show-toplevel").Run(); err == nil {
+	gitCtx, gitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer gitCancel()
+	if err := exec.CommandContext(gitCtx, "git", "rev-parse", "--show-toplevel").Run(); err == nil {
 		isGitRepo = true
 	}
 	if isGitRepo {

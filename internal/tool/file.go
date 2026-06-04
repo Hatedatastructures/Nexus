@@ -512,8 +512,6 @@ func (t *FileEditTool) Execute(ctx context.Context, args map[string]any) (string
 	result, err := json.Marshal(map[string]any{
 		"output": fmt.Sprintf("文件编辑成功: %s (替换了 %d 处)", path, 1),
 		"path":   path,
-		"old_text": oldText,
-		"new_text": newText,
 		"diff":   generateUnifiedDiff(content, newContent, path),
 	})
 	if err != nil {

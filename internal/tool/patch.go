@@ -194,9 +194,15 @@ func ApplyOperations(ops []PatchOperation, env sandbox.Environment) error {
 		if err := validatePatchPath(op.FilePath); err != nil {
 			return fmt.Errorf("路径验证失败: %w", err)
 		}
+		if isPathSensitive(op.FilePath) {
+			return fmt.Errorf("安全限制: 不允许操作敏感路径 %s", op.FilePath)
+		}
 		if op.Type == OpMove {
 			if err := validatePatchPath(op.TargetPath); err != nil {
 				return fmt.Errorf("目标路径验证失败: %w", err)
+			}
+			if isPathSensitive(op.TargetPath) {
+				return fmt.Errorf("安全限制: 不允许移动到敏感路径 %s", op.TargetPath)
 			}
 		}
 		if err := applyOperation(op, env); err != nil {

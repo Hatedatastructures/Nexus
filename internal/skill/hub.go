@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -132,9 +134,9 @@ func (h *SkillsHub) Search(ctx context.Context, query string) ([]*SkillMeta, err
 // searchGitHubCode 通过 GitHub API 搜索包含 SKILL.md 文件的仓库。
 func (h *SkillsHub) searchGitHubCode(ctx context.Context, query string) ([]*SkillMeta, error) {
 	searchQuery := fmt.Sprintf("SKILL.md %s in:path repo:nexus-agent/skills", query)
-	url := fmt.Sprintf("https://api.github.com/search/code?q=%s&per_page=10", searchQuery)
+	apiURL := fmt.Sprintf("https://api.github.com/search/code?q=%s&per_page=10", url.QueryEscape(searchQuery))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -150,8 +152,8 @@ func (h *SkillsHub) searchGitHubCode(ctx context.Context, query string) ([]*Skil
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return nil, fmt.Errorf("GitHub API 返回 %d: %s", resp.StatusCode, string(body))
+		io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return nil, fmt.Errorf("GitHub API 返回 HTTP %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -202,8 +204,15 @@ func (h *SkillsHub) searchGitHubRepo(ctx context.Context, repo string) (*SkillMe
 		return nil, fmt.Errorf("无效的仓库格式: %s (格式: owner/repo)", repo)
 	}
 
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s", parts[0], parts[1])
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	// 验证 owner/repo 不含路径遍历字符
+	for _, p := range parts {
+		if strings.ContainsAny(p, "/\\?#&") || strings.Contains(p, "..") {
+			return nil, fmt.Errorf("无效的仓库标识符: %s", p)
+		}
+	}
+
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", url.PathEscape(parts[0]), url.PathEscape(parts[1]))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -335,17 +344,28 @@ func (h *SkillsHub) downloadFromGitHub(ctx context.Context, identifier string) (
 		subPath = parts[2]
 	}
 
-	// 构建原始内容 URL
+	// 验证 owner/repo 不含路径遍历字符
+	for _, p := range []string{owner, repo} {
+		if strings.ContainsAny(p, "/\\?#&") || strings.Contains(p, "..") {
+			return nil, "", fmt.Errorf("无效的 GitHub 标识符组件: %s", p)
+		}
+	}
+	if subPath != "" && (strings.Contains(subPath, "..") || strings.HasPrefix(subPath, "/")) {
+		return nil, "", fmt.Errorf("无效的 GitHub 子路径: %s", subPath)
+	}
+
+	// 构建原始内容 URL (使用 PathEscape 防止 URL 注入)
 	ref := "main"
 	filePath := "SKILL.md"
 	if subPath != "" {
 		filePath = subPath + "/SKILL.md"
 	}
 
-	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, repo, ref, filePath)
+	rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s",
+		url.PathEscape(owner), url.PathEscape(repo), ref, filePath)
 
 	// 如果 main 分支不存在，尝试 master
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -358,8 +378,9 @@ func (h *SkillsHub) downloadFromGitHub(ctx context.Context, identifier string) (
 	if resp.StatusCode == 404 {
 		// 关闭第一个响应体，再尝试 master 分支
 		resp.Body.Close()
-		url = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s", owner, repo, filePath)
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		rawURL = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s",
+			url.PathEscape(owner), url.PathEscape(repo), filePath)
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 		if err != nil {
 			return nil, "", err
 		}
@@ -388,8 +409,36 @@ func (h *SkillsHub) downloadFromGitHub(ctx context.Context, identifier string) (
 }
 
 // downloadFromURL 从 HTTP(S) URL 下载 SKILL.md。
-func (h *SkillsHub) downloadFromURL(ctx context.Context, url string) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// 限制目标为 HTTPS 且禁止访问内网地址 (SSRF 防护)。
+func (h *SkillsHub) downloadFromURL(ctx context.Context, rawURL string) ([]byte, string, error) {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, "", fmt.Errorf("无效的 URL: %w", err)
+	}
+
+	// 仅允许 HTTPS
+	if parsedURL.Scheme != "https" {
+		return nil, "", fmt.Errorf("仅支持 HTTPS URL，收到: %s", parsedURL.Scheme)
+	}
+
+	// SSRF 防护: 解析主机名并检查是否为内网地址
+	host := parsedURL.Hostname()
+	if host == "" {
+		return nil, "", fmt.Errorf("URL 缺少主机名")
+	}
+
+	resolver := net.Resolver{}
+	ips, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, "", fmt.Errorf("无法解析主机名: %w", err)
+	}
+	for _, ip := range ips {
+		if ip.IP.IsLoopback() || ip.IP.IsPrivate() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() {
+			return nil, "", fmt.Errorf("目标地址 %s 为内网/回环地址，不允许访问", ip.IP)
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -409,7 +458,7 @@ func (h *SkillsHub) downloadFromURL(ctx context.Context, url string) ([]byte, st
 		return nil, "", err
 	}
 
-	return content, url, nil
+	return content, rawURL, nil
 }
 
 // securityScan 对技能内容进行安全扫描。

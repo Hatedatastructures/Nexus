@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -59,7 +60,7 @@ func (t *GeminiTransport) BuildRequest(ctx context.Context, req *ChatRequest, ap
 	// Gemini URL: {baseURL}/models/{model}:generateContent
 	// API key 通过 x-goog-api-key header 传递，避免密钥暴露在 URL 中
 	url := fmt.Sprintf("%s/models/%s:generateContent",
-		t.baseURL, req.Model)
+		t.baseURL, url.PathEscape(req.Model))
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {

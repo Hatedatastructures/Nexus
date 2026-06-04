@@ -57,6 +57,11 @@ func (c *ImportCommand) importSkills(url string) {
 		skillName = fmt.Sprintf("skill_%d", time.Now().Unix())
 	}
 
+	// 防止路径遍历
+	if err := validateSkillName(skillName); err != nil {
+		PrintError("无效的技能名称: %v", err)
+	}
+
 	targetDir := skillsDir + "/" + skillName
 
 	// 检查是否已存在

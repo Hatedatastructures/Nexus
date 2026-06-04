@@ -19,13 +19,14 @@ import (
 
 // ModalEnvironment 通过 Modal API 执行命令的沙箱环境。
 type ModalEnvironment struct {
-	client     *http.Client
-	baseURL    string // Modal API 基础 URL
-	token      string // Modal API token
-	appName    string // Modal App 名称
-	sandboxID  string // 当前沙箱 ID
-	cwd        string // 当前工作目录
-	mu         sync.Mutex
+	client    *http.Client
+	baseURL   string // Modal API 基础 URL
+	token     string // Modal API token
+	appName   string // Modal App 名称
+	sandboxID string // 当前沙箱 ID
+	cwd       string // 当前工作目录
+	mu        sync.Mutex
+	createMu  sync.Mutex // 序列化沙箱创建，防止并发重复创建
 }
 
 // NewModalEnvironment 创建 Modal 沙箱环境。
@@ -45,17 +46,26 @@ func (e *ModalEnvironment) Execute(ctx context.Context, command string, opts *Ex
 		return nil, fmt.Errorf("MODAL_TOKEN 未设置")
 	}
 
-	// 确保沙箱存在
-	if e.sandboxID == "" {
+	// 确保沙箱存在（序列化创建，防止并发重复创建）
+	e.createMu.Lock()
+	sid := e.sandboxID
+	if sid == "" {
 		if err := e.createSandbox(ctx); err != nil {
+			e.createMu.Unlock()
 			return nil, fmt.Errorf("创建 Modal 沙箱失败: %w", err)
 		}
 	}
+	e.createMu.Unlock()
+
+	e.mu.Lock()
+	sid = e.sandboxID
+	cwd := e.cwd
+	e.mu.Unlock()
 
 	// 执行命令
 	reqBody := map[string]any{
 		"command": command,
-		"cwd":     e.cwd,
+		"cwd":     cwd,
 	}
 	if opts != nil && opts.Timeout > 0 {
 		reqBody["timeout"] = int(opts.Timeout.Seconds())
@@ -66,7 +76,7 @@ func (e *ModalEnvironment) Execute(ctx context.Context, command string, opts *Ex
 		return nil, fmt.Errorf("序列化请求失败: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST",
-		fmt.Sprintf("%s/sandboxes/%s/exec", e.baseURL, e.sandboxID),
+		fmt.Sprintf("%s/sandboxes/%s/exec", e.baseURL, sid),
 		bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
@@ -101,11 +111,15 @@ func (e *ModalEnvironment) Execute(ctx context.Context, command string, opts *Ex
 		e.mu.Unlock()
 	}
 
+	e.mu.Lock()
+	finalCWD := e.cwd
+	e.mu.Unlock()
+
 	return &ExecuteResult{
 		Stdout:   result.Stdout,
 		Stderr:   result.Stderr,
 		ExitCode: result.ExitCode,
-		CWD:      e.cwd,
+		CWD:      finalCWD,
 	}, nil
 }
 
@@ -130,12 +144,15 @@ func (e *ModalEnvironment) UpdateCWD(cwd string) {
 
 // Cleanup 清理 Modal 沙箱。
 func (e *ModalEnvironment) Cleanup() error {
-	if e.sandboxID == "" {
+	e.mu.Lock()
+	sid := e.sandboxID
+	e.mu.Unlock()
+	if sid == "" {
 		return nil
 	}
 
 	req, err := http.NewRequestWithContext(context.Background(), "DELETE",
-		fmt.Sprintf("%s/sandboxes/%s", e.baseURL, e.sandboxID), nil)
+		fmt.Sprintf("%s/sandboxes/%s", e.baseURL, sid), nil)
 	if err != nil {
 		return err
 	}
@@ -148,16 +165,18 @@ func (e *ModalEnvironment) Cleanup() error {
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 
-	slog.Info("Modal sandbox cleaned up", "sandbox_id", e.sandboxID)
+	slog.Info("Modal sandbox cleaned up", "sandbox_id", sid)
+	e.mu.Lock()
 	e.sandboxID = ""
+	e.mu.Unlock()
 	return nil
 }
 
 func (e *ModalEnvironment) createSandbox(ctx context.Context) error {
 	reqBody := map[string]any{
-		"app_name":   e.appName,
-		"image":      "python:3.11-slim",
-		"timeout":    3600,
+		"app_name": e.appName,
+		"image":    "python:3.11-slim",
+		"timeout":  3600,
 	}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -191,7 +210,9 @@ func (e *ModalEnvironment) createSandbox(ctx context.Context) error {
 		return err
 	}
 
+	e.mu.Lock()
 	e.sandboxID = result.ID
-	slog.Info("Modal sandbox created", "sandbox_id", e.sandboxID)
+	e.mu.Unlock()
+	slog.Info("Modal sandbox created", "sandbox_id", result.ID)
 	return nil
 }

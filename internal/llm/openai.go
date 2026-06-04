@@ -371,9 +371,10 @@ func (p *OpenAIProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 		return nil, fmt.Errorf("读取模型列表响应失败: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("获取模型列表返回 HTTP %d: %s", resp.StatusCode, string(body))
-	}
+		if resp.StatusCode != http.StatusOK {
+			bodyStr := string(body)
+			return nil, fmt.Errorf("获取模型列表返回 HTTP %d: %s", resp.StatusCode, RedactErrorBody(bodyStr))
+		}
 
 	var listResp openAIModelListResponse
 	if err := json.Unmarshal(body, &listResp); err != nil {

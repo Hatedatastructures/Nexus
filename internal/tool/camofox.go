@@ -305,6 +305,12 @@ func (t *CamofoxNavigateTool) Execute(ctx context.Context, args map[string]any) 
 	}
 	url = strings.TrimSpace(url)
 
+	// URL 安全检查: 拦截 SSRF 风险地址 (与 rod 版本 browser_navigate 保持一致)
+	if safe, reason := CheckURLSafety(url); !safe {
+		slog.Warn("camofox navigate: URL safety check failed", "url", url, "reason", reason)
+		return ToolError(fmt.Sprintf("URL 安全检查未通过: %s", reason)), nil
+	}
+
 	taskID, _ := args["task_id"].(string)
 
 	baseURL := GetCamofoxURL()
@@ -759,7 +765,7 @@ func (t *CamofoxVisionTool) Execute(ctx context.Context, args map[string]any) (s
 	}
 
 	screenshotPath := filepath.Join(screenshotsDir, fmt.Sprintf("browser_screenshot_%s.png", uuid.New().String()[:8]))
-	if err := os.WriteFile(screenshotPath, screenshot, 0644); err != nil {
+	if err := os.WriteFile(screenshotPath, screenshot, 0600); err != nil {
 		return ToolError(fmt.Sprintf("保存截图失败: %v", err)), nil
 	}
 

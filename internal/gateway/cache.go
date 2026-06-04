@@ -262,6 +262,11 @@ func (c *AgentCache) evictLRU() bool {
 			c.wg.Add(1)
 			go func(e *cacheEntry) {
 				defer c.wg.Done()
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Warn("agent shutdown panicked", "err", r)
+					}
+				}()
 				if e.agent != nil {
 					e.agent.Shutdown()
 				}

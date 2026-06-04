@@ -178,16 +178,20 @@ func (a *FeishuCommentAdapter) HandleEvent(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// 验证飞书事件签名 (X-Lark-Signature)
+	// 验证飞书事件签名 (X-Lark-Signature) — fail-closed
 	if a.verificationToken != "" {
 		sig := r.Header.Get("X-Lark-Signature")
 		ts := r.Header.Get("X-Lark-Request-Timestamp")
-		if sig != "" && ts != "" {
-			if !verifyFeishuSignature(a.verificationToken, ts, string(body), sig) {
-				http.Error(w, "签名验证失败", http.StatusForbidden)
-				return
-			}
+		if sig == "" || ts == "" {
+			http.Error(w, "缺少签名头", http.StatusForbidden)
+			return
 		}
+		if !verifyFeishuSignature(a.verificationToken, ts, string(body), sig) {
+			http.Error(w, "签名验证失败", http.StatusForbidden)
+			return
+		}
+	} else {
+		slog.Warn("[FeishuComment] verificationToken 未配置，跳过签名验证")
 	}
 
 	var event FeishuCommentEvent

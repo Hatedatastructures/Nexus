@@ -125,3 +125,24 @@ func FileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
+
+// validateSkillName 验证技能名称不包含路径遍历成分。
+// 拒绝 ".."、"/"、"\"、空字节，以及空名称。
+func validateSkillName(name string) error {
+	if name == "" {
+		return fmt.Errorf("技能名称为空")
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("技能名称不能为 %q", name)
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("技能名称不能包含 '..'")
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return fmt.Errorf("技能名称不能包含路径分隔符")
+	}
+	if strings.ContainsRune(name, 0) {
+		return fmt.Errorf("技能名称不能包含空字节")
+	}
+	return nil
+}

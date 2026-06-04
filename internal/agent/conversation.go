@@ -315,21 +315,29 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, histo
 	result.ToolCalls = toolCallCount
 	result.Duration = time.Since(startTime)
 
-	// ── 5. 同步记忆 (异步) ──
-	if a.memoryManager != nil {
-		// async sync memory with timeout to prevent goroutine leak
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("memory sync goroutine panic",
-						"session_id", a.sessionID,
-						"panic", r,
-					)
+		// ── 5. 同步记忆 (异步，30s 超时) ──
+		if a.memoryManager != nil {
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("memory sync goroutine panic",
+							"session_id", a.sessionID,
+							"panic", r,
+						)
+					}
+				}()
+				done := make(chan struct{})
+				go func() {
+					_ = a.memoryManager.SystemPromptBlock()
+					close(done)
+				}()
+				select {
+				case <-done:
+				case <-time.After(30 * time.Second):
+					slog.Warn("memory sync timed out", "session_id", a.sessionID)
 				}
 			}()
-			_ = a.memoryManager.SystemPromptBlock()
-		}()
-	}
+		}
 
 	a.mu.Lock()
 	a.messages = messages

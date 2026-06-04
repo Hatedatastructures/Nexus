@@ -145,7 +145,9 @@ func (r *SWERunner) RunBatch(ctx context.Context, tasks []SWETask, outputDir str
 // executeToolCall 执行单个工具调用。
 func (r *SWERunner) executeToolCall(ctx context.Context, tc llm.ToolCall) string {
 	var args map[string]any
-	json.Unmarshal([]byte(tc.Arguments), &args)
+	if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
+		return fmt.Sprintf(`{"error": "参数解析失败: %s"}`, err.Error())
+	}
 
 	if r.env == nil {
 		return `{"error": "沙箱环境未设置"}`

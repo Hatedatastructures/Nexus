@@ -417,9 +417,10 @@ func (d *DingTalkAdapter) getAccessToken(ctx context.Context) (string, error) {
 		buffer = result.ExpireIn / 2
 	}
 	d.tokenExpiry = time.Now().Add(time.Duration(result.ExpireIn-buffer) * time.Second)
+	token := d.accessToken
 	d.tokenMu.Unlock()
 
-	return d.accessToken, nil
+	return token, nil
 }
 
 // calcSign 计算钉钉 API 请求签名。

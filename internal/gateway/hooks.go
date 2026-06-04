@@ -202,6 +202,11 @@ func (r *HookRegistry) runWithTimeout(ctx context.Context, hook Hook, event *pla
 	done := make(chan hookResult, 1)
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- hookResult{event: event, err: fmt.Errorf("hook panicked: %v", r)}
+			}
+		}()
 		ev, err := hook(ctx, event)
 		done <- hookResult{event: ev, err: err}
 	}()

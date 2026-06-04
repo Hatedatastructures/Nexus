@@ -120,7 +120,11 @@ func (c *DefaultFeishuDriveClient) getTenantAccessToken(ctx context.Context) (st
 
 	c.mu.Lock()
 	c.tokenCache = tokenResp.TenantAccessToken
-	c.tokenExpiry = time.Now().Add(time.Duration(tokenResp.Expire-300) * time.Second)
+	expire := tokenResp.Expire - 300
+	if expire < 60 {
+		expire = 60
+	}
+	c.tokenExpiry = time.Now().Add(time.Duration(expire) * time.Second)
 	c.mu.Unlock()
 
 	return c.tokenCache, nil
@@ -253,10 +257,20 @@ func (t *FeishuDriveListCommentsTool) Schema() *ToolSchema {
 	}
 }
 
+func validateFeishuToken(s string) error {
+	if strings.ContainsAny(s, "/\\?#") || strings.Contains(s, "..") {
+		return fmt.Errorf("包含非法字符")
+	}
+	return nil
+}
+
 func (t *FeishuDriveListCommentsTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	fileToken, ok := args["file_token"].(string)
 	if !ok || strings.TrimSpace(fileToken) == "" {
 		return ToolError("参数 file_token 是必填项。"), nil
+	}
+	if err := validateFeishuToken(fileToken); err != nil {
+		return ToolError(fmt.Sprintf("file_token %s", err)), nil
 	}
 
 	fileType, _ := args["file_type"].(string)
@@ -366,9 +380,15 @@ func (t *FeishuDriveListRepliesTool) Execute(ctx context.Context, args map[strin
 	if !ok || strings.TrimSpace(fileToken) == "" {
 		return ToolError("参数 file_token 是必填项。"), nil
 	}
+	if err := validateFeishuToken(fileToken); err != nil {
+		return ToolError(fmt.Sprintf("file_token %s", err)), nil
+	}
 	commentID, ok := args["comment_id"].(string)
 	if !ok || strings.TrimSpace(commentID) == "" {
 		return ToolError("参数 comment_id 是必填项。"), nil
+	}
+	if err := validateFeishuToken(commentID); err != nil {
+		return ToolError(fmt.Sprintf("comment_id %s", err)), nil
 	}
 
 	fileType, _ := args["file_type"].(string)
@@ -470,9 +490,15 @@ func (t *FeishuDriveReplyCommentTool) Execute(ctx context.Context, args map[stri
 	if !ok || strings.TrimSpace(fileToken) == "" {
 		return ToolError("参数 file_token 是必填项。"), nil
 	}
+	if err := validateFeishuToken(fileToken); err != nil {
+		return ToolError(fmt.Sprintf("file_token %s", err)), nil
+	}
 	commentID, ok := args["comment_id"].(string)
 	if !ok || strings.TrimSpace(commentID) == "" {
 		return ToolError("参数 comment_id 是必填项。"), nil
+	}
+	if err := validateFeishuToken(commentID); err != nil {
+		return ToolError(fmt.Sprintf("comment_id %s", err)), nil
 	}
 	content, ok := args["content"].(string)
 	if !ok || strings.TrimSpace(content) == "" {
@@ -581,6 +607,9 @@ func (t *FeishuDriveAddCommentTool) Execute(ctx context.Context, args map[string
 	fileToken, ok := args["file_token"].(string)
 	if !ok || strings.TrimSpace(fileToken) == "" {
 		return ToolError("参数 file_token 是必填项。"), nil
+	}
+	if err := validateFeishuToken(fileToken); err != nil {
+		return ToolError(fmt.Sprintf("file_token %s", err)), nil
 	}
 	content, ok := args["content"].(string)
 	if !ok || strings.TrimSpace(content) == "" {

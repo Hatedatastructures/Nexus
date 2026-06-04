@@ -5,6 +5,7 @@ package mcp
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -167,9 +168,11 @@ func doTokenRequest(tokenURL string, data url.Values, clientID string) (*OAuthTo
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// 不将响应体包含在错误信息中，避免泄露敏感信息
 		slog.Error("Token endpoint returned error",
 			"status", resp.StatusCode,
-			)
+			"body_len", len(body),
+		)
 		return nil, fmt.Errorf("Token 端点返回 HTTP %d", resp.StatusCode)
 	}
 
@@ -246,7 +249,7 @@ func StartOAuthFlow(cfg *OAuthConfig) (*OAuthFlowResult, error) {
 // callbackState 是回调返回的 state，expectedState 是发起流程时生成的 state，
 // 二者必须匹配以防止 CSRF 攻击。若 expectedState 为空则跳过校验（不推荐）。
 func CompleteOAuthFlow(cfg *OAuthConfig, code, callbackState, expectedState, verifier string) (*OAuthToken, error) {
-	if expectedState != "" && callbackState != expectedState {
+	if expectedState != "" && subtle.ConstantTimeCompare([]byte(callbackState), []byte(expectedState)) != 1 {
 		return nil, fmt.Errorf("OAuth state 不匹配，可能的 CSRF 攻击")
 	}
 

@@ -44,6 +44,7 @@ func (a *ToolRegistryAdapter) GetSchema(name string) (*ToolSchema, bool) {
 }
 
 // Dispatch 执行指定工具。
+// 将调用者的 context 传递给底层注册中心，保留超时和取消信号。
 func (a *ToolRegistryAdapter) Dispatch(ctx context.Context, name string, args map[string]any) (string, error) {
 	toolName := strings.TrimPrefix(name, "mcp_")
 

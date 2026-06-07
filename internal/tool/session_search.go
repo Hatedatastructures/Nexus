@@ -94,10 +94,10 @@ func (t *SessionSearchTool) Schema() *ToolSchema {
 
 // Execute 执行会话搜索。
 // 流程:
-//   1. 验证状态存储已初始化
-//   2. 解析参数: query, limit, recent_only
-//   3. 调用 Store.SearchMessages 进行 FTS5 搜索
-//   4. 格式化搜索结果为可读文本返回
+//  1. 验证状态存储已初始化
+//  2. 解析参数: query, limit, recent_only
+//  3. 调用 Store.SearchMessages 进行 FTS5 搜索
+//  4. 格式化搜索结果为可读文本返回
 func (t *SessionSearchTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	// 检查状态存储
 	store := getStateStore()
@@ -175,15 +175,15 @@ func (t *SessionSearchTool) Execute(ctx context.Context, args map[string]any) (s
 
 	// 构建可读摘要
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("找到 %d 条匹配 \"%s\" 的结果:\n\n", len(results), query))
+	fmt.Fprintf(&sb, "找到 %d 条匹配 \"%s\" 的结果:\n\n", len(results), query)
 
 	for _, entry := range formattedResults {
-		sb.WriteString(fmt.Sprintf("[%d] 会话 %s (消息 #%d, 排名: %.4f)\n",
-			entry["index"], entry["session_id"], entry["message_id"], entry["rank"]))
+		fmt.Fprintf(&sb, "[%d] 会话 %s (消息 #%d, 排名: %.4f)\n",
+			entry["index"], entry["session_id"], entry["message_id"], entry["rank"])
 		if title, ok := entry["session_title"].(string); ok && title != "" {
-			sb.WriteString(fmt.Sprintf("    标题: %s\n", title))
+			fmt.Fprintf(&sb, "    标题: %s\n", title)
 		}
-		sb.WriteString(fmt.Sprintf("    内容: %s\n\n", entry["snippet"]))
+		fmt.Fprintf(&sb, "    内容: %s\n\n", entry["snippet"])
 	}
 
 	// JSON 输出
@@ -199,8 +199,3 @@ func (t *SessionSearchTool) Execute(ctx context.Context, args map[string]any) (s
 	return string(output), nil
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&SessionSearchTool{})
-}

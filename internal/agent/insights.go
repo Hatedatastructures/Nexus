@@ -26,30 +26,30 @@ func NewInsightsEngine(store *state.Store) *InsightsEngine {
 
 // OverviewMetrics 总览指标。
 type OverviewMetrics struct {
-	TotalSessions    int     `json:"total_sessions"`
-	TotalMessages    int     `json:"total_messages"`
-	TotalToolCalls   int     `json:"total_tool_calls"`
-	TotalInputTokens int64   `json:"total_input_tokens"`
-	TotalOutputTokens int64  `json:"total_output_tokens"`
-	TotalAPICalls    int     `json:"total_api_calls"`
-	EstimatedCostUSD float64 `json:"estimated_cost_usd"`
+	TotalSessions         int     `json:"total_sessions"`
+	TotalMessages         int     `json:"total_messages"`
+	TotalToolCalls        int     `json:"total_tool_calls"`
+	TotalInputTokens      int64   `json:"total_input_tokens"`
+	TotalOutputTokens     int64   `json:"total_output_tokens"`
+	TotalAPICalls         int     `json:"total_api_calls"`
+	EstimatedCostUSD      float64 `json:"estimated_cost_usd"`
 	AvgMessagesPerSession float64 `json:"avg_messages_per_session"`
 }
 
 // ModelBreakdown 按模型的统计。
 type ModelBreakdown struct {
-	Model       string  `json:"model"`
-	Sessions    int     `json:"sessions"`
-	Messages    int     `json:"messages"`
-	InputTokens int64   `json:"input_tokens"`
-	OutputTokens int64  `json:"output_tokens"`
-	CostUSD     float64 `json:"cost_usd"`
+	Model        string  `json:"model"`
+	Sessions     int     `json:"sessions"`
+	Messages     int     `json:"messages"`
+	InputTokens  int64   `json:"input_tokens"`
+	OutputTokens int64   `json:"output_tokens"`
+	CostUSD      float64 `json:"cost_usd"`
 }
 
 // ToolBreakdown 按工具的统计。
 type ToolBreakdown struct {
-	ToolName string `json:"tool_name"`
-	CallCount int   `json:"call_count"`
+	ToolName  string `json:"tool_name"`
+	CallCount int    `json:"call_count"`
 }
 
 // PlatformBreakdown 按平台的统计。
@@ -176,21 +176,21 @@ func (e *InsightsEngine) FormatTerminal(ctx context.Context) (string, error) {
 	b.WriteString("╔══════════════════════════════════════════╗\n")
 	b.WriteString("║           使用洞察总览                    ║\n")
 	b.WriteString("╠══════════════════════════════════════════╣\n")
-	b.WriteString(fmt.Sprintf("║  会话总数:     %-26d║\n", overview.TotalSessions))
-	b.WriteString(fmt.Sprintf("║  消息总数:     %-26d║\n", overview.TotalMessages))
-	b.WriteString(fmt.Sprintf("║  工具调用:     %-26d║\n", overview.TotalToolCalls))
-	b.WriteString(fmt.Sprintf("║  API 调用:     %-26d║\n", overview.TotalAPICalls))
-	b.WriteString(fmt.Sprintf("║  输入 Token:   %-26d║\n", overview.TotalInputTokens))
-	b.WriteString(fmt.Sprintf("║  输出 Token:   %-26d║\n", overview.TotalOutputTokens))
-	b.WriteString(fmt.Sprintf("║  估算费用:     $%-25.4f║\n", overview.EstimatedCostUSD))
-	b.WriteString(fmt.Sprintf("║  平均消息/会话: %-24.1f║\n", overview.AvgMessagesPerSession))
+	fmt.Fprintf(&b, "║  会话总数:     %-26d║\n", overview.TotalSessions)
+	fmt.Fprintf(&b, "║  消息总数:     %-26d║\n", overview.TotalMessages)
+	fmt.Fprintf(&b, "║  工具调用:     %-26d║\n", overview.TotalToolCalls)
+	fmt.Fprintf(&b, "║  API 调用:     %-26d║\n", overview.TotalAPICalls)
+	fmt.Fprintf(&b, "║  输入 Token:   %-26d║\n", overview.TotalInputTokens)
+	fmt.Fprintf(&b, "║  输出 Token:   %-26d║\n", overview.TotalOutputTokens)
+	fmt.Fprintf(&b, "║  估算费用:     $%-25.4f║\n", overview.EstimatedCostUSD)
+	fmt.Fprintf(&b, "║  平均消息/会话: %-24.1f║\n", overview.AvgMessagesPerSession)
 	b.WriteString("╚══════════════════════════════════════════╝\n\n")
 
 	// 模型分布
 	if len(models) > 0 {
 		b.WriteString("┌─ 模型使用分布 ─────────────────────────┐\n")
 		for _, m := range models {
-			b.WriteString(fmt.Sprintf("│  %-20s  会话:%-4d  费用:$%.4f\n", m.Model, m.Sessions, m.CostUSD))
+			fmt.Fprintf(&b, "│  %-20s  会话:%-4d  费用:$%.4f\n", m.Model, m.Sessions, m.CostUSD)
 		}
 		b.WriteString("└─────────────────────────────────────────┘\n\n")
 	}
@@ -199,7 +199,7 @@ func (e *InsightsEngine) FormatTerminal(ctx context.Context) (string, error) {
 	if len(platforms) > 0 {
 		b.WriteString("┌─ 平台使用分布 ─────────────────────────┐\n")
 		for _, p := range platforms {
-			b.WriteString(fmt.Sprintf("│  %-15s  会话:%-4d  消息:%-6d\n", p.Platform, p.Sessions, p.Messages))
+			fmt.Fprintf(&b, "│  %-15s  会话:%-4d  消息:%-6d\n", p.Platform, p.Sessions, p.Messages)
 		}
 		b.WriteString("└─────────────────────────────────────────┘\n")
 	}
@@ -219,14 +219,14 @@ func (e *InsightsEngine) FormatGateway(ctx context.Context) (string, error) {
 	var b strings.Builder
 
 	b.WriteString("**使用洞察**\n\n")
-	b.WriteString(fmt.Sprintf("- 会话: %d | 消息: %d | 工具调用: %d\n", overview.TotalSessions, overview.TotalMessages, overview.TotalToolCalls))
-	b.WriteString(fmt.Sprintf("- Token: %d 输入 / %d 输出\n", overview.TotalInputTokens, overview.TotalOutputTokens))
-	b.WriteString(fmt.Sprintf("- 费用: $%.4f\n\n", overview.EstimatedCostUSD))
+	fmt.Fprintf(&b, "- 会话: %d | 消息: %d | 工具调用: %d\n", overview.TotalSessions, overview.TotalMessages, overview.TotalToolCalls)
+	fmt.Fprintf(&b, "- Token: %d 输入 / %d 输出\n", overview.TotalInputTokens, overview.TotalOutputTokens)
+	fmt.Fprintf(&b, "- 费用: $%.4f\n\n", overview.EstimatedCostUSD)
 
 	if len(models) > 0 {
 		b.WriteString("**模型分布:**\n")
 		for _, m := range models {
-			b.WriteString(fmt.Sprintf("- `%s`: %d 会话, $%.4f\n", m.Model, m.Sessions, m.CostUSD))
+			fmt.Fprintf(&b, "- `%s`: %d 会话, $%.4f\n", m.Model, m.Sessions, m.CostUSD)
 		}
 	}
 

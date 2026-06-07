@@ -107,9 +107,9 @@ func (t *GlobTool) Execute(ctx context.Context, args map[string]any) (string, er
 			"path":    searchRoot,
 			"files":   []string{},
 		})
-	if err != nil {
-		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
-	}
+		if err != nil {
+			return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
+		}
 		return string(result), nil
 	}
 
@@ -193,12 +193,13 @@ func expandOneBrace(pattern string) []string {
 	lastOpen := -1
 	depth := 0
 	for i := 0; i < len(pattern); i++ {
-		if pattern[i] == '{' {
+		switch pattern[i] {
+		case '{':
 			if depth == 0 {
 				lastOpen = i
 			}
 			depth++
-		} else if pattern[i] == '}' {
+		case '}':
 			depth--
 			if depth == 0 && lastOpen >= 0 {
 				// 找到匹配的花括号对
@@ -378,10 +379,4 @@ func sortByModTime(paths []string) {
 	for i, e := range entries {
 		paths[i] = e.path
 	}
-}
-
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&GlobTool{})
 }

@@ -4,7 +4,9 @@ package skill
 import (
 	"context"
 	"fmt"
+
 	"log/slog"
+	pkgerrors "nexus-agent/internal/errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,7 +127,7 @@ func ExpandInlineShell(body string, checker *approval.Checker) (string, error) {
 		result.WriteString(body[i : i+idx])
 
 		// 查找配对的 反引号
-		cmdStart := i + idx + 2          // 跳过 "!`"
+		cmdStart := i + idx + 2 // 跳过 "!`"
 		cmdEnd := strings.Index(body[cmdStart:], "`")
 		if cmdEnd == -1 {
 			// 未找到配对的 反引号，原样输出
@@ -151,7 +153,7 @@ func ExpandInlineShell(body string, checker *approval.Checker) (string, error) {
 		if command != "" {
 			output, err := executeInlineCommand(command, checker)
 			if err != nil {
-				result.WriteString(fmt.Sprintf("[!`%s` 执行失败: %v]", command, err))
+				_, _ = fmt.Fprintf(&result, "[!`%s` 执行失败: %v]", command, err)
 			} else {
 				result.WriteString(strings.TrimSpace(output))
 			}
@@ -170,11 +172,11 @@ func executeInlineCommand(command string, checker *approval.Checker) (string, er
 	result, reason := checker.Check(context.Background(), command)
 	if result == approval.Denied {
 		slog.Warn("inline shell blocked by approval", "command", command, "reason", reason)
-		return "", fmt.Errorf("命令被安全策略拒绝: %s", reason)
+		return "", pkgerrors.New(pkgerrors.SkillIO, fmt.Sprintf("命令被安全策略拒绝: %s", reason))
 	}
 	if result == approval.Pending {
 		slog.Warn("inline shell requires approval, denying in batch mode", "command", command, "reason", reason)
-		return "", fmt.Errorf("命令需要用户审批（批处理模式下不可用）: %s", reason)
+		return "", pkgerrors.New(pkgerrors.SkillIO, fmt.Sprintf("命令需要用户审批（批处理模式下不可用）: %s", reason))
 	}
 
 	// 30 秒超时
@@ -203,7 +205,7 @@ func executeInlineCommand(command string, checker *approval.Checker) (string, er
 
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("命令退出码异常: %w", err)
+		return "", pkgerrors.Wrap(pkgerrors.SkillIO, "命令退出码异常", err)
 	}
 
 	// 限制输出长度 (rune 安全截断)

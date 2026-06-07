@@ -13,11 +13,11 @@ import (
 // 包括自动刷新、缓存、跨进程磁盘监视等。
 // 线程安全：所有公开方法都是 goroutine-safe。
 type OAuthManager struct {
-	cfg   *OAuthConfig       // OAuth 配置
-	store *TokenStore        // 持久化存储
-	mu       sync.RWMutex       // 并发保护
-	refreshMu sync.Mutex        // 串行化刷新操作，防止并发刷新竞态
-	token *OAuthToken        // 内存中的令牌缓存
+	cfg       *OAuthConfig // OAuth 配置
+	store     *TokenStore  // 持久化存储
+	mu        sync.RWMutex // 并发保护
+	refreshMu sync.Mutex   // 串行化刷新操作，防止并发刷新竞态
+	token     *OAuthToken  // 内存中的令牌缓存
 }
 
 // NewOAuthManager 创建一个新的 OAuth 管理器实例。
@@ -114,7 +114,6 @@ func (m *OAuthManager) IsTokenExpired() (expired, exists bool) {
 	return token.IsExpired(), true
 }
 
-
 // refreshToken 使用刷新令牌获取新的访问令牌。
 // 使用 refreshMu 串行化刷新操作，防止并发刷新导致 TOCTOU 竞态。
 // 刷新成功后自动更新内存缓存和持久化存储。
@@ -156,6 +155,7 @@ func (m *OAuthManager) refreshToken() (*OAuthToken, error) {
 
 	return newToken, nil
 }
+
 // RefreshToken 公开方法：使用刷新令牌获取新的访问令牌（代理到内部 refreshToken）。
 func (m *OAuthManager) RefreshToken() (*OAuthToken, error) {
 	return m.refreshToken()
@@ -243,8 +243,8 @@ func (m *OAuthManager) calculateRemainingTTL() int64 {
 // ───────────────────────────── 模块级单例 ─────────────────────────────
 
 var (
-	defaultManager     *OAuthManager
-	defaultManagerMu   sync.Mutex
+	defaultManager   *OAuthManager
+	defaultManagerMu sync.Mutex
 )
 
 // GetDefaultManager 返回进程级的 OAuth 管理器单例。

@@ -6,8 +6,8 @@ import (
 
 func TestNormalizeUsage_Anthropic(t *testing.T) {
 	raw := map[string]any{
-		"input_tokens":              float64(1000),
-		"output_tokens":             float64(500),
+		"input_tokens":                float64(1000),
+		"output_tokens":               float64(500),
 		"cache_creation_input_tokens": float64(200),
 		"cache_read_input_tokens":     float64(300),
 	}
@@ -104,10 +104,10 @@ func TestEstimateCost_CacheTokens(t *testing.T) {
 
 func TestResolveBillingRoute(t *testing.T) {
 	tests := []struct {
-		name       string
-		provider   string
-		model      string
-		baseURL    string
+		name           string
+		provider       string
+		model          string
+		baseURL        string
 		wantOpenRouter bool
 	}{
 		{"openrouter", "openrouter", "gpt-4o", "https://openrouter.ai/api/v1", true},

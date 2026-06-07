@@ -41,7 +41,7 @@ func (t *SkillsListTool) Schema() *ToolSchema {
 		Name:        "skills_list",
 		Description: t.Description(),
 		Parameters: map[string]any{
-			"type": "object",
+			"type":       "object",
 			"properties": map[string]any{},
 		},
 	}
@@ -57,7 +57,7 @@ func (t *SkillsListTool) Execute(ctx context.Context, args map[string]any) (stri
 	var buf strings.Builder
 	buf.WriteString("已安装的技能:\n\n")
 	for _, s := range skills {
-		buf.WriteString(fmt.Sprintf("- **%s**: %s\n", s["name"], s["description"]))
+		fmt.Fprintf(&buf, "- **%s**: %s\n", s["name"], s["description"])
 	}
 
 	return ToolResult(map[string]any{"output": buf.String()}), nil
@@ -189,7 +189,7 @@ func getSkillDetail(name string) string {
 	// 遍历子目录查找（支持 category/name 结构）
 	skillsDir := filepath.Join(home, ".nexus", "skills")
 	var found []byte
-	filepath.WalkDir(skillsDir, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(skillsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			slog.Warn("skill: skip inaccessible path", "path", path, "error", err)
 			return nil
@@ -235,10 +235,3 @@ func parseSkillFrontmatter(content []byte) (name, description string) {
 	return name, description
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	slog.Debug("registering skill management tool")
-	GetRegistry().Register(&SkillsListTool{})
-	GetRegistry().Register(&SkillViewTool{})
-}

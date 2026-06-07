@@ -135,10 +135,10 @@ func (t *TranscriptionTool) Execute(ctx context.Context, args map[string]any) (s
 
 	slog.Info("audio transcription succeeded", "path", audioPath, "model", model, "chars", len(transcript))
 	return ToolResult(map[string]any{
-		"output":  transcript,
-		"audio":   audioPath,
-		"model":   model,
-		"chars":   len(transcript),
+		"output":   transcript,
+		"audio":    audioPath,
+		"model":    model,
+		"chars":    len(transcript),
 		"language": language,
 	}), nil
 }
@@ -212,7 +212,7 @@ func (t *TranscriptionTool) transcribe(ctx context.Context, model, audioPath, la
 	if err != nil {
 		return "", fmt.Errorf("HTTP 请求失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
@@ -255,8 +255,3 @@ func formatAudioSize(bytes int64) string {
 	return fmt.Sprintf("%.1f %s", float64(bytes)/float64(div), units[exp])
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&TranscriptionTool{})
-}

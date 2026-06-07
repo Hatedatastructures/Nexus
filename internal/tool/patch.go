@@ -43,28 +43,28 @@ const (
 
 // PatchOperation 表示单个补丁操作。
 type PatchOperation struct {
-	Type        OperationType // 操作类型
-	FilePath    string        // 目标文件路径
-	OldText     string        // 旧文本 (UPDATE 时用于定位)
-	NewText     string        // 新文本 (ADD/UPDATE 时使用)
-	TargetPath  string        // 目标路径 (MOVE 时使用)
-	CreateDirs  bool          // 是否自动创建目录
-	Overwrite   bool          // 是否覆盖已存在文件
-	ExpectedReplacements int // 预期替换次数 (0 = 不限)
+	Type                 OperationType // 操作类型
+	FilePath             string        // 目标文件路径
+	OldText              string        // 旧文本 (UPDATE 时用于定位)
+	NewText              string        // 新文本 (ADD/UPDATE 时使用)
+	TargetPath           string        // 目标路径 (MOVE 时使用)
+	CreateDirs           bool          // 是否自动创建目录
+	Overwrite            bool          // 是否覆盖已存在文件
+	ExpectedReplacements int           // 预期替换次数 (0 = 不限)
 }
 
 // ───────────────────────────── 解析函数 ─────────────────────────────
 
 var (
-	patchBlockRe  = regexp.MustCompile(`(?s)<patch>(.*?)</patch>`)
-	filePathRe    = regexp.MustCompile(`(?i)<file_path>\s*(.*?)\s*</file_path>`)
-	oldTextRe     = regexp.MustCompile(`(?s)(?i)<old_text>(.*?)</old_text>`)
-	newTextRe     = regexp.MustCompile(`(?s)(?i)<new_text>(.*?)</new_text>`)
-	operationRe   = regexp.MustCompile(`(?i)<operation>\s*(.*?)\s*</operation>`)
-	targetPathRe  = regexp.MustCompile(`(?i)<target_path>\s*(.*?)\s*</target_path>`)
-	createDirsRe  = regexp.MustCompile(`(?i)<create_dirs>\s*(.*?)\s*</create_dirs>`)
-	overwriteRe   = regexp.MustCompile(`(?i)<overwrite>\s*(.*?)\s*</overwrite>`)
-	expectedRe    = regexp.MustCompile(`(?i)<expected_replacements>\s*(.*?)\s*</expected_replacements>`)
+	patchBlockRe = regexp.MustCompile(`(?s)<patch>(.*?)</patch>`)
+	filePathRe   = regexp.MustCompile(`(?i)<file_path>\s*(.*?)\s*</file_path>`)
+	oldTextRe    = regexp.MustCompile(`(?s)(?i)<old_text>(.*?)</old_text>`)
+	newTextRe    = regexp.MustCompile(`(?s)(?i)<new_text>(.*?)</new_text>`)
+	operationRe  = regexp.MustCompile(`(?i)<operation>\s*(.*?)\s*</operation>`)
+	targetPathRe = regexp.MustCompile(`(?i)<target_path>\s*(.*?)\s*</target_path>`)
+	createDirsRe = regexp.MustCompile(`(?i)<create_dirs>\s*(.*?)\s*</create_dirs>`)
+	overwriteRe  = regexp.MustCompile(`(?i)<overwrite>\s*(.*?)\s*</overwrite>`)
+	expectedRe   = regexp.MustCompile(`(?i)<expected_replacements>\s*(.*?)\s*</expected_replacements>`)
 )
 
 // ParsePatchOperations 从 XML-like 格式的补丁内容中解析操作列表。
@@ -131,7 +131,7 @@ func parseSinglePatch(content string) (PatchOperation, error) {
 
 	// 预期替换次数
 	if m := expectedRe.FindStringSubmatch(content); m != nil {
-		fmt.Sscanf(strings.TrimSpace(m[1]), "%d", &op.ExpectedReplacements)
+		_, _ = fmt.Sscanf(strings.TrimSpace(m[1]), "%d", &op.ExpectedReplacements)
 	}
 
 	return op, nil

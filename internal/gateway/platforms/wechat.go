@@ -3,7 +3,6 @@
 package platforms
 
 import (
-	"sync"
 	"bytes"
 	"context"
 	"crypto/sha1"
@@ -17,6 +16,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,13 +28,13 @@ type WeChatAdapter struct {
 	tokenMu     sync.Mutex         // token 访问锁
 	closeOnce   sync.Once          // 确保 msgCh 只关闭一次
 	mu          sync.RWMutex       // 保护 msgCh 发送/关闭
-	appID  string             // 公众号 AppID
-	secret string             // 公众号 AppSecret
-	token  string             // 服务器验证 Token (用于签名验证)
-	client *http.Client       // HTTP 客户端
-	msgCh  chan *MessageEvent // 入站消息通道
-	accessToken string        // access_token 缓存
-	tokenExpiry time.Time     // token 过期时间
+	appID       string             // 公众号 AppID
+	secret      string             // 公众号 AppSecret
+	token       string             // 服务器验证 Token (用于签名验证)
+	client      *http.Client       // HTTP 客户端
+	msgCh       chan *MessageEvent // 入站消息通道
+	accessToken string             // access_token 缓存
+	tokenExpiry time.Time          // token 过期时间
 }
 
 // NewWeChatAdapter 创建微信适配器。
@@ -201,16 +201,6 @@ func (w *WeChatAdapter) VerifySignature(signature string, timestamp string, nonc
 	return subtle.ConstantTimeCompare([]byte(hash), []byte(signature)) == 1
 }
 
-// ───────────────────────────── 自注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&AdapterEntry{
-		Platform: PlatformWeChat,
-		Name:     "WeChat",
-		Factory:  func() PlatformAdapter { return NewWeChatAdapter("", "", "") },
-	})
-}
-
 // Configure 注入微信公众号平台配置。
 // settings 必须包含 "app_id"、"secret" 和 "token" 键。
 func (w *WeChatAdapter) Configure(settings map[string]any) error {
@@ -276,7 +266,7 @@ func (w *WeChatAdapter) doAPI(ctx context.Context, method string, path string, b
 	if err != nil {
 		return &SendResult{Success: false, Error: err.Error(), Retryable: true}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
@@ -318,8 +308,8 @@ func (w *WeChatAdapter) getAccessToken(ctx context.Context) (string, error) {
 
 	vals := url.Values{
 		"grant_type": {"client_credential"},
-		"appid":     {w.appID},
-		"secret":    {w.secret},
+		"appid":      {w.appID},
+		"secret":     {w.secret},
 	}
 	apiURL := "https://api.weixin.qq.com/cgi-bin/token?" + vals.Encode()
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
@@ -331,7 +321,7 @@ func (w *WeChatAdapter) getAccessToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {

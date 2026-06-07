@@ -101,8 +101,8 @@ func (t *ClarifyTool) Schema() *ToolSchema {
 					"items": map[string]any{
 						"type": "string",
 					},
-					"maxItems":     MaxClarifyChoices,
-					"description":  "最多4个答案选项。省略此参数表示开放性问题。UI 自动添加'其他'选项。",
+					"maxItems":    MaxClarifyChoices,
+					"description": "最多4个答案选项。省略此参数表示开放性问题。UI 自动添加'其他'选项。",
 				},
 			},
 			"required": []string{"question"},
@@ -162,9 +162,9 @@ func (t *ClarifyTool) Execute(ctx context.Context, args map[string]any) (string,
 
 	// 构建结果
 	result := map[string]any{
-		"question":      question,
+		"question":        question,
 		"choices_offered": choices,
-		"user_response":  trimString(userResponse),
+		"user_response":   trimString(userResponse),
 	}
 
 	return ToolResult(result), nil
@@ -187,19 +187,13 @@ func trimString(s string) string {
 	return s[start:end]
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&ClarifyTool{})
-}
-
 // ───────────────────────────── 辅助函数（供外部使用） ─────────────────────────────
 
 // ClarifyResult 解析澄清工具返回结果。
 type ClarifyResult struct {
-	Question      string   `json:"question"`
+	Question       string   `json:"question"`
 	ChoicesOffered []string `json:"choices_offered"`
-	UserResponse  string   `json:"user_response"`
+	UserResponse   string   `json:"user_response"`
 }
 
 // ParseClarifyResult 从 JSON 字符串解析澄清结果。

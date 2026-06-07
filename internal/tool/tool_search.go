@@ -65,10 +65,10 @@ type matchInfo struct {
 
 // Execute 执行工具搜索。
 // 流程:
-//   1. 解析参数: query, limit
-//   2. 遍历所有已注册工具，按名称和描述进行关键词匹配
-//   3. 名称匹配优先于描述匹配排序
-//   4. 返回匹配的工具列表
+//  1. 解析参数: query, limit
+//  2. 遍历所有已注册工具，按名称和描述进行关键词匹配
+//  3. 名称匹配优先于描述匹配排序
+//  4. 返回匹配的工具列表
 func (t *ToolSearchTool) Execute(ctx context.Context, args map[string]any) (string, error) {
 	// 解析 query 参数
 	query, ok := args["query"].(string)
@@ -87,12 +87,12 @@ func (t *ToolSearchTool) Execute(ctx context.Context, args map[string]any) (stri
 	}
 
 	// 获取所有工具名称并逐一匹配
-	allTools := GetRegistry().ListTools()
+	allTools := globalRegistry.ListTools()
 	var nameMatches []matchInfo
 	var descMatches []matchInfo
 
 	for _, name := range allTools {
-		entry := GetRegistry().GetEntry(name)
+		entry := globalRegistry.GetEntry(name)
 		if entry == nil {
 			continue
 		}
@@ -150,8 +150,3 @@ func (t *ToolSearchTool) Execute(ctx context.Context, args map[string]any) (stri
 	return string(output), nil
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&ToolSearchTool{})
-}

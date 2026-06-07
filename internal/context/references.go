@@ -238,9 +238,9 @@ func expandFolder(path string) (string, error) {
 		prefix := strings.Repeat("  ", depth)
 
 		if info.IsDir() {
-			b.WriteString(fmt.Sprintf("%s%s/\n", prefix, info.Name()))
+			fmt.Fprintf(&b, "%s%s/\n", prefix, info.Name())
 		} else {
-			b.WriteString(fmt.Sprintf("%s%s\n", prefix, info.Name()))
+			fmt.Fprintf(&b, "%s%s\n", prefix, info.Name())
 		}
 
 		return nil

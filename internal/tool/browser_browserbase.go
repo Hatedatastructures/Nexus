@@ -33,8 +33,8 @@ type BrowserbaseConfig struct {
 // BrowserbaseSession Browserbase 云浏览器会话。
 // 封装了与 Browserbase API 的交互，提供 CDP WebSocket 连接地址。
 type BrowserbaseSession struct {
-	sessionID string           // Browserbase 会话 ID
-	cdpURL    string           // CDP WebSocket URL，用于 rod 连接
+	sessionID string // Browserbase 会话 ID
+	cdpURL    string // CDP WebSocket URL，用于 rod 连接
 	config    BrowserbaseConfig
 	client    *http.Client
 }
@@ -52,7 +52,7 @@ const (
 // 使用完毕后必须调用 Close() 释放云端资源。
 func NewBrowserbaseSession(ctx context.Context, cfg BrowserbaseConfig) (*BrowserbaseSession, error) {
 	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("Browserbase API Key 不能为空")
+		return nil, fmt.Errorf("browserbase API Key 不能为空")
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -84,7 +84,7 @@ func NewBrowserbaseSession(ctx context.Context, cfg BrowserbaseConfig) (*Browser
 	if err != nil {
 		return nil, fmt.Errorf("调用 Browserbase 创建会话 API 失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
@@ -93,7 +93,7 @@ func NewBrowserbaseSession(ctx context.Context, cfg BrowserbaseConfig) (*Browser
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		slog.Warn("Browserbase create session failed", "status", resp.StatusCode, "body", string(respBody))
-		return nil, fmt.Errorf("Browserbase 创建会话失败 (HTTP %d)", resp.StatusCode)
+		return nil, fmt.Errorf("browserbase 创建会话失败 (HTTP %d)", resp.StatusCode)
 	}
 
 	// 解析响应，提取会话 ID 和 CDP 连接 URL
@@ -106,10 +106,10 @@ func NewBrowserbaseSession(ctx context.Context, cfg BrowserbaseConfig) (*Browser
 	}
 
 	if result.ID == "" {
-		return nil, fmt.Errorf("Browserbase 未返回会话 ID")
+		return nil, fmt.Errorf("browserbase 未返回会话 ID")
 	}
 	if result.ConnectURL == "" {
-		return nil, fmt.Errorf("Browserbase 未返回 CDP 连接 URL")
+		return nil, fmt.Errorf("browserbase 未返回 CDP 连接 URL")
 	}
 
 	slog.Info("Browserbase cloud browser session created",
@@ -148,12 +148,12 @@ func (s *BrowserbaseSession) Close(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("调用 Browserbase 关闭会话 API 失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		closeBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 		slog.Warn("Browserbase close session failed", "status", resp.StatusCode, "body", string(closeBody))
-		return fmt.Errorf("Browserbase 关闭会话失败 (HTTP %d)", resp.StatusCode)
+		return fmt.Errorf("browserbase 关闭会话失败 (HTTP %d)", resp.StatusCode)
 	}
 
 	slog.Info("Browserbase cloud browser session closed", "session_id", s.sessionID)

@@ -63,8 +63,8 @@ type ProfileConfig struct {
 // LoadConfig 从指定路径加载权限配置文件。
 // 如果路径为空，按默认搜索顺序查找:
 //
-//	1. 当前目录 .nexus/permissions.yaml
-//	2. 用户主目录 ~/.nexus/permissions.yaml
+//  1. 当前目录 .nexus/permissions.yaml
+//  2. 用户主目录 ~/.nexus/permissions.yaml
 func LoadConfig(path string) (*PermissionConfig, error) {
 	if path == "" {
 		path = findConfigFile()
@@ -120,9 +120,9 @@ func LoadMergedConfig(projectDir string) (*PermissionConfig, error) {
 
 	// 合并: 项目级规则在前，用户级规则在后
 	merged := &PermissionConfig{
-		Version: 1,
-		Default: userCfg.Default,
-		Rules:   make([]RuleConfig, 0, len(projectCfg.Rules)+len(userCfg.Rules)),
+		Version:  1,
+		Default:  userCfg.Default,
+		Rules:    make([]RuleConfig, 0, len(projectCfg.Rules)+len(userCfg.Rules)),
 		Profiles: make(map[string]ProfileConfig),
 	}
 

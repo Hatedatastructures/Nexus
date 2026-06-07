@@ -38,9 +38,9 @@ type CostResult struct {
 
 // BillingRoute 计费路由信息。
 type BillingRoute struct {
-	Provider    string
-	Model       string
-	BaseURL     string
+	Provider     string
+	Model        string
+	BaseURL      string
 	IsOpenRouter bool
 }
 
@@ -57,28 +57,28 @@ var officialDocsPricing = map[string]PricingEntry{
 	"anthropic:claude-3-opus-20240229":     {InputPerMToken: 15.0, OutputPerMToken: 75.0, CacheReadPerMToken: 1.50, CacheCreationPerMToken: 18.75},
 
 	// OpenAI
-	"openai:gpt-4o":           {InputPerMToken: 2.50, OutputPerMToken: 10.0},
-	"openai:gpt-4o-mini":      {InputPerMToken: 0.15, OutputPerMToken: 0.60},
-	"openai:gpt-4-turbo":      {InputPerMToken: 10.0, OutputPerMToken: 30.0},
-	"openai:gpt-4":            {InputPerMToken: 30.0, OutputPerMToken: 60.0},
-	"openai:gpt-3.5-turbo":    {InputPerMToken: 0.50, OutputPerMToken: 1.50},
-	"openai:o1":               {InputPerMToken: 15.0, OutputPerMToken: 60.0},
-	"openai:o1-mini":          {InputPerMToken: 3.0, OutputPerMToken: 12.0},
-	"openai:o3-mini":          {InputPerMToken: 1.10, OutputPerMToken: 4.40},
+	"openai:gpt-4o":        {InputPerMToken: 2.50, OutputPerMToken: 10.0},
+	"openai:gpt-4o-mini":   {InputPerMToken: 0.15, OutputPerMToken: 0.60},
+	"openai:gpt-4-turbo":   {InputPerMToken: 10.0, OutputPerMToken: 30.0},
+	"openai:gpt-4":         {InputPerMToken: 30.0, OutputPerMToken: 60.0},
+	"openai:gpt-3.5-turbo": {InputPerMToken: 0.50, OutputPerMToken: 1.50},
+	"openai:o1":            {InputPerMToken: 15.0, OutputPerMToken: 60.0},
+	"openai:o1-mini":       {InputPerMToken: 3.0, OutputPerMToken: 12.0},
+	"openai:o3-mini":       {InputPerMToken: 1.10, OutputPerMToken: 4.40},
 
 	// Google
-	"google:gemini-2.5-pro":    {InputPerMToken: 1.25, OutputPerMToken: 10.0},
-	"google:gemini-2.5-flash":  {InputPerMToken: 0.15, OutputPerMToken: 0.60},
-	"google:gemini-2.0-flash":  {InputPerMToken: 0.10, OutputPerMToken: 0.40},
+	"google:gemini-2.5-pro":   {InputPerMToken: 1.25, OutputPerMToken: 10.0},
+	"google:gemini-2.5-flash": {InputPerMToken: 0.15, OutputPerMToken: 0.60},
+	"google:gemini-2.0-flash": {InputPerMToken: 0.10, OutputPerMToken: 0.40},
 
 	// DeepSeek
-	"deepseek:deepseek-chat":   {InputPerMToken: 0.14, OutputPerMToken: 0.28},
+	"deepseek:deepseek-chat":     {InputPerMToken: 0.14, OutputPerMToken: 0.28},
 	"deepseek:deepseek-reasoner": {InputPerMToken: 0.55, OutputPerMToken: 2.19},
 
 	// Qwen
-	"qwen:qwen-max":          {InputPerMToken: 1.60, OutputPerMToken: 6.40},
-	"qwen:qwen-plus":         {InputPerMToken: 0.40, OutputPerMToken: 1.20},
-	"qwen:qwen-turbo":        {InputPerMToken: 0.05, OutputPerMToken: 0.20},
+	"qwen:qwen-max":   {InputPerMToken: 1.60, OutputPerMToken: 6.40},
+	"qwen:qwen-plus":  {InputPerMToken: 0.40, OutputPerMToken: 1.20},
+	"qwen:qwen-turbo": {InputPerMToken: 0.05, OutputPerMToken: 0.20},
 
 	// Moonshot
 	"moonshot:moonshot-v1-128k": {InputPerMToken: 1.26, OutputPerMToken: 1.26},

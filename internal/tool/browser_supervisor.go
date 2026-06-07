@@ -24,16 +24,16 @@ import (
 
 // superviseCheck 代表单次监控检查的结果。
 type superviseCheck struct {
-	Timestamp   string `json:"timestamp"`    // 检查时间
-	PageTitle   string `json:"page_title"`   // 页面标题
-	PageURL     string `json:"page_url"`     // 当前 URL
-	Loading     bool   `json:"loading"`      // 是否仍在加载中
-	HasDialog   bool   `json:"has_dialog"`   // 是否存在弹窗
-	DialogType  string `json:"dialog_type"`  // 弹窗类型（如有）
-	DialogText  string `json:"dialog_text"`  // 弹窗文本（如有）
+	Timestamp     string `json:"timestamp"`                // 检查时间
+	PageTitle     string `json:"page_title"`               // 页面标题
+	PageURL       string `json:"page_url"`                 // 当前 URL
+	Loading       bool   `json:"loading"`                  // 是否仍在加载中
+	HasDialog     bool   `json:"has_dialog"`               // 是否存在弹窗
+	DialogType    string `json:"dialog_type"`              // 弹窗类型（如有）
+	DialogText    string `json:"dialog_text"`              // 弹窗文本（如有）
 	ScreenshotB64 string `json:"screenshot_b64,omitempty"` // 截图（base64）
-	ElementFound bool  `json:"element_found,omitempty"` // 指定选择器是否找到元素
-	ElementText  string `json:"element_text,omitempty"`  // 指定选择器的元素文本
+	ElementFound  bool   `json:"element_found,omitempty"`  // 指定选择器是否找到元素
+	ElementText   string `json:"element_text,omitempty"`   // 指定选择器的元素文本
 }
 
 // ───────────────────────────── BrowserSuperviseTool ─────────────────────────────
@@ -279,9 +279,4 @@ func (t *BrowserSuperviseTool) buildSummary(checks []superviseCheck) string {
 		summary += fmt.Sprintf(" 检测到 %d 次对话框", dialogCount)
 	}
 	return summary
-}
-
-func init() {
-	reg := GetRegistry()
-	reg.Register(&BrowserSuperviseTool{})
 }

@@ -3,7 +3,6 @@ package cron
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,6 +11,8 @@ import (
 
 	"nexus-agent/internal/agent"
 	"nexus-agent/internal/config"
+
+	pkgerrors "nexus-agent/internal/errors"
 )
 
 // ───────────────────────────── 作业执行器 ─────────────────────────────
@@ -28,8 +29,8 @@ type conversationRunner interface {
 //   - 输出保存到 ~/.nexus/cron/output/{job_id}/{timestamp}.md
 //   - 不活跃超时: 600 秒
 type Executor struct {
-	outputDir    string          // 输出目录 (~/.nexus/cron/output)
-	inactivityTO time.Duration   // 不活跃超时
+	outputDir    string              // 输出目录 (~/.nexus/cron/output)
+	inactivityTO time.Duration       // 不活跃超时
 	agentConfig  *config.AgentConfig // 代理配置
 	runner       conversationRunner  // 可选: 注入的对话执行器 (测试用)
 }
@@ -43,9 +44,9 @@ func (e *Executor) withRunner(r conversationRunner) *Executor {
 // NewExecutor 创建作业执行器。
 func NewExecutor(outputDir string, agentConfig *config.AgentConfig) *Executor {
 	return &Executor{
-		outputDir:   outputDir,
+		outputDir:    outputDir,
 		inactivityTO: 600 * time.Second,
-		agentConfig: agentConfig,
+		agentConfig:  agentConfig,
 	}
 }
 
@@ -66,7 +67,7 @@ func (r *agentRunner) runConversation(ctx context.Context, userMessage string, h
 // 返回最终的响应文本和可能的错误。
 func (e *Executor) Execute(ctx context.Context, job *Job) error {
 	if job == nil {
-		return fmt.Errorf("作业不能为 nil")
+		return pkgerrors.New(pkgerrors.CronJob, "作业不能为 nil")
 	}
 
 	slog.Info("Cron: starting job execution",
@@ -78,7 +79,7 @@ func (e *Executor) Execute(ctx context.Context, job *Job) error {
 	safeID := sanitizeJobID(job.ID)
 	jobOutputDir := filepath.Join(e.outputDir, safeID)
 	if err := os.MkdirAll(jobOutputDir, 0700); err != nil {
-		return fmt.Errorf("创建输出目录失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.CronJob, "创建输出目录失败", err)
 	}
 
 	// 构建执行上下文，设置不活跃超时
@@ -102,7 +103,7 @@ func (e *Executor) Execute(ctx context.Context, job *Job) error {
 	}
 	result, err := runner.runConversation(execCtx, prompt, nil, "")
 	if err != nil {
-		return fmt.Errorf("agent 对话失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.CronJob, "agent 对话失败", err)
 	}
 
 	// 检查是否为静默输出
@@ -115,7 +116,7 @@ func (e *Executor) Execute(ctx context.Context, job *Job) error {
 
 	// 保存输出
 	if err := e.saveOutput(job, result.FinalResponse, startTime); err != nil {
-		return fmt.Errorf("保存输出失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.CronJob, "保存输出失败", err)
 	}
 
 	// 更新作业状态
@@ -161,23 +162,23 @@ func (e *Executor) saveOutput(job *Job, output string, timestamp time.Time) erro
 	tmpPath := tmpFile.Name()
 
 	if _, err := tmpFile.WriteString(output); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	if err := tmpFile.Sync(); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
 		return err
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	if err := os.Rename(tmpPath, outputFile); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 
-	os.Chmod(outputFile, 0600)
+	_ = os.Chmod(outputFile, 0600)
 	return nil
 }
 

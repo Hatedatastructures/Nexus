@@ -118,11 +118,11 @@ func (e *LocalEnvironment) Execute(ctx context.Context, command string, opts *Ex
 			return nil, fmt.Errorf("sudo 权限提升被拒绝: %s", reason)
 		}
 		cmd.Args = append([]string{"sudo"}, cmd.Args...)
-			sudoPath, lookErr := exec.LookPath("sudo")
-			if lookErr != nil {
-				return nil, fmt.Errorf("sudo 不可用: %w", lookErr)
-			}
-			cmd.Path = sudoPath
+		sudoPath, lookErr := exec.LookPath("sudo")
+		if lookErr != nil {
+			return nil, fmt.Errorf("sudo 不可用: %w", lookErr)
+		}
+		cmd.Path = sudoPath
 	}
 
 	// 标准输入

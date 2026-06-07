@@ -10,6 +10,8 @@ import (
 	"sync"
 
 	"nexus-agent/internal/llm"
+
+	pkgerrors "nexus-agent/internal/errors"
 )
 
 // ───────────────────────────── 记忆管理器 ─────────────────────────────
@@ -19,8 +21,8 @@ import (
 // 失败在一个提供者中不会阻塞其他提供者。
 type Manager struct {
 	mu            sync.RWMutex
-	builtin       Provider          // 内置提供者 (总是存在)
-	external      Provider          // 外部提供者 (可选)
+	builtin       Provider            // 内置提供者 (总是存在)
+	external      Provider            // 外部提供者 (可选)
 	toolProviders map[string]Provider // 工具名 -> 提供者映射
 }
 
@@ -117,7 +119,7 @@ func (m *Manager) SyncAll(ctx context.Context, userContent, assistantContent str
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("部分提供者同步失败: %v", errs)
+		return pkgerrors.New(pkgerrors.MemoryProvider, fmt.Sprintf("部分提供者同步失败: %v", errs))
 	}
 	return nil
 }
@@ -192,7 +194,7 @@ func (m *Manager) InitializeAll(ctx context.Context, sessionID string) error {
 				"provider", p.Name(),
 				"error", err,
 			)
-			return fmt.Errorf("提供者 '%s' 初始化失败: %w", p.Name(), err)
+			return pkgerrors.Wrap(pkgerrors.MemoryProvider, fmt.Sprintf("提供者 '%s' 初始化失败", p.Name()), err)
 		}
 	}
 	return nil

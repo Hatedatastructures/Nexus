@@ -17,7 +17,7 @@ import (
 // ImportCommand 实现 nexus import 命令。
 type ImportCommand struct{}
 
-func (c *ImportCommand) Name() string    { return "import" }
+func (c *ImportCommand) Name() string     { return "import" }
 func (c *ImportCommand) Synopsis() string { return "导入资源 (skills)" }
 
 func (c *ImportCommand) Run(args []string) {
@@ -189,7 +189,7 @@ func downloadSkillFileFromImport(rawURL, targetDir string) error {
 	if err != nil {
 		return fmt.Errorf("下载失败: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP 错误: %s", resp.Status)
@@ -206,8 +206,4 @@ func downloadSkillFileFromImport(rawURL, targetDir string) error {
 	}
 
 	return nil
-}
-
-func init() {
-	Register(&ImportCommand{})
 }

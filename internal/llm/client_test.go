@@ -280,7 +280,7 @@ func TestRetryWithBackoff_MaxRetriesExhausted(t *testing.T) {
 func TestDoWithRetry_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 	defer server.Close()
 
@@ -291,7 +291,7 @@ func TestDoWithRetry_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		t.Errorf("StatusCode = %d, want 200", resp.StatusCode)
 	}
@@ -306,7 +306,7 @@ func TestDoWithRetry_RetryOnServerError(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`ok`))
+		_, _ = w.Write([]byte(`ok`))
 	}))
 	defer server.Close()
 
@@ -317,7 +317,7 @@ func TestDoWithRetry_RetryOnServerError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if calls != 3 {
 		t.Errorf("calls = %d, want 3", calls)
 	}
@@ -340,7 +340,7 @@ func TestDoWithRetry_WithBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 }
 
 func TestDoWithRetry_NonRetryableFails(t *testing.T) {

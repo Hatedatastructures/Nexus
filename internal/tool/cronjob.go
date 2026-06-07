@@ -40,12 +40,14 @@ func getCronJobManager() CronJobManager {
 // CronJobTool 定时任务管理工具。
 type CronJobTool struct{}
 
-func (t *CronJobTool) Name() string        { return "cronjob" }
-func (t *CronJobTool) Description() string  { return "管理定时任务。支持创建、列出、暂停、恢复、删除定时任务。" }
-func (t *CronJobTool) Toolset() string      { return "cron" }
-func (t *CronJobTool) IsAvailable() bool { return getCronJobManager() != nil }
-func (t *CronJobTool) Emoji() string        { return "⏰" }
-func (t *CronJobTool) MaxResultChars() int  { return 10000 }
+func (t *CronJobTool) Name() string { return "cronjob" }
+func (t *CronJobTool) Description() string {
+	return "管理定时任务。支持创建、列出、暂停、恢复、删除定时任务。"
+}
+func (t *CronJobTool) Toolset() string     { return "cron" }
+func (t *CronJobTool) IsAvailable() bool   { return getCronJobManager() != nil }
+func (t *CronJobTool) Emoji() string       { return "⏰" }
+func (t *CronJobTool) MaxResultChars() int { return 10000 }
 
 func (t *CronJobTool) Schema() *ToolSchema {
 	return &ToolSchema{
@@ -206,6 +208,3 @@ func (t *CronJobTool) deleteJob(ctx context.Context, jobID string) (string, erro
 	}), nil
 }
 
-func init() {
-	GetRegistry().Register(&CronJobTool{})
-}

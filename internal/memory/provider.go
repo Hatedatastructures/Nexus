@@ -81,7 +81,7 @@ type Provider interface {
 // 自定义提供者可以嵌入此结构体，只覆写需要的方法。
 type BaseProvider struct{}
 
-func (BaseProvider) QueuePrefetch(ctx context.Context, query string)            {}
+func (BaseProvider) QueuePrefetch(ctx context.Context, query string) {}
 func (BaseProvider) OnTurnStart(ctx context.Context, turnNum int, message string) error {
 	return nil
 }

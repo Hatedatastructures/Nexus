@@ -10,7 +10,7 @@ import (
 // SetupCommand 实现 nexus setup 命令。
 type SetupCommand struct{}
 
-func (c *SetupCommand) Name() string    { return "setup" }
+func (c *SetupCommand) Name() string     { return "setup" }
 func (c *SetupCommand) Synopsis() string { return "交互式设置向导" }
 
 func (c *SetupCommand) Run(args []string) {
@@ -179,8 +179,4 @@ func saveConfig(path string, content string) error {
 		return err
 	}
 	return os.Rename(tmpPath, path)
-}
-
-func init() {
-	Register(&SetupCommand{})
 }

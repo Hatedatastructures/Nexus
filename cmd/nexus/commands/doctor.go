@@ -15,7 +15,7 @@ import (
 // DoctorCommand 实现 nexus doctor 命令。
 type DoctorCommand struct{}
 
-func (c *DoctorCommand) Name() string    { return "doctor" }
+func (c *DoctorCommand) Name() string     { return "doctor" }
 func (c *DoctorCommand) Synopsis() string { return "系统诊断检查" }
 
 func (c *DoctorCommand) Run(args []string) {
@@ -159,7 +159,7 @@ func (c *DoctorCommand) checkNetwork() bool {
 		fmt.Println(DimStyle.Render("无法连接 (可能是网络问题或代理)"))
 		return true // 非致命
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	fmt.Println(GreenBold.Render("正常"))
 	return true
@@ -196,12 +196,8 @@ func (c *DoctorCommand) checkDisk() bool {
 		fmt.Println(ErrorStyle.Render("无法写入 ~/.nexus/"))
 		return false
 	}
-	os.Remove(testFile)
+	_ = os.Remove(testFile)
 
 	fmt.Println(GreenBold.Render("正常"))
 	return true
-}
-
-func init() {
-	Register(&DoctorCommand{})
 }

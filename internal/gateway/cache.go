@@ -31,11 +31,11 @@ type cacheEntry struct {
 type AgentCache struct {
 	mu      sync.Mutex
 	entries map[string]*cacheEntry // key → entry
-	maxSize int                     // 最大缓存条目数 (默认 128)
-	idleTTL time.Duration           // 空闲超时 (默认 1 小时)
-	lruList *list.List              // LRU 链表 (最近使用在前)
-	wg     sync.WaitGroup           // track background goroutines
-	closed bool                     // prevent use after Close
+	maxSize int                    // 最大缓存条目数 (默认 128)
+	idleTTL time.Duration          // 空闲超时 (默认 1 小时)
+	lruList *list.List             // LRU 链表 (最近使用在前)
+	wg      sync.WaitGroup         // track background goroutines
+	closed  bool                   // prevent use after Close
 }
 
 // NewAgentCache 创建代理缓存。
@@ -258,19 +258,19 @@ func (c *AgentCache) evictLRU() bool {
 			"cache_size", len(c.entries),
 		)
 
-			// 异步清理被驱逐的代理
-			c.wg.Add(1)
-			go func(e *cacheEntry) {
-				defer c.wg.Done()
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Warn("agent shutdown panicked", "err", r)
-					}
-				}()
-				if e.agent != nil {
-					e.agent.Shutdown()
+		// 异步清理被驱逐的代理
+		c.wg.Add(1)
+		go func(e *cacheEntry) {
+			defer c.wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Warn("agent shutdown panicked", "err", r)
 				}
-			}(entry)
+			}()
+			if e.agent != nil {
+				e.agent.Shutdown()
+			}
+		}(entry)
 
 		return true
 	}

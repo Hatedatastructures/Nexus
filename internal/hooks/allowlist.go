@@ -15,10 +15,10 @@ const allowlistFilename = "shell-hooks-allowlist.json"
 // Allowlist 管理 hook 命令的允许列表。
 // 线程安全，支持持久化到磁盘。
 type Allowlist struct {
-	mu       sync.RWMutex
-	entries  map[string]bool
-	dir      string // 持久化目录 (空 = 不持久化)
-	acceptAll bool  // 自动接受所有 hook
+	mu        sync.RWMutex
+	entries   map[string]bool
+	dir       string // 持久化目录 (空 = 不持久化)
+	acceptAll bool   // 自动接受所有 hook
 }
 
 // NewAllowlist 创建 Allowlist。

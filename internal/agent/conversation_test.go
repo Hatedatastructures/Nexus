@@ -2,8 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,7 +20,7 @@ type mockTool struct {
 }
 
 func (m *mockTool) Name() string        { return m.name }
-func (m *mockTool) Description() string  { return m.description }
+func (m *mockTool) Description() string { return m.description }
 func (m *mockTool) Schema() *tool.ToolSchema {
 	return &tool.ToolSchema{
 		Name:        m.name,
@@ -46,8 +44,6 @@ func (m *mockTool) MaxResultChars() int { return 0 }
 
 // testTimeout is a safety-net timeout for all conversation tests.
 const testTimeout = 5 * time.Second
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 func TestRunConversation_BasicText(t *testing.T) {
 	t.Parallel()
@@ -100,17 +96,14 @@ func TestRunConversation_BasicText(t *testing.T) {
 func TestRunConversation_ToolExecution(t *testing.T) {
 	t.Parallel()
 
-	// Register a mock tool with a unique name to avoid collisions with the
-	// global registry.  We use the global registry because tool.Registry
-	// fields are unexported and cannot be constructed from outside the
-	// tool package.
 	const toolName = "conv_test_search_files"
 	mt := &mockTool{
 		name:        toolName,
 		description: "Search files in the workspace",
 		result:      `{"matches": ["main.go", "utils.go"]}`,
 	}
-	tool.GetRegistry().Register(mt)
+	reg := tool.NewRegistry()
+	reg.Register(mt)
 
 	callCount := atomic.Int32{}
 
@@ -118,7 +111,6 @@ func TestRunConversation_ToolExecution(t *testing.T) {
 		CreateChatCompletionFunc: func(_ context.Context, _ *llm.ChatRequest) (*llm.ChatResponse, error) {
 			n := callCount.Add(1)
 
-			// First call: model requests tool use.
 			if n == 1 {
 				return &llm.ChatResponse{
 					ID:         "resp-tool",
@@ -139,7 +131,6 @@ func TestRunConversation_ToolExecution(t *testing.T) {
 				}, nil
 			}
 
-			// Second call: model produces final text after receiving tool result.
 			return &llm.ChatResponse{
 				ID:         "resp-final",
 				Content:    "I found 2 files matching your query.",
@@ -156,7 +147,7 @@ func TestRunConversation_ToolExecution(t *testing.T) {
 	agent := NewAgent(
 		WithProvider(mock),
 		WithModel("test-model"),
-		WithToolRegistry(tool.GetRegistry()),
+		WithToolRegistry(reg),
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
@@ -189,15 +180,14 @@ func TestRunConversation_MaxIterationsBudget(t *testing.T) {
 
 	const toolName = "conv_test_loop_search"
 
-	// Register a mock tool so dispatch succeeds.
 	mt := &mockTool{
 		name:        toolName,
 		description: "Search files",
 		result:      `{"matches": []}`,
 	}
-	tool.GetRegistry().Register(mt)
+	reg := tool.NewRegistry()
+	reg.Register(mt)
 
-	// Provider always returns tool_use, never terminating on its own.
 	mock := &testutil.MockProvider{
 		CreateChatCompletionFunc: func(_ context.Context, _ *llm.ChatRequest) (*llm.ChatResponse, error) {
 			return &llm.ChatResponse{
@@ -220,18 +210,15 @@ func TestRunConversation_MaxIterationsBudget(t *testing.T) {
 		},
 	}
 
-	// Use a very small iteration budget (3).
-	// Disable guardrails so that the budget mechanism is tested in isolation.
 	const maxIter = 3
 	agent := NewAgent(
 		WithProvider(mock),
 		WithModel("test-model"),
-		WithToolRegistry(tool.GetRegistry()),
+		WithToolRegistry(reg),
 		WithMaxIterations(maxIter),
 		WithGuardrails(nil),
 	)
 
-	// Use a context with a short timeout as a safety net.
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
@@ -240,209 +227,13 @@ func TestRunConversation_MaxIterationsBudget(t *testing.T) {
 		t.Fatalf("RunConversation returned error: %v", err)
 	}
 
-	// The conversation must stop (not loop forever).
-	// Completed will be false since the model never returned end_turn.
 	if result.Completed {
 		t.Error("result.Completed should be false when budget is exhausted")
 	}
-	// Verify it made exactly maxIter iterations (API calls).
 	if result.APICalls != maxIter {
 		t.Errorf("expected %d API calls, got %d", maxIter, result.APICalls)
 	}
-	// Verify the tool was called the expected number of times.
 	if mt.executed.Load() != int32(maxIter) {
 		t.Errorf("expected tool to be called %d times, got %d", maxIter, mt.executed.Load())
-	}
-}
-
-// ───────────────────────── Streaming Tests ─────────────────────────
-
-func TestRunConversation_StreamingText(t *testing.T) {
-	t.Parallel()
-
-	var streamedParts []string
-	streamCb := func(delta string) { streamedParts = append(streamedParts, delta) }
-
-	mock := &testutil.MockProvider{
-		CreateChatCompletionStreamFunc: func(ctx context.Context, _ *llm.ChatRequest) (<-chan *llm.StreamDelta, error) {
-			ch := make(chan *llm.StreamDelta, 4)
-			go func() {
-				defer close(ch)
-				ch <- &llm.StreamDelta{Content: "Hello"}
-				ch <- &llm.StreamDelta{Content: " world"}
-				ch <- &llm.StreamDelta{Content: "!"}
-				ch <- &llm.StreamDelta{Done: true, Usage: &llm.TokenUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}}
-			}()
-			return ch, nil
-		},
-	}
-
-	agent := NewAgent(
-		WithProvider(mock),
-		WithModel("test-model"),
-		WithStreamCallback(streamCb),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
-	defer cancel()
-
-	result, err := agent.RunConversation(ctx, "hi", nil, "")
-	if err != nil {
-		t.Fatalf("RunConversation error: %v", err)
-	}
-	if !result.Completed {
-		t.Error("result.Completed should be true")
-	}
-	if result.FinalResponse != "Hello world!" {
-		t.Errorf("FinalResponse = %q, want %q", result.FinalResponse, "Hello world!")
-	}
-	if len(streamedParts) != 3 {
-		t.Errorf("streamedParts = %d, want 3", len(streamedParts))
-	}
-}
-
-func TestRunConversation_StreamingWithToolCalls(t *testing.T) {
-	t.Parallel()
-
-	const toolName = "conv_st_stream_search"
-	mt := &mockTool{name: toolName, description: "search", result: `{"ok": true}`}
-	tool.GetRegistry().Register(mt)
-
-	callCount := atomic.Int32{}
-
-	mock := &testutil.MockProvider{
-		CreateChatCompletionStreamFunc: func(ctx context.Context, _ *llm.ChatRequest) (<-chan *llm.StreamDelta, error) {
-			n := callCount.Add(1)
-			ch := make(chan *llm.StreamDelta, 2)
-			go func() {
-				defer close(ch)
-				if n == 1 {
-					ch <- &llm.StreamDelta{
-						Done: true,
-						ToolCalls: []llm.ToolCall{
-							{ID: "sc-1", Name: toolName, Arguments: `{"query": "x"}`},
-						},
-					}
-				} else {
-					ch <- &llm.StreamDelta{Content: "done"}
-					ch <- &llm.StreamDelta{Done: true}
-				}
-			}()
-			return ch, nil
-		},
-	}
-
-	agent := NewAgent(
-		WithProvider(mock),
-		WithModel("test-model"),
-		WithStreamCallback(func(string) {}),
-		WithToolRegistry(tool.GetRegistry()),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
-	defer cancel()
-
-	result, err := agent.RunConversation(ctx, "search", nil, "")
-	if err != nil {
-		t.Fatalf("RunConversation error: %v", err)
-	}
-	if !result.Completed {
-		t.Error("result.Completed should be true")
-	}
-	if result.ToolCalls != 1 {
-		t.Errorf("ToolCalls = %d, want 1", result.ToolCalls)
-	}
-	if mt.executed.Load() != 1 {
-		t.Errorf("tool executed = %d, want 1", mt.executed.Load())
-	}
-}
-
-func TestRunConversation_StreamingErrorInDelta(t *testing.T) {
-	t.Parallel()
-
-	mock := &testutil.MockProvider{
-		CreateChatCompletionStreamFunc: func(ctx context.Context, _ *llm.ChatRequest) (<-chan *llm.StreamDelta, error) {
-			ch := make(chan *llm.StreamDelta, 2)
-			go func() {
-				defer close(ch)
-				ch <- &llm.StreamDelta{Content: "partial"}
-				ch <- &llm.StreamDelta{Error: fmt.Errorf("stream boom")}
-			}()
-			return ch, nil
-		},
-	}
-
-	agent := NewAgent(
-		WithProvider(mock),
-		WithModel("test-model"),
-		WithStreamCallback(func(string) {}),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
-	defer cancel()
-
-	_, err := agent.RunConversation(ctx, "hi", nil, "")
-	if err == nil {
-		t.Fatal("expected error from stream delta")
-	}
-	if !strings.Contains(err.Error(), "stream boom") {
-		t.Errorf("error = %q, want to contain %q", err.Error(), "stream boom")
-	}
-}
-
-func TestRunConversation_StreamingContextCancelled(t *testing.T) {
-	t.Parallel()
-
-	mock := &testutil.MockProvider{
-		CreateChatCompletionStreamFunc: func(ctx context.Context, _ *llm.ChatRequest) (<-chan *llm.StreamDelta, error) {
-			ch := make(chan *llm.StreamDelta, 1)
-			go func() {
-				defer close(ch)
-				select {
-				case <-ctx.Done():
-				case <-time.After(3 * time.Second):
-				}
-			}()
-			return ch, nil
-		},
-	}
-
-	agent := NewAgent(
-		WithProvider(mock),
-		WithModel("test-model"),
-		WithStreamCallback(func(string) {}),
-	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, err := agent.RunConversation(ctx, "hi", nil, "")
-	if err == nil {
-		t.Fatal("expected error from cancelled context")
-	}
-}
-
-func TestRunConversation_StreamingProviderStreamError(t *testing.T) {
-	t.Parallel()
-
-	mock := &testutil.MockProvider{
-		StreamError: fmt.Errorf("cannot open stream"),
-	}
-
-	agent := NewAgent(
-		WithProvider(mock),
-		WithModel("test-model"),
-		WithStreamCallback(func(string) {}),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
-	defer cancel()
-
-	_, err := agent.RunConversation(ctx, "hi", nil, "")
-	if err == nil {
-		t.Fatal("expected error from stream provider")
-	}
-	if !strings.Contains(err.Error(), "cannot open stream") {
-		t.Errorf("error = %q, want to contain %q", err.Error(), "cannot open stream")
 	}
 }

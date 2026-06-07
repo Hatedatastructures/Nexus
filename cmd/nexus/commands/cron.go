@@ -13,8 +13,10 @@ import (
 // CronCommand 实现 nexus cron 命令。
 type CronCommand struct{}
 
-func (c *CronCommand) Name() string    { return "cron" }
-func (c *CronCommand) Synopsis() string { return "定时任务管理 (list/create/edit/pause/resume/run/remove/status)" }
+func (c *CronCommand) Name() string { return "cron" }
+func (c *CronCommand) Synopsis() string {
+	return "定时任务管理 (list/create/edit/pause/resume/run/remove/status)"
+}
 
 func (c *CronCommand) Run(args []string) {
 	if len(args) == 0 {
@@ -212,8 +214,4 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
-}
-
-func init() {
-	Register(&CronCommand{})
 }

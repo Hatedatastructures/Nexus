@@ -3,7 +3,6 @@
 package platforms
 
 import (
-	"sync"
 	"bytes"
 	"context"
 	"crypto/hmac"
@@ -18,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,18 +33,18 @@ const (
 
 // FeishuCommentAdapter 飞书文档评论适配器。
 type FeishuCommentAdapter struct {
-	mu              sync.RWMutex       // 保护 msgCh 写入/关闭
-	tokenMu         sync.Mutex         // token 访问锁
-	closeOnce       sync.Once          // 确保 msgCh 只关闭一次
-	verificationToken string           // 事件订阅验证令牌
-	appID          string
-	appSecret      string
-	messageHandler func(*MessageEvent)
-	httpClient     *http.Client
-	msgCh          chan *MessageEvent
-	running        bool
-	accessToken    string
-	tokenExpiresAt time.Time
+	mu                sync.RWMutex // 保护 msgCh 写入/关闭
+	tokenMu           sync.Mutex   // token 访问锁
+	closeOnce         sync.Once    // 确保 msgCh 只关闭一次
+	verificationToken string       // 事件订阅验证令牌
+	appID             string
+	appSecret         string
+	messageHandler    func(*MessageEvent)
+	httpClient        *http.Client
+	msgCh             chan *MessageEvent
+	running           bool
+	accessToken       string
+	tokenExpiresAt    time.Time
 }
 
 // FeishuCommentEvent 飞书评论事件结构。
@@ -57,13 +57,13 @@ type FeishuCommentEvent struct {
 		AppID     string `json:"app_id"`
 	} `json:"header"`
 	Event struct {
-		CommentID   string `json:"comment_id"`
-		FileToken   string `json:"file_token"`
-		FileType    string `json:"file_type"`
-		Content     string `json:"content"`
-		UserID      string `json:"user_id"`
-		UserName    string `json:"user_name"`
-		ReplyMsgID  string `json:"reply_msg_id"`
+		CommentID  string `json:"comment_id"`
+		FileToken  string `json:"file_token"`
+		FileType   string `json:"file_type"`
+		Content    string `json:"content"`
+		UserID     string `json:"user_id"`
+		UserName   string `json:"user_name"`
+		ReplyMsgID string `json:"reply_msg_id"`
 	} `json:"event"`
 }
 
@@ -74,18 +74,18 @@ func NewFeishuCommentAdapter(messageHandler func(*MessageEvent)) *FeishuCommentA
 
 	return &FeishuCommentAdapter{
 		verificationToken: os.Getenv("FEISHU_VERIFICATION_TOKEN"),
-		appID:          appID,
-		appSecret:      appSecret,
-		messageHandler: messageHandler,
-		httpClient:     &http.Client{Timeout: feishuCommentRequestTimeout},
+		appID:             appID,
+		appSecret:         appSecret,
+		messageHandler:    messageHandler,
+		httpClient:        &http.Client{Timeout: feishuCommentRequestTimeout},
 	}
 }
 
 // ───────────────────────────── PlatformAdapter 接口实现 ─────────────────────────────
 
-func (a *FeishuCommentAdapter) Name() string          { return "Feishu Comment" }
-func (a *FeishuCommentAdapter) PlatformType() Platform { return PlatformFeishu }
-func (a *FeishuCommentAdapter) MaxMessageLength() int  { return feishuCommentMaxMessageLen }
+func (a *FeishuCommentAdapter) Name() string            { return "Feishu Comment" }
+func (a *FeishuCommentAdapter) PlatformType() Platform  { return PlatformFeishu }
+func (a *FeishuCommentAdapter) MaxMessageLength() int   { return feishuCommentMaxMessageLen }
 func (a *FeishuCommentAdapter) SupportsStreaming() bool { return false }
 
 func (a *FeishuCommentAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error) {
@@ -264,7 +264,7 @@ func (a *FeishuCommentAdapter) refreshAccessToken(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result map[string]any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&result); err != nil {
@@ -352,7 +352,7 @@ func (a *FeishuCommentAdapter) replyComment(ctx context.Context, fileToken, comm
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result map[string]any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&result); err != nil {
@@ -378,10 +378,3 @@ func verifyFeishuSignature(token, timestamp, body, signature string) bool {
 	return subtle.ConstantTimeCompare([]byte(signature), []byte(expected)) == 1
 }
 
-func init() {
-	GetRegistry().Register(&AdapterEntry{
-		Platform: PlatformFeishu,
-		Name:     "Feishu Comment",
-		Factory:  func() PlatformAdapter { return NewFeishuCommentAdapter(nil) },
-	})
-}

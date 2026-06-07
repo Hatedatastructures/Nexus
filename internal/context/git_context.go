@@ -98,15 +98,15 @@ func discoverGitContextUncached(cwd string) *GitContext {
 		}
 	}
 
-		// 6. Get staged diff
-		if diffStaged, err := runGitCmd(cwd, "diff", "--cached"); err == nil {
-			gc.DiffStaged = truncateDiff(diffStaged, 8000)
-		}
+	// 6. Get staged diff
+	if diffStaged, err := runGitCmd(cwd, "diff", "--cached"); err == nil {
+		gc.DiffStaged = truncateDiff(diffStaged, 8000)
+	}
 
-		// 7. Get unstaged diff
-		if diffUnstaged, err := runGitCmd(cwd, "diff"); err == nil {
-			gc.DiffUnstaged = truncateDiff(diffUnstaged, 8000)
-		}
+	// 7. Get unstaged diff
+	if diffUnstaged, err := runGitCmd(cwd, "diff"); err == nil {
+		gc.DiffUnstaged = truncateDiff(diffUnstaged, 8000)
+	}
 
 	return gc
 }

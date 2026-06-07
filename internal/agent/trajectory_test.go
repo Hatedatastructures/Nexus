@@ -40,7 +40,7 @@ func TestSaveTrajectory(t *testing.T) {
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(origDir)
+	defer func() { _ = os.Chdir(origDir) }()
 
 	msgs := []llm.Message{
 		{Role: llm.RoleSystem, Content: "You are helpful."},
@@ -88,7 +88,7 @@ func TestSaveTrajectory_WithToolCalls(t *testing.T) {
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(origDir)
+	defer func() { _ = os.Chdir(origDir) }()
 
 	msgs := []llm.Message{
 		{Role: llm.RoleUser, Content: "read the file"},
@@ -121,7 +121,7 @@ func TestSaveTrajectoryBatch(t *testing.T) {
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(origDir)
+	defer func() { _ = os.Chdir(origDir) }()
 
 	entries := []TrajectoryEntry{
 		{

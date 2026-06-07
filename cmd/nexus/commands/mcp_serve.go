@@ -14,14 +14,11 @@ import (
 
 // ───────────────────────────── MCP 消息服务 ─────────────────────────────
 
-func init() {
-	Register(&MCPServeCommand{})
-}
 
 // MCPServeCommand 实现 nexus mcp-serve 子命令。
 type MCPServeCommand struct{}
 
-func (c *MCPServeCommand) Name() string    { return "mcp-serve" }
+func (c *MCPServeCommand) Name() string     { return "mcp-serve" }
 func (c *MCPServeCommand) Synopsis() string { return "启动 MCP 消息服务 (stdio)" }
 
 func (c *MCPServeCommand) Run(args []string) {
@@ -40,11 +37,11 @@ func (c *MCPServeCommand) Run(args []string) {
 		PrintError("初始化状态存储失败: %v", err)
 		return
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// 初始化工具注册表并发现内置工具
-	registry := tool.GetRegistry()
-	tool.DiscoverBuiltin()
+	registry := tool.NewRegistry()
+	tool.RegisterAllTools(registry)
 
 	// 将 tool.Registry 适配为 MCP ToolRegistry 接口
 	mcpRegistry := mcp.NewToolRegistryAdapter(registry)

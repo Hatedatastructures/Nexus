@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	pkgerrors "nexus-agent/internal/errors"
 	"os"
 	"strings"
 	"time"
@@ -19,7 +21,7 @@ import (
 // ───────────────────────────── 常量 ─────────────────────────────
 
 const (
-	sweMaxIterations     = 30   // 最大迭代次数
+	sweMaxIterations     = 30                            // 最大迭代次数
 	sweFinalOutputMarker = "MINI_SWE_AGENT_FINAL_OUTPUT" // 完成标记
 	sweDefaultTimeout    = 300 * time.Second
 )
@@ -54,11 +56,11 @@ func (r *SWERunner) RunTask(ctx context.Context, task SWETask) (Trajectory, erro
 
 	messages := []llm.Message{
 		{
-			Role: llm.RoleSystem,
+			Role:    llm.RoleSystem,
 			Content: sweSystemPrompt,
 		},
 		{
-			Role: llm.RoleUser,
+			Role:    llm.RoleUser,
 			Content: task.Problem,
 		},
 	}
@@ -116,7 +118,7 @@ func (r *SWERunner) RunTask(ctx context.Context, task SWETask) (Trajectory, erro
 		}
 	}
 
-	return r.buildTrajectory(task, messages, allToolCalls, false, time.Since(startTime)), fmt.Errorf("达到最大迭代次数 %d", sweMaxIterations)
+	return r.buildTrajectory(task, messages, allToolCalls, false, time.Since(startTime)), pkgerrors.New(pkgerrors.CronJob, fmt.Sprintf("达到最大迭代次数 %d", sweMaxIterations))
 }
 
 // RunBatch 批量执行 SWE 任务。
@@ -134,8 +136,8 @@ func (r *SWERunner) RunBatch(ctx context.Context, tasks []SWETask, outputDir str
 	var prompts []Prompt
 	for _, task := range tasks {
 		prompts = append(prompts, Prompt{
-			Text:      task.Problem,
-			Metadata:  map[string]string{"id": task.ID},
+			Text:     task.Problem,
+			Metadata: map[string]string{"id": task.ID},
 		})
 	}
 
@@ -254,15 +256,15 @@ func WriteTrajectoriesJSONL(path string, trajectories []Trajectory) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	w := bufio.NewWriter(f)
-	defer w.Flush()
+	defer func() { _ = w.Flush() }()
 
 	for _, t := range trajectories {
 		data, _ := json.Marshal(t)
-		w.Write(data)
-		w.WriteByte('\n')
+		_, _ = w.Write(data)
+		_ = w.WriteByte('\n')
 	}
 	return nil
 }
@@ -273,7 +275,7 @@ func ReadTrajectoriesJSONL(path string) ([]Trajectory, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var results []Trajectory
 	scanner := bufio.NewScanner(f)
@@ -284,7 +286,7 @@ func ReadTrajectoriesJSONL(path string) ([]Trajectory, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return results, fmt.Errorf("读取 JSONL 文件出错: %w", err)
+		return results, pkgerrors.Wrap(pkgerrors.FileIO, "读取 JSONL 文件出错", err)
 	}
 	return results, nil
 }

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+
 	"hash/crc32"
 	"io"
 	"log/slog"
+	pkgerrors "nexus-agent/internal/errors"
 )
 
 // ParseBinaryEventStream 读取 AWS 二进制 eventstream 帧并转换为 SSEEvent。
@@ -78,27 +80,27 @@ func readEventStreamFrame(r io.Reader) (*eventStreamFrame, error) {
 
 	preludeCRC := make([]byte, 4)
 	if _, err := io.ReadFull(r, preludeCRC); err != nil {
-		return nil, fmt.Errorf("eventstream: prelude CRC: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "eventstream: prelude CRC", err)
 	}
 
 	if crc32.ChecksumIEEE(prelude) != binary.BigEndian.Uint32(preludeCRC) {
-		return nil, fmt.Errorf("eventstream: prelude CRC mismatch")
+		return nil, pkgerrors.New(pkgerrors.ProviderAPI, "eventstream: prelude CRC mismatch")
 	}
 
 	if totalLen < 16 || totalLen > 16<<20 {
-		return nil, fmt.Errorf("eventstream: invalid total length %d", totalLen)
+		return nil, pkgerrors.New(pkgerrors.ProviderAPI, fmt.Sprintf("eventstream: invalid total length %d", totalLen))
 	}
 
 	payloadLen := int(totalLen) - int(hdrLen) - 16
 	if payloadLen < 0 || payloadLen > 16<<20 {
-		return nil, fmt.Errorf("eventstream: invalid payload length %d", payloadLen)
+		return nil, pkgerrors.New(pkgerrors.ProviderAPI, fmt.Sprintf("eventstream: invalid payload length %d", payloadLen))
 	}
 
 	var hdrData []byte
 	if hdrLen > 0 {
 		hdrData = make([]byte, hdrLen)
 		if _, err := io.ReadFull(r, hdrData); err != nil {
-			return nil, fmt.Errorf("eventstream: headers: %w", err)
+			return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "eventstream: headers", err)
 		}
 	}
 
@@ -106,13 +108,13 @@ func readEventStreamFrame(r io.Reader) (*eventStreamFrame, error) {
 	if payloadLen > 0 {
 		payload = make([]byte, payloadLen)
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return nil, fmt.Errorf("eventstream: payload: %w", err)
+			return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "eventstream: payload", err)
 		}
 	}
 
 	msgCRC := make([]byte, 4)
 	if _, err := io.ReadFull(r, msgCRC); err != nil {
-		return nil, fmt.Errorf("eventstream: message CRC: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "eventstream: message CRC", err)
 	}
 
 	h := crc32.NewIEEE()
@@ -125,12 +127,12 @@ func readEventStreamFrame(r io.Reader) (*eventStreamFrame, error) {
 		h.Write(payload)
 	}
 	if h.Sum32() != binary.BigEndian.Uint32(msgCRC) {
-		return nil, fmt.Errorf("eventstream: message CRC mismatch")
+		return nil, pkgerrors.New(pkgerrors.ProviderAPI, "eventstream: message CRC mismatch")
 	}
 
 	headers, err := parseEventStreamHeaders(hdrData)
 	if err != nil {
-		return nil, fmt.Errorf("eventstream: header parse: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "eventstream: header parse", err)
 	}
 
 	return &eventStreamFrame{Headers: headers, Payload: payload}, nil
@@ -145,13 +147,13 @@ func parseEventStreamHeaders(data []byte) (map[string]string, error) {
 		nameLen := int(data[off])
 		off++
 		if off+nameLen > len(data) {
-			return headers, fmt.Errorf("header name overflow at offset %d", off)
+			return headers, pkgerrors.New(pkgerrors.ProviderAPI, fmt.Sprintf("header name overflow at offset %d", off))
 		}
 		name := string(data[off : off+nameLen])
 		off += nameLen
 
 		if off >= len(data) {
-			return headers, fmt.Errorf("header type overflow")
+			return headers, pkgerrors.New(pkgerrors.ProviderAPI, "header type overflow")
 		}
 		vtype := data[off]
 		off++
@@ -160,25 +162,25 @@ func parseEventStreamHeaders(data []byte) (map[string]string, error) {
 		switch vtype {
 		case 7: // String
 			if off+2 > len(data) {
-				return headers, fmt.Errorf("string header length overflow")
+				return headers, pkgerrors.New(pkgerrors.ProviderAPI, "string header length overflow")
 			}
 			slen := int(binary.BigEndian.Uint16(data[off : off+2]))
 			off += 2
 			if off+slen > len(data) {
-				return headers, fmt.Errorf("string header value overflow")
+				return headers, pkgerrors.New(pkgerrors.ProviderAPI, "string header value overflow")
 			}
 			val = string(data[off : off+slen])
 			off += slen
 
 		case 8: // UUID
 			if off+16 > len(data) {
-				return headers, fmt.Errorf("UUID header overflow")
+				return headers, pkgerrors.New(pkgerrors.ProviderAPI, "UUID header overflow")
 			}
 			val = fmt.Sprintf("%x", data[off:off+16])
 			off += 16
 
 		default:
-			return headers, fmt.Errorf("unsupported header type %d for %s", vtype, name)
+			return headers, pkgerrors.New(pkgerrors.ProviderAPI, fmt.Sprintf("unsupported header type %d for %s", vtype, name))
 		}
 
 		headers[name] = val

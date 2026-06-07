@@ -5,9 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
+	pkgerrors "nexus-agent/internal/errors"
 	"strings"
 )
 
@@ -38,36 +38,36 @@ func (t *CodexTransport) BuildRequest(ctx context.Context, req *ChatRequest, api
 	}
 
 	type codexMsg struct {
-		Type    string     `json:"type"`
-		Role    string     `json:"role"`
+		Type    string       `json:"type"`
+		Role    string       `json:"role"`
 		Content []codexInput `json:"content,omitempty"`
 	}
 
 	inputs := make([]codexMsg, 0, len(req.Messages))
 	for _, msg := range req.Messages {
 		inputs = append(inputs, codexMsg{
-			Type: "message",
-			Role: string(msg.Role),
+			Type:    "message",
+			Role:    string(msg.Role),
 			Content: []codexInput{{Type: "input_text", Content: msg.Content}},
 		})
 	}
 
 	body := map[string]any{
-		"model":       req.Model,
-		"input":       inputs,
-		"tools":       req.Tools,
+		"model":             req.Model,
+		"input":             inputs,
+		"tools":             req.Tools,
 		"max_output_tokens": req.MaxTokens,
 	}
 
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("序列化 Codex 请求体失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "序列化 Codex 请求体失败", err)
 	}
 
 	url := t.baseURL + "/v1/responses"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return nil, fmt.Errorf("创建 Codex 请求失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "创建 Codex 请求失败", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
@@ -90,7 +90,7 @@ func (t *CodexTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 		Status string      `json:"status"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("解析 Codex 响应失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "解析 Codex 响应失败", err)
 	}
 
 	var content strings.Builder
@@ -105,10 +105,10 @@ func (t *CodexTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 	// 空 output: 返回错误而非静默成功
 	if len(resp.Output) == 0 {
 		if resp.Status == "failed" {
-			return nil, fmt.Errorf("Codex 请求失败 (status=failed)")
+			return nil, pkgerrors.New(pkgerrors.ProviderAPI, "Codex 请求失败 (status=failed)")
 		}
 		if resp.Status == "cancelled" {
-			return nil, fmt.Errorf("Codex 请求被取消 (status=cancelled)")
+			return nil, pkgerrors.New(pkgerrors.ProviderAPI, "Codex 请求被取消 (status=cancelled)")
 		}
 		return &ChatResponse{
 			Content:    "",
@@ -141,9 +141,9 @@ func (t *CodexTransport) ParseStream(ctx context.Context, body io.ReadCloser) <-
 	case <-ctx.Done():
 		// Context cancelled, close body and return empty channel
 	default:
-		ch <- &StreamDelta{Done: true, Error: fmt.Errorf("Codex Responses API does not support streaming, use non-streaming call")}
+		ch <- &StreamDelta{Done: true, Error: pkgerrors.New(pkgerrors.ProviderConfig, "Codex Responses API does not support streaming, use non-streaming call")}
 	}
 	close(ch)
-	body.Close()
+	_ = body.Close()
 	return ch
 }

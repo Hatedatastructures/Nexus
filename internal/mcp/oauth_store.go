@@ -59,13 +59,13 @@ func (s *TokenStore) SaveToken(token *OAuthToken) error {
 	// 写入临时文件（权限 0600）
 	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		// 清理临时文件
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("写入令牌文件失败: %w", err)
 	}
 
 	// 原子 rename
 	if err := os.Rename(tmpPath, s.tokensPath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("重命名令牌文件失败: %w", err)
 	}
 
@@ -160,8 +160,8 @@ func ServerTokenPath(serverName string) (string, error) {
 // safeFilename 将服务器名称安全化为合法的文件名。
 // 去除所有非字母数字、非下划线、非连字符的字符。
 var (
-	safeFilenameRE  = regexp.MustCompile(`[^\w\-]`)
-	safeTrimRE      = regexp.MustCompile(`^_+|_+$`)
+	safeFilenameRE = regexp.MustCompile(`[^\w\-]`)
+	safeTrimRE     = regexp.MustCompile(`^_+|_+$`)
 )
 
 func safeFilename(name string) string {

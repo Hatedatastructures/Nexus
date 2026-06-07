@@ -12,23 +12,23 @@ import (
 
 // memInvisibleChars 是需要检测的不可见 Unicode 码点。
 var memInvisibleChars = map[rune]bool{
-	'​': true, // Zero-width space
-	'‌': true, // Zero-width non-joiner
-	'‍': true, // Zero-width joiner
-	'⁠': true, // Word joiner
-	'⁢': true, // Invisible times
-	'⁣': true, // Invisible separator
-	'⁤': true, // Invisible plus
-	0xFEFF:   true, // Zero-width no-break space (BOM)
-	'‪': true, // Left-to-right embedding
-	'‫': true, // Right-to-left embedding
-	'‬': true, // Pop directional formatting
-	'‭': true, // Left-to-right override
-	'‮': true, // Right-to-left override
-	'⁦': true, // Left-to-right isolate
-	'⁧': true, // Right-to-right isolate
-	'⁨': true, // First strong isolate
-	'⁩': true, // Pop directional isolate
+	'​':    true, // Zero-width space
+	'‌':    true, // Zero-width non-joiner
+	'‍':    true, // Zero-width joiner
+	'⁠':    true, // Word joiner
+	'⁢':    true, // Invisible times
+	'⁣':    true, // Invisible separator
+	'⁤':    true, // Invisible plus
+	0xFEFF: true, // Zero-width no-break space (BOM)
+	'‪':    true, // Left-to-right embedding
+	'‫':    true, // Right-to-left embedding
+	'‬':    true, // Pop directional formatting
+	'‭':    true, // Left-to-right override
+	'‮':    true, // Right-to-left override
+	'⁦':    true, // Left-to-right isolate
+	'⁧':    true, // Right-to-right isolate
+	'⁨':    true, // First strong isolate
+	'⁩':    true, // Pop directional isolate
 }
 
 // ───────────────────────────── 威胁模式 ─────────────────────────────

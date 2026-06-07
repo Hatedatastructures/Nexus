@@ -80,8 +80,8 @@ func (d *DeliveryManager) TruncateMessage(content string, maxLen int) string {
 	}
 
 	// 尝试在段落边界截断
-	truncated := content
 	paragraphs := strings.Split(content, "\n\n")
+	var truncated string
 	var result strings.Builder
 	currentLen := 0
 

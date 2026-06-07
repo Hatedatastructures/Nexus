@@ -11,8 +11,8 @@ import (
 
 func TestClassifyAndRecoverContextOverflow(t *testing.T) {
 	tests := []struct {
-		name       string
-		errMsg     string
+		name         string
+		errMsg       string
 		wantStrategy string
 	}{
 		{
@@ -53,8 +53,8 @@ func TestClassifyAndRecoverContextOverflow(t *testing.T) {
 
 func TestClassifyAndRecoverRateLimit(t *testing.T) {
 	tests := []struct {
-		name       string
-		errMsg     string
+		name         string
+		errMsg       string
 		wantStrategy string
 	}{
 		{
@@ -95,8 +95,8 @@ func TestClassifyAndRecoverRateLimit(t *testing.T) {
 
 func TestClassifyAndRecoverAuth(t *testing.T) {
 	tests := []struct {
-		name       string
-		errMsg     string
+		name         string
+		errMsg       string
 		wantStrategy string
 	}{
 		{
@@ -137,8 +137,8 @@ func TestClassifyAndRecoverAuth(t *testing.T) {
 
 func TestClassifyAndRecoverUnknown(t *testing.T) {
 	tests := []struct {
-		name       string
-		errMsg     string
+		name         string
+		errMsg       string
 		wantStrategy string
 	}{
 		{

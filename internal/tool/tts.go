@@ -174,12 +174,11 @@ func (t *TTSTool) convertToSpeech(ctx context.Context, model, text, voice, langu
 
 	// 构建请求体
 	reqBody := map[string]any{
-		"model":  model,
-		"input":  text,
-		"voice":  voice,
-		"speed":  speed,
+		"model": model,
+		"input": text,
+		"voice": voice,
+		"speed": speed,
 	}
-
 
 	if language != "" {
 		reqBody["language"] = language
@@ -201,7 +200,7 @@ func (t *TTSTool) convertToSpeech(ctx context.Context, model, text, voice, langu
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -248,8 +247,3 @@ func formatFileSize(bytes int) string {
 	return fmt.Sprintf("%.1f %s", float64(bytes)/float64(div), units[exp])
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&TTSTool{})
-}

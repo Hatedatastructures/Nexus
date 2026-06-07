@@ -79,7 +79,7 @@ func (f *FakeChecker) Check(ctx context.Context, command string) (approval.Resul
 	}
 
 	// 默认批准
-	if f.DefaultResult !=  0 || f.DefaultReason != "" {
+	if f.DefaultResult != 0 || f.DefaultReason != "" {
 		return f.DefaultResult, f.DefaultReason
 	}
 	return approval.Approved, "FakeChecker: 自动批准"

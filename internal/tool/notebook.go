@@ -16,20 +16,20 @@ import (
 
 // notebookFile 表示 .ipynb 文件的顶层 JSON 结构。
 type notebookFile struct {
-	Cells          []notebookCell `json:"cells"`
-	Metadata       map[string]any `json:"metadata"`
-	NBFormat       int            `json:"nbformat"`
-	NBFormatMinor  int            `json:"nbformat_minor"`
+	Cells         []notebookCell `json:"cells"`
+	Metadata      map[string]any `json:"metadata"`
+	NBFormat      int            `json:"nbformat"`
+	NBFormatMinor int            `json:"nbformat_minor"`
 }
 
 // notebookCell 表示 .ipynb 文件中的一个单元格。
 type notebookCell struct {
-	CellType  string         `json:"cell_type"`
-	ID        string         `json:"id,omitempty"`
-	Source    []string       `json:"source"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	Outputs   []any          `json:"outputs,omitempty"`
-	ExecutionOrder *int      `json:"execution_count,omitempty"`
+	CellType       string         `json:"cell_type"`
+	ID             string         `json:"id,omitempty"`
+	Source         []string       `json:"source"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	Outputs        []any          `json:"outputs,omitempty"`
+	ExecutionOrder *int           `json:"execution_count,omitempty"`
 }
 
 // ───────────────────────────── Notebook 编辑工具 ─────────────────────────────
@@ -188,10 +188,10 @@ func (t *NotebookEditTool) Execute(ctx context.Context, args map[string]any) (st
 	}
 
 	result, err := json.Marshal(map[string]any{
-		"output":       fmt.Sprintf("notebook 编辑成功: %s (模式: %s)", notebookPath, editMode),
+		"output":        fmt.Sprintf("notebook 编辑成功: %s (模式: %s)", notebookPath, editMode),
 		"notebook_path": notebookPath,
-		"edit_mode":    editMode,
-		"cell_count":   len(nb.Cells),
+		"edit_mode":     editMode,
+		"cell_count":    len(nb.Cells),
 	})
 	if err != nil {
 		return ToolError(fmt.Sprintf("序列化结果失败: %v", err)), nil
@@ -243,8 +243,3 @@ func generateCellID() string {
 	return fmt.Sprintf("cell-%x", b)
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&NotebookEditTool{})
-}

@@ -3,7 +3,9 @@ package skill
 
 import (
 	"fmt"
+
 	"log/slog"
+	pkgerrors "nexus-agent/internal/errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -53,13 +55,13 @@ func ParseSkillMarkdown(content []byte) (*Skill, error) {
 
 	// 检查是否存在 frontmatter
 	if !strings.HasPrefix(text, "---") {
-		return nil, fmt.Errorf("SKILL.md 缺少 YAML frontmatter (必须以 '---' 开头)")
+		return nil, pkgerrors.New(pkgerrors.SkillIO, "SKILL.md 缺少 YAML frontmatter (必须以 '---' 开头)")
 	}
 
 	// 查找结束分隔符
 	closeIdx := strings.Index(text[3:], "\n---\n")
 	if closeIdx == -1 {
-		return nil, fmt.Errorf("SKILL.md 缺少 YAML frontmatter 结束分隔符 '---'")
+		return nil, pkgerrors.New(pkgerrors.SkillIO, "SKILL.md 缺少 YAML frontmatter 结束分隔符 '---'")
 	}
 
 	yamlContent := text[3 : closeIdx+3]
@@ -68,21 +70,21 @@ func ParseSkillMarkdown(content []byte) (*Skill, error) {
 	// 解析 YAML
 	var frontmatter map[string]any
 	if err := yaml.Unmarshal([]byte(yamlContent), &frontmatter); err != nil {
-		return nil, fmt.Errorf("解析 YAML frontmatter 失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.SkillIO, "解析 YAML frontmatter 失败", err)
 	}
 
 	// 提取必填字段
 	name, _ := frontmatter["name"].(string)
 	if name == "" {
-		return nil, fmt.Errorf("SKILL.md 缺少必填字段: name")
+		return nil, pkgerrors.New(pkgerrors.SkillIO, "SKILL.md 缺少必填字段: name")
 	}
 	if len(name) > 64 {
-		return nil, fmt.Errorf("技能名称过长 (最多 64 字符): %s", name)
+		return nil, pkgerrors.New(pkgerrors.SkillIO, fmt.Sprintf("技能名称过长 (最多 64 字符): %s", name))
 	}
 
 	description, _ := frontmatter["description"].(string)
 	if description == "" {
-		return nil, fmt.Errorf("SKILL.md 缺少必填字段: description")
+		return nil, pkgerrors.New(pkgerrors.SkillIO, "SKILL.md 缺少必填字段: description")
 	}
 	if len(description) > 1024 {
 		description = description[:1024]
@@ -183,7 +185,7 @@ func (l *SkillLoader) DiscoverAll() ([]*Skill, error) {
 	dirs = append(dirs, l.externalDirs...)
 
 	seen := make(map[string]*Skill) // name -> skill
-	var ordered []string             // 保持发现顺序
+	var ordered []string            // 保持发现顺序
 
 	for _, dir := range dirs {
 		if dir == "" {
@@ -230,7 +232,7 @@ func (l *SkillLoader) DiscoverAll() ([]*Skill, error) {
 // 在 skillsDir 和 externalDirs 中搜索名为 name 的 SKILL.md。
 func (l *SkillLoader) Load(name string) (*Skill, error) {
 	if err := sanitizeSkillName(name); err != nil {
-		return nil, fmt.Errorf("无效的技能名称: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.SkillIO, "无效的技能名称", err)
 	}
 
 	dirs := []string{}
@@ -255,7 +257,7 @@ func (l *SkillLoader) Load(name string) (*Skill, error) {
 
 		skill, err := ParseSkillMarkdown(data)
 		if err != nil {
-			return nil, fmt.Errorf("解析技能 '%s' 失败: %w", name, err)
+			return nil, pkgerrors.Wrap(pkgerrors.SkillIO, fmt.Sprintf("解析技能 '%s' 失败", name), err)
 		}
 
 		skill.Path = skillPath
@@ -267,13 +269,13 @@ func (l *SkillLoader) Load(name string) (*Skill, error) {
 		}
 
 		if !skillMatchesPlatform(skill) {
-			return nil, fmt.Errorf("技能 '%s' 与当前平台不兼容", name)
+			return nil, pkgerrors.New(pkgerrors.SkillIO, fmt.Sprintf("技能 '%s' 与当前平台不兼容", name))
 		}
 
 		return skill, nil
 	}
 
-	return nil, fmt.Errorf("技能 '%s' 未找到", name)
+	return nil, pkgerrors.New(pkgerrors.SkillNotFound, fmt.Sprintf("技能 '%s' 未找到", name))
 }
 
 // ───────────────────────────── 内部方法 ─────────────────────────────

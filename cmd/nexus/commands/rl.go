@@ -14,14 +14,10 @@ import (
 
 // ───────────────────────────── RL 训练 CLI ─────────────────────────────
 
-func init() {
-	Register(&RLCommand{})
-}
-
 // RLCommand 实现 nexus rl 子命令。
 type RLCommand struct{}
 
-func (c *RLCommand) Name() string    { return "rl" }
+func (c *RLCommand) Name() string     { return "rl" }
 func (c *RLCommand) Synopsis() string { return "RL 训练交互模式" }
 
 func (c *RLCommand) Run(args []string) {
@@ -89,7 +85,8 @@ func checkRLRequirements(cfg *config.Config) error {
 
 func createRLAgent(cfg *config.Config) (*agent.AIAgent, error) {
 	// 获取工具注册表
-	registry := tool.GetRegistry()
+	registry := tool.NewRegistry()
+	tool.RegisterAllTools(registry)
 
 	opts := []agent.AgentOption{
 		agent.WithMaxTokens(cfg.Agent.MaxTokens),

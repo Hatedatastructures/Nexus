@@ -8,7 +8,7 @@ import (
 // MemoryCommand 实现 nexus memory 命令。
 type MemoryCommand struct{}
 
-func (c *MemoryCommand) Name() string    { return "memory" }
+func (c *MemoryCommand) Name() string     { return "memory" }
 func (c *MemoryCommand) Synopsis() string { return "管理记忆" }
 
 func (c *MemoryCommand) Run(args []string) {
@@ -32,8 +32,4 @@ func (c *MemoryCommand) Run(args []string) {
 		fmt.Println()
 		fmt.Println(string(data))
 	}
-}
-
-func init() {
-	Register(&MemoryCommand{})
 }

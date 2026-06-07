@@ -29,25 +29,25 @@ const (
 type Platform string
 
 const (
-	PlatformLocal      Platform = "local"      // 本地终端
-	PlatformTelegram   Platform = "telegram"   // Telegram
-	PlatformDiscord    Platform = "discord"    // Discord
-	PlatformSlack      Platform = "slack"      // Slack
-	PlatformWhatsApp   Platform = "whatsapp"   // WhatsApp
-	PlatformWeChat     Platform = "wechat"     // 微信 (公众号/客服)
-	PlatformFeishu     Platform = "feishu"     // 飞书
-	PlatformDingTalk   Platform = "dingtalk"   // 钉钉
-	PlatformSignal     Platform = "signal"     // Signal
-	PlatformMatrix     Platform = "matrix"     // Matrix
-	PlatformEmail      Platform = "email"      // 邮件
-	PlatformSMS        Platform = "sms"        // 短信
-	PlatformWebhook    Platform = "webhook"    // Webhook
-	PlatformMattermost Platform = "mattermost" // Mattermost
-	PlatformQQBot      Platform = "qqbot"      // QQ Bot
-	PlatformAPIServer  Platform = "api_server" // OpenAI 兼容 API 服务器
-	PlatformWeCom      Platform = "wecom"      // 企业微信
-	PlatformWeiXin     Platform = "weixin"     // 微信 (个人号)
-	PlatformYuanbao    Platform = "yuanbao"    // 元宝
+	PlatformLocal       Platform = "local"       // 本地终端
+	PlatformTelegram    Platform = "telegram"    // Telegram
+	PlatformDiscord     Platform = "discord"     // Discord
+	PlatformSlack       Platform = "slack"       // Slack
+	PlatformWhatsApp    Platform = "whatsapp"    // WhatsApp
+	PlatformWeChat      Platform = "wechat"      // 微信 (公众号/客服)
+	PlatformFeishu      Platform = "feishu"      // 飞书
+	PlatformDingTalk    Platform = "dingtalk"    // 钉钉
+	PlatformSignal      Platform = "signal"      // Signal
+	PlatformMatrix      Platform = "matrix"      // Matrix
+	PlatformEmail       Platform = "email"       // 邮件
+	PlatformSMS         Platform = "sms"         // 短信
+	PlatformWebhook     Platform = "webhook"     // Webhook
+	PlatformMattermost  Platform = "mattermost"  // Mattermost
+	PlatformQQBot       Platform = "qqbot"       // QQ Bot
+	PlatformAPIServer   Platform = "api_server"  // OpenAI 兼容 API 服务器
+	PlatformWeCom       Platform = "wecom"       // 企业微信
+	PlatformWeiXin      Platform = "weixin"      // 微信 (个人号)
+	PlatformYuanbao     Platform = "yuanbao"     // 元宝
 	PlatformBlueBubbles Platform = "bluebubbles" // BlueBubbles (iMessage)
 )
 

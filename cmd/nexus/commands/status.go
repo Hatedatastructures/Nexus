@@ -15,7 +15,7 @@ import (
 // StatusCommand 实现 nexus status 命令。
 type StatusCommand struct{}
 
-func (c *StatusCommand) Name() string    { return "status" }
+func (c *StatusCommand) Name() string     { return "status" }
 func (c *StatusCommand) Synopsis() string { return "显示组件状态总览" }
 
 func (c *StatusCommand) Run(args []string) {
@@ -86,8 +86,8 @@ func (c *StatusCommand) checkProviders() {
 
 func (c *StatusCommand) checkTools() {
 	PrintSection("工具系统")
-	tool.DiscoverBuiltin()
-	registry := tool.GetRegistry()
+	registry := tool.NewRegistry()
+	tool.RegisterAllTools(registry)
 	names := registry.ListTools()
 
 	available := 0
@@ -111,7 +111,7 @@ func (c *StatusCommand) checkSessions() {
 		fmt.Println()
 		return
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -177,8 +177,4 @@ func (c *StatusCommand) checkCron() {
 		fmt.Printf("    %s\n", DimStyle.Render("○ 未启用"))
 	}
 	fmt.Println()
-}
-
-func init() {
-	Register(&StatusCommand{})
 }

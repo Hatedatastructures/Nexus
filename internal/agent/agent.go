@@ -9,8 +9,9 @@ import (
 
 	"nexus-agent/internal/approval"
 	"nexus-agent/internal/config"
-	"nexus-agent/internal/context"
 	"nexus-agent/internal/credential"
+	ctxBuilder "nexus-agent/internal/context"
+	"nexus-agent/internal/interfaces"
 	"nexus-agent/internal/llm"
 	"nexus-agent/internal/memory"
 	"nexus-agent/internal/sandbox"
@@ -25,23 +26,23 @@ import (
 // 管理一次会话的完整生命周期: 系统提示词构建 → LLM 调用 → 工具执行 → 状态更新。
 type AIAgent struct {
 	// ── LLM 配置 ──
-	provider      llm.Provider // LLM 提供者实例
-	model         string       // 模型名称
-	maxTokens     int          // 最大生成 token 数
-	reasoningCfg  *ReasoningConfig // 推理/思维链配置
+	provider     llm.Provider     // LLM 提供者实例
+	model        string           // 模型名称
+	maxTokens    int              // 最大生成 token 数
+	reasoningCfg *ReasoningConfig // 推理/思维链配置
 
 	// ── 子系统 ──
-	registry        *tool.Registry      // 工具注册中心
-	memoryManager   *memory.Manager     // 记忆管理器
-	skillManager    *skill.Manager      // 技能管理器
-	contextBuilder  *context.Builder    // 系统提示词构建器
-	compressor      *context.Compressor // 上下文压缩器
-	state           *state.Store              // 持久化存储
-	persister       *state.SessionPersister   // 会话 JSONL 持久化
-	credentialPool  *credential.Pool    // 凭证池
-	approvalChecker *approval.Checker   // 命令审批
-	sandboxEnv      sandbox.Environment // 沙箱环境
-	fileSafety      *FileSafetyChecker  // 文件写入安全检查
+	registry        interfaces.ToolRegistry      // 工具注册中心
+	memoryManager   interfaces.MemoryManager     // 记忆管理器
+	skillManager    interfaces.SkillManager      // 技能管理器
+	contextBuilder  interfaces.ContextBuilder    // 系统提示词构建器
+	compressor      interfaces.ContextCompressor // 上下文压缩器
+	state           interfaces.StateStore        // 持久化存储
+	persister       interfaces.SessionPersister  // 会话 JSONL 持久化
+	credentialPool  interfaces.CredentialPool    // 凭证池
+	approvalChecker interfaces.ApprovalChecker   // 命令审批
+	sandboxEnv      sandbox.Environment          // 沙箱环境
+	fileSafety      *FileSafetyChecker           // 文件写入安全检查
 
 	// ── 会话管理 ──
 	sessionID string // 会话唯一标识
@@ -50,25 +51,25 @@ type AIAgent struct {
 	chatID    string // 聊天 ID (网关会话)
 
 	// ── 回调函数 ──
-	streamCallback    func(delta string)          // 文本增量回调
+	streamCallback    func(delta string)                     // 文本增量回调
 	toolCallback      func(name string, args map[string]any) // 工具进度回调
-	statusCallback    func(msg string)            // 状态消息回调
-	reasoningCallback func(reasoning string)      // 推理过程回调
+	statusCallback    func(msg string)                       // 状态消息回调
+	reasoningCallback func(reasoning string)                 // 推理过程回调
 
 	// ── 内部状态 ──
-	mu                sync.Mutex           // 并发保护
-	iterationBudget   *IterationBudget     // 迭代预算
-	guardrails        *ToolCallGuardrails  // 工具调用安全护栏
-	recoveryEngine    *RecoveryEngine      // 错误恢复引擎
-	cachedSystemPrompt string              // 缓存的系统提示词
-	messages          []llm.Message        // 当前对话消息列表
-	maxRetries        int                  // 最大重试次数
-	fallbackModel     string               // 备选模型
-	fallbackProvider  llm.Provider         // 备选提供者
-	router            *ProviderRouter      // 多提供者路由器 (优先级/健康检查)
-	fallbackChain     *FallbackChain       // 回退链 (主提供者失败后的降级路径)
+	mu                   sync.Mutex                   // 并发保护
+	iterationBudget      *IterationBudget             // 迭代预算
+	guardrails           *ToolCallGuardrails          // 工具调用安全护栏
+	recoveryEngine       *RecoveryEngine              // 错误恢复引擎
+	cachedSystemPrompt   string                       // 缓存的系统提示词
+	messages             []llm.Message                // 当前对话消息列表
+	maxRetries           int                          // 最大重试次数
+	fallbackModel        string                       // 备选模型
+	fallbackProvider     llm.Provider                 // 备选提供者
+	router               *ProviderRouter              // 多提供者路由器 (优先级/健康检查)
+	fallbackChain        *FallbackChain               // 回退链 (主提供者失败后的降级路径)
 	pendingFallbackChain []config.FallbackEntryConfig // 待构建的回退链配置 (延迟解析)
-	resumeMode        bool                 // 是否从历史会话恢复
+	resumeMode           bool                         // 是否从历史会话恢复
 }
 
 // ───────────────────────────── 构造函数 ─────────────────────────────
@@ -162,3 +163,19 @@ func (a *AIAgent) Shutdown() {
 	a.messages = nil
 	a.cachedSystemPrompt = ""
 }
+
+// ───────────────────────────── 编译时接口断言 ─────────────────────────────
+
+// 确保具体类型满足 interfaces 包中定义的接口。
+// 如果方法签名不匹配，编译时会在此处报错。
+var (
+	_ interfaces.ToolRegistry     = (*tool.Registry)(nil)
+	_ interfaces.MemoryManager    = (*memory.Manager)(nil)
+	_ interfaces.SkillManager     = (*skill.Manager)(nil)
+	_ interfaces.ContextBuilder   = (*ctxBuilder.Builder)(nil)
+	_ interfaces.ContextCompressor = (*ctxBuilder.Compressor)(nil)
+	_ interfaces.StateStore       = (*state.Store)(nil)
+	_ interfaces.SessionPersister = (*state.SessionPersister)(nil)
+	_ interfaces.CredentialPool   = (*credential.Pool)(nil)
+	_ interfaces.ApprovalChecker  = (*approval.Checker)(nil)
+)

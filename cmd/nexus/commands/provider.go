@@ -12,7 +12,7 @@ import (
 // ProviderCommand 实现 nexus provider 命令。
 type ProviderCommand struct{}
 
-func (c *ProviderCommand) Name() string    { return "provider" }
+func (c *ProviderCommand) Name() string     { return "provider" }
 func (c *ProviderCommand) Synopsis() string { return "LLM 提供者管理 (list/test)" }
 
 func (c *ProviderCommand) Run(args []string) {
@@ -112,8 +112,4 @@ func (c *ProviderCommand) testProvider(name string) {
 
 	fmt.Println()
 	fmt.Println(GreenBold.Render("  ✓ 连接成功"))
-}
-
-func init() {
-	Register(&ProviderCommand{})
 }

@@ -17,7 +17,7 @@ type testTool struct {
 	execFn      func(ctx context.Context, args map[string]any) (string, error)
 }
 
-func (t *testTool) Name() string       { return t.name }
+func (t *testTool) Name() string        { return t.name }
 func (t *testTool) Description() string { return t.description }
 func (t *testTool) Schema() *ToolSchema {
 	return &ToolSchema{Name: t.name, Parameters: map[string]any{"type": "object"}}

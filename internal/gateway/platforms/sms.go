@@ -31,15 +31,15 @@ const (
 
 // SMSAdapter Twilio SMS 短信适配器。
 type SMSAdapter struct {
-	accountSID  string
-	authToken   string
-	fromNumber  string
+	accountSID     string
+	authToken      string
+	fromNumber     string
 	messageHandler func(*MessageEvent)
-	httpClient  *http.Client
-	msgCh       chan *MessageEvent
-	running     bool
-	webhookPort int
-	httpServer  *http.Server
+	httpClient     *http.Client
+	msgCh          chan *MessageEvent
+	running        bool
+	webhookPort    int
+	httpServer     *http.Server
 
 	// 并发控制
 	mu        sync.RWMutex
@@ -71,9 +71,9 @@ func NewSMSAdapter(messageHandler func(*MessageEvent)) *SMSAdapter {
 
 // ───────────────────────────── PlatformAdapter 接口实现 ─────────────────────────────
 
-func (a *SMSAdapter) Name() string          { return "SMS" }
-func (a *SMSAdapter) PlatformType() Platform { return PlatformSMS }
-func (a *SMSAdapter) MaxMessageLength() int  { return smsMaxMessageLen }
+func (a *SMSAdapter) Name() string            { return "SMS" }
+func (a *SMSAdapter) PlatformType() Platform  { return PlatformSMS }
+func (a *SMSAdapter) MaxMessageLength() int   { return smsMaxMessageLen }
 func (a *SMSAdapter) SupportsStreaming() bool { return false }
 
 func (a *SMSAdapter) Connect(ctx context.Context) (<-chan *MessageEvent, error) {
@@ -122,7 +122,7 @@ func (a *SMSAdapter) Disconnect(ctx context.Context) error {
 	a.mu.Unlock()
 
 	if srv != nil {
-		srv.Shutdown(ctx)
+		_ = srv.Shutdown(ctx)
 	}
 
 	a.closeOnce.Do(func() {
@@ -169,7 +169,7 @@ func (a *SMSAdapter) Send(ctx context.Context, chatID string, content string, op
 	if err != nil {
 		return &SendResult{Success: false, Error: err.Error()}, nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return &SendResult{Success: false, Error: fmt.Sprintf("Twilio API 错误 (HTTP %d)", resp.StatusCode)}, nil
@@ -271,7 +271,7 @@ func (a *SMSAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// 返回 TwiML 响应
 	w.Header().Set("Content-Type", "text/xml")
-	fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`)
+	_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`)
 }
 
 // validateTwilioSignature 验证 Twilio Webhook 签名 (X-Twilio-Signature)。
@@ -317,12 +317,3 @@ func isValidPhoneNumber(phone string) bool {
 	return len(phone) >= 10 && len(phone) <= 15 && phone[0] == '+'
 }
 
-// ───────────────────────────── 自注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&AdapterEntry{
-		Platform: PlatformSMS,
-		Name:     "SMS",
-		Factory:  func() PlatformAdapter { return NewSMSAdapter(nil) },
-	})
-}

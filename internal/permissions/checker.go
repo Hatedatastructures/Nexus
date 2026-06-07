@@ -18,10 +18,10 @@ import (
 // Checker 是权限检查器，整合策略引擎和会话级记忆。
 // 提供统一的权限检查入口，所有工具调用通过此检查器判断权限。
 type Checker struct {
-	policy       *Policy            // 当前生效的策略
-	approval     *approval.Checker  // 包装的原有审批检查器 (用于终端命令)
-	sessionDecisions map[string]Level // 会话级决策缓存 (key = "toolName:argHash")
-	mu               sync.RWMutex     // 并发保护
+	policy           *Policy           // 当前生效的策略
+	approval         *approval.Checker // 包装的原有审批检查器 (用于终端命令)
+	sessionDecisions map[string]Level  // 会话级决策缓存 (key = "toolName:argHash")
+	mu               sync.RWMutex      // 并发保护
 }
 
 // NewChecker 创建权限检查器。
@@ -86,8 +86,8 @@ func (c *Checker) CheckWithReason(ctx context.Context, toolName string, args map
 func (c *Checker) RememberDecision(toolName string, args map[string]any, level Level) {
 	key := buildMemoryKey(toolName, args)
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.sessionDecisions[key] = level
-	c.mu.Unlock()
 
 	slog.Info("permission decision remembered",
 		"tool", toolName,
@@ -100,16 +100,16 @@ func (c *Checker) RememberDecision(toolName string, args map[string]any, level L
 func (c *Checker) ForgetDecision(toolName string, args map[string]any) {
 	key := buildMemoryKey(toolName, args)
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	delete(c.sessionDecisions, key)
-	c.mu.Unlock()
 }
 
 // ClearSession 清除所有会话记忆。
 // 通常在会话结束时调用。
 func (c *Checker) ClearSession() {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.sessionDecisions = make(map[string]Level)
-	c.mu.Unlock()
 }
 
 // checkSessionMemory 检查会话记忆中是否有已记录的决策。
@@ -172,8 +172,8 @@ func (c *Checker) mergeApprovalDecision(ctx context.Context, permDecision Decisi
 // 线程安全。
 func (c *Checker) SetPolicy(policy *Policy) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.policy = policy
-	c.mu.Unlock()
 	slog.Info("permission policy switched", "name", policy.Name)
 }
 

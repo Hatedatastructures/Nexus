@@ -87,10 +87,10 @@ type ProcessHandle interface {
 // ───────────────────────────── 常用退出码 ─────────────────────────────
 
 const (
-	ExitCodeSuccess   = 0   // 成功
-	ExitCodeGeneral   = 1   // 一般错误
-	ExitCodeTimeout   = 124 // 超时 (被 timeout 命令终止)
-	ExitCodeSignal    = 128 // 被信号终止基数
-	ExitCodeSIGTERM   = 143 // 128 + 15 (SIGTERM)
-	ExitCodeSIGKILL   = 137 // 128 + 9  (SIGKILL)
+	ExitCodeSuccess = 0   // 成功
+	ExitCodeGeneral = 1   // 一般错误
+	ExitCodeTimeout = 124 // 超时 (被 timeout 命令终止)
+	ExitCodeSignal  = 128 // 被信号终止基数
+	ExitCodeSIGTERM = 143 // 128 + 15 (SIGTERM)
+	ExitCodeSIGKILL = 137 // 128 + 9  (SIGKILL)
 )

@@ -313,7 +313,7 @@ func buildSubAgentPrompt(task, contextInfo, role string) string {
 	sb.WriteString("## 工具使用限制\n")
 	sb.WriteString("你被禁止使用以下工具:\n")
 	for blockedTool := range delegateBlockedTools {
-		sb.WriteString(fmt.Sprintf("- **%s**: 子代理不能使用 (防止递归委派和跨会话副作用)\n", blockedTool))
+		fmt.Fprintf(&sb, "- **%s**: 子代理不能使用 (防止递归委派和跨会话副作用)\n", blockedTool)
 	}
 	sb.WriteString("请使用其他可用工具来完成任务。如果任务超出你的工具能力范围，请在结果中明确说明。\n\n")
 
@@ -350,9 +350,3 @@ func truncateForLog(s string, maxLen int) string {
 	return string(runes[:maxLen]) + "..."
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	// 使用空配置的代理注册 (实际使用时会通过 NewDelegateTaskTool 注入配置)
-	GetRegistry().Register(&DelegateTaskTool{})
-}

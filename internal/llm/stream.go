@@ -31,7 +31,7 @@ func ParseSSEStream(ctx context.Context, body io.ReadCloser) <-chan *SSEEvent {
 
 	go func() {
 		defer close(ch)
-		defer body.Close()
+		defer func() { _ = body.Close() }()
 
 		scanner := bufio.NewScanner(body)
 		// 增大扫描缓冲区以处理长 data 行

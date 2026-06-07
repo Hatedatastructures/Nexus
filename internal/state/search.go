@@ -10,7 +10,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
 	"log/slog"
+	pkgerrors "nexus-agent/internal/errors"
 	"regexp"
 	"strings"
 )
@@ -83,7 +85,7 @@ func (s *Store) searchLatin(ctx context.Context, query string, limit int) ([]*Se
 		slog.Warn("FTS5 search syntax error", "query", query, "error", err)
 		return nil, nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return scanSearchResults(rows)
 }
@@ -137,7 +139,7 @@ func (s *Store) searchTrigramFTS(ctx context.Context, rawQuery string, limit int
 		slog.Warn("trigram FTS5 search error", "query", trigramQuery, "error", err)
 		return nil, nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return scanSearchResults(rows)
 }
@@ -171,9 +173,9 @@ func (s *Store) searchCJKLike(ctx context.Context, rawQuery string, limit int) (
 		limit,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("CJK LIKE 搜索失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.FileIO, "CJK LIKE 搜索失败", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return scanSearchResults(rows)
 }
@@ -187,7 +189,7 @@ func scanSearchResults(rows *sql.Rows) ([]*SearchResult, error) {
 		var rank sql.NullFloat64
 
 		if err := rows.Scan(&result.MessageID, &result.SessionID, &snippet, &rank); err != nil {
-			return nil, fmt.Errorf("扫描搜索结果失败: %w", err)
+			return nil, pkgerrors.Wrap(pkgerrors.FileIO, "扫描搜索结果失败", err)
 		}
 
 		if snippet.Valid {
@@ -235,15 +237,15 @@ func (s *Store) ListRecentSessions(ctx context.Context, limit int) ([]*Session, 
 		limit,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("查询最近会话失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.FileIO, "查询最近会话失败", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []*Session
 	for rows.Next() {
 		sess, err := scanSessionRow(rows)
 		if err != nil {
-			return nil, fmt.Errorf("扫描会话行失败: %w", err)
+			return nil, pkgerrors.Wrap(pkgerrors.FileIO, "扫描会话行失败", err)
 		}
 		sessions = append(sessions, sess)
 	}
@@ -322,13 +324,13 @@ func sanitizeFTS5Query(query string) string {
 
 // isCJKCodepoint 判断 Unicode 码点是否为 CJK 字符
 func isCJKCodepoint(cp rune) bool {
-	return (cp >= 0x4E00 && cp <= 0x9FFF) ||   // CJK 统一表意文字
-		(cp >= 0x3400 && cp <= 0x4DBF) ||       // CJK 扩展 A
-		(cp >= 0x20000 && cp <= 0x2A6DF) ||     // CJK 扩展 B
-		(cp >= 0x3000 && cp <= 0x303F) ||       // CJK 符号
-		(cp >= 0x3040 && cp <= 0x309F) ||       // 平假名
-		(cp >= 0x30A0 && cp <= 0x30FF) ||       // 片假名
-		(cp >= 0xAC00 && cp <= 0xD7AF)          // 韩文音节
+	return (cp >= 0x4E00 && cp <= 0x9FFF) || // CJK 统一表意文字
+		(cp >= 0x3400 && cp <= 0x4DBF) || // CJK 扩展 A
+		(cp >= 0x20000 && cp <= 0x2A6DF) || // CJK 扩展 B
+		(cp >= 0x3000 && cp <= 0x303F) || // CJK 符号
+		(cp >= 0x3040 && cp <= 0x309F) || // 平假名
+		(cp >= 0x30A0 && cp <= 0x30FF) || // 片假名
+		(cp >= 0xAC00 && cp <= 0xD7AF) // 韩文音节
 }
 
 // containsCJK 检查文本是否包含 CJK 字符

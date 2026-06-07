@@ -9,7 +9,7 @@ import (
 // VersionCommand 实现 nexus version 命令。
 type VersionCommand struct{}
 
-func (c *VersionCommand) Name() string    { return "version" }
+func (c *VersionCommand) Name() string     { return "version" }
 func (c *VersionCommand) Synopsis() string { return "显示版本信息" }
 
 func (c *VersionCommand) Run(args []string) {
@@ -45,8 +45,4 @@ func getVersion() string {
 		return info.Main.Version
 	}
 	return "dev"
-}
-
-func init() {
-	Register(&VersionCommand{})
 }

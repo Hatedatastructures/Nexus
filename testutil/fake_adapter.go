@@ -14,10 +14,10 @@ import (
 
 // SentMessage 记录一条通过 FakeAdapter 发送的消息。
 type SentMessage struct {
-	Method  string            // 方法名: "Send", "EditMessage", "SendImage" 等
-	ChatID  string            // 聊天 ID
-	Content string            // 消息内容/文件路径
-	Extra   map[string]any    // 额外参数
+	Method  string         // 方法名: "Send", "EditMessage", "SendImage" 等
+	ChatID  string         // 聊天 ID
+	Content string         // 消息内容/文件路径
+	Extra   map[string]any // 额外参数
 }
 
 // ───────────────────────────── FakeAdapter ─────────────────────────────

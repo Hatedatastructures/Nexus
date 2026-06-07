@@ -122,7 +122,7 @@ func TestTranslatorFallback(t *testing.T) {
 	t.Run("zh 回退到 en", func(t *testing.T) {
 		// 创建只有 en 的翻译器
 		tr := &translator{
-			locale:  "zh",
+			locale: "zh",
 			locales: map[string]map[string]string{
 				"en": {"only.en.key": "English only"},
 			},

@@ -88,7 +88,7 @@ func TestAgentCache_GetOrCreate(t *testing.T) {
 		first := agent.NewAgent()
 		second := agent.NewAgent()
 
-		c.GetOrCreate("race_key", func() (*agent.AIAgent, string) {
+		_, _ = c.GetOrCreate("race_key", func() (*agent.AIAgent, string) {
 			return first, "sig"
 		})
 		c.ReleaseInUse("race_key")
@@ -105,12 +105,12 @@ func TestAgentCache_GetOrCreate(t *testing.T) {
 		t.Parallel()
 		c := NewAgentCache(2, time.Hour)
 
-		c.GetOrCreate("k1", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s1" })
+		_, _ = c.GetOrCreate("k1", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s1" })
 		c.ReleaseInUse("k1")
-		c.GetOrCreate("k2", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s2" })
+		_, _ = c.GetOrCreate("k2", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s2" })
 		c.ReleaseInUse("k2")
 
-		c.GetOrCreate("k3", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s3" })
+		_, _ = c.GetOrCreate("k3", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s3" })
 		c.ReleaseInUse("k3")
 
 		if c.Size() > 2 {
@@ -125,7 +125,7 @@ func TestAgentCache_ReleaseInUse(t *testing.T) {
 	t.Run("releases in-use flag", func(t *testing.T) {
 		t.Parallel()
 		c := NewAgentCache(10, time.Hour)
-		c.GetOrCreate("r1", func() (*agent.AIAgent, string) {
+		_, _ = c.GetOrCreate("r1", func() (*agent.AIAgent, string) {
 			return agent.NewAgent(), "s"
 		})
 
@@ -153,7 +153,7 @@ func TestAgentCache_SweepIdle(t *testing.T) {
 		t.Parallel()
 		c := NewAgentCache(10, 1*time.Nanosecond)
 
-		c.GetOrCreate("sw1", func() (*agent.AIAgent, string) {
+		_, _ = c.GetOrCreate("sw1", func() (*agent.AIAgent, string) {
 			return agent.NewAgent(), "s"
 		})
 		c.ReleaseInUse("sw1")
@@ -173,7 +173,7 @@ func TestAgentCache_SweepIdle(t *testing.T) {
 		t.Parallel()
 		c := NewAgentCache(10, 1*time.Nanosecond)
 
-		c.GetOrCreate("sw2", func() (*agent.AIAgent, string) {
+		_, _ = c.GetOrCreate("sw2", func() (*agent.AIAgent, string) {
 			return agent.NewAgent(), "s"
 		})
 
@@ -188,7 +188,7 @@ func TestAgentCache_SweepIdle(t *testing.T) {
 	t.Run("no expired entries returns 0", func(t *testing.T) {
 		t.Parallel()
 		c := NewAgentCache(10, time.Hour)
-		c.GetOrCreate("sw3", func() (*agent.AIAgent, string) {
+		_, _ = c.GetOrCreate("sw3", func() (*agent.AIAgent, string) {
 			return agent.NewAgent(), "s"
 		})
 		c.ReleaseInUse("sw3")
@@ -216,11 +216,11 @@ func TestAgentCache_EnforceCap(t *testing.T) {
 		t.Parallel()
 		c := NewAgentCache(2, time.Hour)
 
-		c.GetOrCreate("ec1", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
+		_, _ = c.GetOrCreate("ec1", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
 		c.ReleaseInUse("ec1")
-		c.GetOrCreate("ec2", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
+		_, _ = c.GetOrCreate("ec2", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
 		c.ReleaseInUse("ec2")
-		c.GetOrCreate("ec3", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
+		_, _ = c.GetOrCreate("ec3", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
 		c.ReleaseInUse("ec3")
 
 		c.EnforceCap()
@@ -232,7 +232,7 @@ func TestAgentCache_EnforceCap(t *testing.T) {
 	t.Run("no eviction when under cap", func(t *testing.T) {
 		t.Parallel()
 		c := NewAgentCache(10, time.Hour)
-		c.GetOrCreate("ec4", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
+		_, _ = c.GetOrCreate("ec4", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
 		c.ReleaseInUse("ec4")
 
 		c.EnforceCap()
@@ -244,8 +244,8 @@ func TestAgentCache_EnforceCap(t *testing.T) {
 	t.Run("all in-use: no eviction possible", func(t *testing.T) {
 		t.Parallel()
 		c := NewAgentCache(1, time.Hour)
-		c.GetOrCreate("ec5", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
-		c.GetOrCreate("ec6", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
+		_, _ = c.GetOrCreate("ec5", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
+		_, _ = c.GetOrCreate("ec6", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
 
 		c.EnforceCap()
 	})
@@ -265,7 +265,7 @@ func TestAgentCache_Size(t *testing.T) {
 	t.Run("increments on create", func(t *testing.T) {
 		t.Parallel()
 		c := NewAgentCache(10, time.Hour)
-		c.GetOrCreate("sz1", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
+		_, _ = c.GetOrCreate("sz1", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
 		if c.Size() != 1 {
 			t.Errorf("size = %d, want 1", c.Size())
 		}
@@ -279,9 +279,9 @@ func TestAgentCache_evictLRU(t *testing.T) {
 		t.Parallel()
 		c := NewAgentCache(10, time.Hour)
 
-		c.GetOrCreate("lru1", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
+		_, _ = c.GetOrCreate("lru1", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
 		c.ReleaseInUse("lru1")
-		c.GetOrCreate("lru2", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
+		_, _ = c.GetOrCreate("lru2", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
 		c.ReleaseInUse("lru2")
 
 		c.mu.Lock()
@@ -299,7 +299,7 @@ func TestAgentCache_evictLRU(t *testing.T) {
 	t.Run("returns false when all in use", func(t *testing.T) {
 		t.Parallel()
 		c := NewAgentCache(10, time.Hour)
-		c.GetOrCreate("lru3", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
+		_, _ = c.GetOrCreate("lru3", func() (*agent.AIAgent, string) { return agent.NewAgent(), "s" })
 
 		c.mu.Lock()
 		ok := c.evictLRU()

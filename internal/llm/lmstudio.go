@@ -7,12 +7,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	pkgerrors "nexus-agent/internal/errors"
 	"strings"
-	"time"
 )
 
 // ── 常量 ─────────────────────────────────────────────────────────────────
@@ -57,13 +56,13 @@ func (t *LMStudioTransport) BuildRequest(ctx context.Context, req *ChatRequest, 
 
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("序列化 LM Studio 请求体失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "序列化 LM Studio 请求体失败", err)
 	}
 
 	url := t.baseURL + "/chat/completions"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return nil, fmt.Errorf("创建 LM Studio HTTP 请求失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "创建 LM Studio HTTP 请求失败", err)
 	}
 
 	// 设置请求头
@@ -87,11 +86,11 @@ func (t *LMStudioTransport) BuildRequest(ctx context.Context, req *ChatRequest, 
 func (t *LMStudioTransport) ParseResponse(body []byte) (*ChatResponse, error) {
 	var oaiResp openAIChatResponse
 	if err := json.Unmarshal(body, &oaiResp); err != nil {
-		return nil, fmt.Errorf("解析 LM Studio 响应失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "解析 LM Studio 响应失败", err)
 	}
 
 	if len(oaiResp.Choices) == 0 {
-		return nil, fmt.Errorf("LM Studio 响应中没有 choices")
+		return nil, pkgerrors.New(pkgerrors.ProviderAPI, "LM Studio 响应中没有 choices")
 	}
 
 	choice := oaiResp.Choices[0]
@@ -149,7 +148,7 @@ func (t *LMStudioTransport) ParseStream(ctx context.Context, body io.ReadCloser)
 
 	go func() {
 		defer close(ch)
-		defer body.Close()
+		defer func() { _ = body.Close() }()
 
 		var contentBuilder strings.Builder
 		var reasoningBuilder strings.Builder
@@ -255,189 +254,31 @@ func (t *LMStudioTransport) ParseStream(ctx context.Context, body io.ReadCloser)
 				return
 			}
 		}
-			// 检查 context 是否已取消，避免取消后仍发送 Done 增量
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			// 流通道关闭后（ParseSSEStream 遇到 [DONE] 或 EOF），发送最终 Done 增量
-			toolCalls = make([]ToolCall, 0, len(toolCallBuilders))
-			for _, builder := range toolCallBuilders {
-				toolCalls = append(toolCalls, ToolCall{
-					ID:        builder.ID,
-					Name:      builder.Name,
-					Arguments: builder.Arguments.String(),
-				})
-			}
-			ch <- &StreamDelta{
-				Content:    contentBuilder.String(),
-				Reasoning:  reasoningBuilder.String(),
-				ToolCalls:  toolCalls,
-				Usage:      finalUsage,
-				StopReason: StopEndTurn,
-				Done:       true,
-			}
+		// 检查 context 是否已取消，避免取消后仍发送 Done 增量
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		// 流通道关闭后（ParseSSEStream 遇到 [DONE] 或 EOF），发送最终 Done 增量
+		toolCalls = make([]ToolCall, 0, len(toolCallBuilders))
+		for _, builder := range toolCallBuilders {
+			toolCalls = append(toolCalls, ToolCall{
+				ID:        builder.ID,
+				Name:      builder.Name,
+				Arguments: builder.Arguments.String(),
+			})
+		}
+		ch <- &StreamDelta{
+			Content:    contentBuilder.String(),
+			Reasoning:  reasoningBuilder.String(),
+			ToolCalls:  toolCalls,
+			Usage:      finalUsage,
+			StopReason: StopEndTurn,
+			Done:       true,
+		}
 	}()
 
 	return ch
 }
 
-// ── LM Studio Provider 实现 ───────────────────────────────────────────────
-
-// LMStudioProvider 实现 LM Studio 本地推理的 Provider 接口。
-// 自动检测推理模型的 reasoning_content 输出。
-type LMStudioProvider struct {
-	transport *LMStudioTransport
-	apiKey    string // LM Studio 通常不需要 API Key
-	model     string
-}
-
-// NewLMStudioProvider 创建一个新的 LM Studio 提供者。
-// baseURL 为空时使用默认地址 http://localhost:1234/v1。
-func NewLMStudioProvider(httpClient *http.Client, apiKey, model, baseURL string) *LMStudioProvider {
-	return &LMStudioProvider{
-		transport: NewLMStudioTransport(httpClient, baseURL),
-		apiKey:    apiKey,
-		model:     model,
-	}
-}
-
-// Name 返回提供者标识。
-func (p *LMStudioProvider) Name() string {
-	return lmStudioTransportID
-}
-
-// CreateChatCompletion 发送非流式聊天补全请求。
-func (p *LMStudioProvider) CreateChatCompletion(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
-	// 确保模型已设置
-	if req.Model == "" {
-		reqCopy := *req
-		reqCopy.Model = p.model
-		req = &reqCopy
-	}
-
-	httpReq, err := p.transport.BuildRequest(ctx, req, p.apiKey)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := p.transport.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("LM Studio HTTP 请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
-	if err != nil {
-		return nil, fmt.Errorf("读取 LM Studio 响应体失败: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodyStr := string(body)
-		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("LM Studio API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
-	}
-
-	return p.transport.ParseResponse(body)
-}
-
-// CreateChatCompletionStream 发送流式聊天补全请求。
-func (p *LMStudioProvider) CreateChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan *StreamDelta, error) {
-	// 深拷贝请求，避免修改调用方的原始数据
-	reqCopy := *req
-	if reqCopy.Model == "" {
-		reqCopy.Model = p.model
-	}
-	if reqCopy.Metadata == nil {
-		reqCopy.Metadata = make(map[string]any)
-	} else {
-		md := make(map[string]any, len(reqCopy.Metadata)+1)
-		for k, v := range reqCopy.Metadata {
-			md[k] = v
-		}
-		reqCopy.Metadata = md
-	}
-	reqCopy.Metadata["stream"] = true
-	req = &reqCopy
-
-	httpReq, err := p.transport.BuildRequest(ctx, req, p.apiKey)
-	if err != nil {
-		return nil, err
-	}
-
-	// 设置流式 Accept 头
-	httpReq.Header.Set("Accept", "text/event-stream")
-
-	resp, err := p.transport.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("LM Studio 流式请求失败: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
-		resp.Body.Close()
-		bodyStr := string(body)
-		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("LM Studio 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
-	}
-
-	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。
-	// 不再使用 io.ReadAll 将整个响应读入内存，避免大响应导致 OOM。
-	// resp.Body 的生命周期由 ParseStream 内部的 goroutine 通过 defer body.Close() 管理。
-	return p.transport.ParseStream(ctx, resp.Body), nil
-}
-
-// ListModels 返回 LM Studio 已加载的模型列表。
-// 通过 GET /v1/models 端点获取。
-func (p *LMStudioProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
-	url := p.transport.baseURL + "/models"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("创建 LM Studio 模型列表请求失败: %w", err)
-	}
-
-	httpReq.Header.Set("Accept", "application/json")
-	if p.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
-	}
-
-	resp, err := p.transport.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("获取 LM Studio 模型列表失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
-	if err != nil {
-		return nil, fmt.Errorf("读取 LM Studio 模型列表响应失败: %w", err)
-	}
-
-		if resp.StatusCode != http.StatusOK {
-			bodyStr := string(body)
-			return nil, fmt.Errorf("获取 LM Studio 模型列表返回 HTTP %d: %s", resp.StatusCode, RedactErrorBody(bodyStr))
-		}
-
-	var listResp openAIModelListResponse
-	if err := json.Unmarshal(body, &listResp); err != nil {
-		return nil, fmt.Errorf("解析 LM Studio 模型列表失败: %w", err)
-	}
-
-	models := make([]ModelInfo, 0, len(listResp.Data))
-	for _, m := range listResp.Data {
-		models = append(models, ModelInfo{
-			ID:       m.ID,
-			Provider: p.Name(),
-		})
-	}
-
-	return models, nil
-}
-
-// ── init 注册 ─────────────────────────────────────────────────────────────
-
-func init() {
-	// 注册 LM Studio 传输层到全局注册表
-	RegisterTransport(lmStudioTransportID, &LMStudioTransport{baseURL: lmStudioDefaultBaseURL})
-	slog.Debug("LM Studio transport registered", "apiMode", lmStudioTransportID, "baseURL", lmStudioDefaultBaseURL, "time", time.Now())
-}

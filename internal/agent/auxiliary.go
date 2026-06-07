@@ -259,10 +259,10 @@ func (c *AuxiliaryClient) tryProvider(ctx context.Context, entry *ProviderEntry,
 type errorAction int
 
 const (
-	actionRetry          errorAction = iota // 在当前提供者上重试
-	actionRetryThenFallback                 // 重试后降级
-	actionImmediateFallback                 // 立即降级到下一个提供者
-	actionAbort                             // 不可恢复，终止降级
+	actionRetry             errorAction = iota // 在当前提供者上重试
+	actionRetryThenFallback                    // 重试后降级
+	actionImmediateFallback                    // 立即降级到下一个提供者
+	actionAbort                                // 不可恢复，终止降级
 )
 
 // classifyErrorAction 根据错误类型决定应采取的动作。

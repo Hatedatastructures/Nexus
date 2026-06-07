@@ -3,6 +3,8 @@ package llm
 
 import (
 	"fmt"
+
+	pkgerrors "nexus-agent/internal/errors"
 	"sync"
 )
 
@@ -26,7 +28,7 @@ func (r *TransportRegistry) Register(apiMode string, transport Transport) error 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.transports[apiMode]; exists {
-		return fmt.Errorf("transport already registered for api mode: %s", apiMode)
+		return pkgerrors.New(pkgerrors.ProviderConfig, fmt.Sprintf("transport already registered for api mode: %s", apiMode))
 	}
 	r.transports[apiMode] = transport
 	return nil
@@ -59,7 +61,7 @@ var DefaultRegistry = NewTransportRegistry()
 // RegisterTransport 向全局默认注册表注册传输实现。
 // 各传输实现在其 init() 中调用此函数。
 func RegisterTransport(apiMode string, transport Transport) {
-	DefaultRegistry.Register(apiMode, transport)
+	_ = DefaultRegistry.Register(apiMode, transport)
 }
 
 // GetTransport 从全局默认注册表获取传输实现。

@@ -8,7 +8,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
 	"log/slog"
+	pkgerrors "nexus-agent/internal/errors"
 	"strings"
 	"time"
 )
@@ -40,15 +42,15 @@ func (s *Store) AutoPrune(ctx context.Context, maxAgeDays int) (int, error) {
 			float64(cutoff),
 		)
 		if err != nil {
-			return fmt.Errorf("查询过期会话失败: %w", err)
+			return pkgerrors.Wrap(pkgerrors.FileIO, "查询过期会话失败", err)
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		var sessionIDs []string
 		for rows.Next() {
 			var id string
 			if err := rows.Scan(&id); err != nil {
-				return fmt.Errorf("扫描会话ID失败: %w", err)
+				return pkgerrors.Wrap(pkgerrors.FileIO, "扫描会话ID失败", err)
 			}
 			sessionIDs = append(sessionIDs, id)
 		}
@@ -70,12 +72,12 @@ func (s *Store) AutoPrune(ctx context.Context, maxAgeDays int) (int, error) {
 			if _, err := db.ExecContext(ctx,
 				"DELETE FROM messages WHERE session_id = ?", sid,
 			); err != nil {
-				return fmt.Errorf("删除消息失败(session=%s): %w", sid, err)
+				return pkgerrors.Wrap(pkgerrors.FileIO, fmt.Sprintf("删除消息失败(session=%s)", sid), err)
 			}
 			if _, err := db.ExecContext(ctx,
 				"DELETE FROM sessions WHERE id = ?", sid,
 			); err != nil {
-				return fmt.Errorf("删除会话失败(session=%s): %w", sid, err)
+				return pkgerrors.Wrap(pkgerrors.FileIO, fmt.Sprintf("删除会话失败(session=%s)", sid), err)
 			}
 			removedIDs = append(removedIDs, sid)
 		}
@@ -118,7 +120,7 @@ func orphanChildren(ctx context.Context, db *sql.DB, parentIDs []string) error {
 
 	_, err := db.ExecContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("孤儿化子会话失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.FileIO, "孤儿化子会话失败", err)
 	}
 	return nil
 }
@@ -137,15 +139,15 @@ func (s *Store) CheckpointWAL(ctx context.Context) error {
 
 	result, err := s.db.QueryContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)")
 	if err != nil {
-		return fmt.Errorf("WAL checkpoint 查询失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.FileIO, "WAL checkpoint 查询失败", err)
 	}
-	defer result.Close()
+	defer func() { _ = result.Close() }()
 
 	// wal_checkpoint 返回三列: busy, total, checkpointed
 	if result.Next() {
 		var busy, total, checkpointed int
 		if err := result.Scan(&busy, &total, &checkpointed); err != nil {
-			return fmt.Errorf("扫描 WAL checkpoint 结果失败: %w", err)
+			return pkgerrors.Wrap(pkgerrors.FileIO, "扫描 WAL checkpoint 结果失败", err)
 		}
 
 		if total > 0 {

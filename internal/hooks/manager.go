@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+
 	"log/slog"
+	pkgerrors "nexus-agent/internal/errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,7 +35,7 @@ func NewShellHook(spec HookSpec) (*ShellHook, error) {
 	}
 
 	if spec.Command == "" {
-		return nil, fmt.Errorf("hook command 不能为空")
+		return nil, pkgerrors.New(pkgerrors.ConfigInvalid, "hook command 不能为空")
 	}
 
 	// 编译匹配正则
@@ -111,7 +113,7 @@ func NewHookManager(hookDir string, acceptAll bool) *HookManager {
 // hook 按注册顺序排列，执行时按注册顺序依次执行。
 func (m *HookManager) Register(hook Hook) error {
 	if hook == nil {
-		return fmt.Errorf("不能注册 nil hook")
+		return pkgerrors.New(pkgerrors.ConfigInvalid, "不能注册 nil hook")
 	}
 
 	m.mu.Lock()
@@ -253,7 +255,7 @@ func (m *HookManager) RegisterFromSpecs(specs []HookSpec) error {
 		}
 		hook, err := NewShellHook(spec)
 		if err != nil {
-			return fmt.Errorf("创建 hook 失败 (command=%s): %w", spec.Command, err)
+			return pkgerrors.Wrap(pkgerrors.ConfigInvalid, fmt.Sprintf("创建 hook 失败 (command=%s)", spec.Command), err)
 		}
 		if err := m.Register(hook); err != nil {
 			return err

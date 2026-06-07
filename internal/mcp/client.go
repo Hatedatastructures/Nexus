@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 )
 
@@ -19,112 +18,179 @@ import (
 
 // MCPClient 是 MCP 客户端，用于与外部 MCP 服务器通信。
 type MCPClient struct {
-	serverInfo ServerInfo   // 连接的服务器信息
-	connected  bool         // 连接状态
-	stdin      io.WriteCloser // 子进程 stdin
-	stdout     io.Reader      // 子进程 stdout
-	cmd        *exec.Cmd      // 子进程句柄
+	serverInfo ServerInfo         // 连接的服务器信息
+	connected  bool               // 连接状态
+	stdin      io.WriteCloser     // 子进程 stdin
+	stdout     io.Reader          // 子进程 stdout
+	cmd        *exec.Cmd          // 子进程句柄
 	cancel     context.CancelFunc // 用于终止 reader goroutine
 
-	mu          sync.Mutex                // 并发保护
-	requestID   int64                     // 请求 ID 计数器
+	mu          sync.Mutex                      // 并发保护
+	requestID   int64                           // 请求 ID 计数器
 	pendingReqs map[int64]chan *JSONRPCResponse // 待处理请求
 }
 
-// NewMCPClient 创建 MCP 客户端实例。
+// NewMCPClient 创建一个新的 MCP 客户端实例。
 func NewMCPClient() *MCPClient {
 	return &MCPClient{
-		requestID:   1,
 		pendingReqs: make(map[int64]chan *JSONRPCResponse),
 	}
 }
 
-// Connect 通过启动子进程连接到 MCP 服务器。
-// command 是服务器可执行文件路径，args 是命令行参数，env 是环境变量。
-// 连接后发送 initialize 请求完成握手。
-func (c *MCPClient) Connect(ctx context.Context, command string, args []string, env []string) error {
-	c.mu.Lock()
-	if c.connected {
-		c.mu.Unlock()
-		return fmt.Errorf("客户端已连接")
-	}
-	c.mu.Unlock()
+// ───────────────────────────── 连接管理 ─────────────────────────────
 
-	// 验证命令路径
-	if err := validateMCPCommand(command); err != nil {
+// Connect 启动 MCP 服务器进程并建立连接。
+func (c *MCPClient) Connect(ctx context.Context, config ClientConfig) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.connected {
+		return fmt.Errorf("already connected")
+	}
+
+	command, args, err := c.parseCommand(config.Command)
+	if err != nil {
 		return err
 	}
 
-	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Env = env
+	cmdCtx, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
 
-	// 设置 stdin/stdout 管道
+	cmd := exec.CommandContext(cmdCtx, command, args...)
+	cmd.Env = append(os.Environ(), config.Env...)
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		cancel()
 		return fmt.Errorf("创建 stdin 管道失败: %w", err)
 	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		cancel()
 		return fmt.Errorf("创建 stdout 管道失败: %w", err)
 	}
 
-	cmd.Stderr = os.Stderr // 子进程的 stderr 直接输出
-
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("启动 MCP 服务器 %s 失败: %w", command, err)
+		cancel()
+		return fmt.Errorf("启动 MCP 服务器失败: %w", err)
 	}
 
-	readerCtx, cancel := context.WithCancel(ctx)
-
-	c.mu.Lock()
-	c.cancel = cancel
-	c.connected = true
 	c.stdin = stdin
 	c.stdout = stdout
 	c.cmd = cmd
-	c.mu.Unlock()
+	c.requestID = 0
+	c.pendingReqs = make(map[int64]chan *JSONRPCResponse)
 
-	c.startReader(readerCtx, stdout)
-
-	// 发送 initialize 请求
-	initParams := map[string]any{
-		"protocolVersion": "2024-11-05",
-		"capabilities":    map[string]any{},
-		"clientInfo": map[string]any{
-			"name":    "nexus-acp-client",
-			"version": "1.0.0",
+	// 初始化握手
+	initReq := JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      c.requestID,
+		Method:  "initialize",
+		Params: map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{},
+			"clientInfo": map[string]any{
+				"name":    "nexus-agent",
+				"version": "1.0.0",
+			},
 		},
 	}
+	c.requestID++
 
-	result, err := c.doRequest(ctx, "initialize", initParams)
+	data, err := json.Marshal(initReq)
 	if err != nil {
-		c.mu.Lock()
-		c.connected = false
-		c.mu.Unlock()
-		c.cleanup()
-		return fmt.Errorf("MCP 初始化失败: %w", err)
+		cancel()
+		return fmt.Errorf("序列化初始化请求失败: %w", err)
+	}
+
+	if _, err := fmt.Fprintln(stdin, string(data)); err != nil {
+		cancel()
+		return fmt.Errorf("发送初始化请求失败: %w", err)
+	}
+
+	// 读取初始化响应
+	reader := bufio.NewReader(stdout)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		cancel()
+		return fmt.Errorf("读取初始化响应失败: %w", err)
+	}
+
+	var initResp JSONRPCResponse
+	if err := json.Unmarshal([]byte(line), &initResp); err != nil {
+		cancel()
+		return fmt.Errorf("解析初始化响应失败: %w", err)
+	}
+
+	if initResp.Error != nil {
+		cancel()
+		return fmt.Errorf("MCP 初始化错误: [%d] %s", initResp.Error.Code, initResp.Error.Message)
 	}
 
 	// 解析服务器信息
-	if srvInfo, ok := result["serverInfo"].(map[string]any); ok {
-		c.mu.Lock()
-		if name, ok := srvInfo["name"].(string); ok {
-			c.serverInfo.Name = name
-		}
-		if ver, ok := srvInfo["version"].(string); ok {
-			c.serverInfo.Version = ver
-		}
-		c.mu.Unlock()
+	if resultBytes, err := json.Marshal(initResp.Result); err == nil {
+		_ = json.Unmarshal(resultBytes, &c.serverInfo)
 	}
 
-	slog.Info("MCP client connected",
-		"server", c.serverInfo.Name,
-		"version", c.serverInfo.Version,
-	)
+	// 发送 initialized 通知
+	initializedReq := JSONRPCRequest{
+		JSONRPC: "2.0",
+		Method:  "notifications/initialized",
+	}
+	notifData, _ := json.Marshal(initializedReq)
+	_, _ = fmt.Fprintln(stdin, string(notifData))
+
+	// 启动后台 reader
+	c.startReader(cmdCtx, stdout)
+	c.connected = true
+
+	slog.Info("MCP client connected", "server", c.serverInfo.Name, "command", config.Command)
+	return nil
+}
+
+// Disconnect 关闭与 MCP 服务器的连接。
+func (c *MCPClient) Disconnect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.connected {
+		return nil
+	}
+
+	c.connected = false
+
+	if c.cancel != nil {
+		c.cancel()
+	}
+
+	if c.stdin != nil {
+		_ = c.stdin.Close()
+	}
+
+	if c.cmd != nil && c.cmd.Process != nil {
+		_ = c.cmd.Process.Kill()
+		_ = c.cmd.Wait()
+	}
 
 	return nil
 }
+
+// IsConnected 返回连接状态。
+func (c *MCPClient) IsConnected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connected
+}
+
+// GetServerInfo 返回连接的服务器信息。
+func (c *MCPClient) GetServerInfo() ServerInfo {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.serverInfo
+}
+
+// ───────────────────────────── 后台读取 ─────────────────────────────
 
 // startReader 启动后台读取协程，读取服务端响应。
 func (c *MCPClient) startReader(ctx context.Context, stdout io.Reader) {
@@ -178,6 +244,7 @@ func (c *MCPClient) startReader(ctx context.Context, stdout io.Reader) {
 							}
 						}
 						c.mu.Unlock()
+
 						if targetCh != nil {
 							func() {
 								defer func() {
@@ -198,109 +265,26 @@ func (c *MCPClient) startReader(ctx context.Context, stdout io.Reader) {
 }
 
 // CallTool 调用 MCP 服务器上的指定工具。
-// name 是工具名称，args 是工具参数。
-// 返回工具执行结果的文本内容和可能的错误。
 func (c *MCPClient) CallTool(ctx context.Context, name string, args map[string]any) (string, error) {
 	c.mu.Lock()
 	if !c.connected {
 		c.mu.Unlock()
 		return "", fmt.Errorf("客户端未连接")
 	}
-	c.mu.Unlock()
 
 	params := map[string]any{
 		"name":      name,
 		"arguments": args,
 	}
-
 	result, err := c.doRequest(ctx, "tools/call", params)
-	if err != nil {
-		return "", err
-	}
-
-	// 检查是否为错误响应
-	if isError, _ := result["isError"].(bool); isError {
-		return "", fmt.Errorf("工具 %q 执行返回错误", name)
-	}
-
-	// 提取结果文本
-	content, ok := result["content"].([]any)
-	if !ok || len(content) == 0 {
-		return "", nil
-	}
-
-	if first, ok := content[0].(map[string]any); ok {
-		if text, ok := first["text"].(string); ok {
-			return text, nil
-		}
-	}
-
-	return "", fmt.Errorf("无法解析工具结果")
-}
-
-// Disconnect 断开与 MCP 服务器的连接。
-// cleanup 清理子进程和资源。
-func (c *MCPClient) cleanup() {
-	if c.cancel != nil {
-		c.cancel()
-	}
-
-	if c.stdin != nil {
-		c.stdin.Close()
-	}
-
-	if c.cmd != nil {
-		c.cmd.Process.Kill()
-		c.cmd.Wait()
-	}
-
-	// 关闭所有等待中的响应通道
-	c.mu.Lock()
-	for id, ch := range c.pendingReqs {
-		close(ch)
-		delete(c.pendingReqs, id)
-	}
-	c.mu.Unlock()
-}
-
-func (c *MCPClient) Disconnect() error {
-	c.mu.Lock()
-	connected := c.connected
-	c.connected = false
-	c.mu.Unlock()
-
-	if !connected {
-		return nil
-	}
-
-	c.cleanup()
-
-	slog.Info("MCP client disconnected")
-	return nil
-}
-
-// validateMCPCommand 验证 MCP 服务器命令路径。
-func validateMCPCommand(command string) error {
-	if command == "" {
-		return fmt.Errorf("命令不能为空")
-	}
-	if !filepath.IsAbs(command) {
-		return fmt.Errorf("MCP 服务器命令必须是绝对路径: %s", command)
-	}
-	info, err := os.Stat(command)
-	if err != nil {
-		return fmt.Errorf("MCP 服务器命令不存在: %s", command)
-	}
-	if info.IsDir() {
-		return fmt.Errorf("MCP 服务器命令不能是目录: %s", command)
-	}
-	return nil
+	return c.extractTextResult(result, err)
 }
 
 // ───────────────────────────── 内部请求机制 ─────────────────────────────
 
 // doRequest 发送一个 JSON-RPC 请求并等待响应。
 func (c *MCPClient) doRequest(ctx context.Context, method string, params map[string]any) (map[string]any, error) {
+	// 注册请求到 pendingReqs
 	c.mu.Lock()
 	id := c.requestID
 	c.requestID++
@@ -308,6 +292,7 @@ func (c *MCPClient) doRequest(ctx context.Context, method string, params map[str
 	c.pendingReqs[id] = ch
 	c.mu.Unlock()
 
+	// 确保请求完成后清理 pendingReqs
 	defer func() {
 		c.mu.Lock()
 		delete(c.pendingReqs, id)
@@ -326,16 +311,14 @@ func (c *MCPClient) doRequest(ctx context.Context, method string, params map[str
 		return nil, fmt.Errorf("序列化请求失败: %w", err)
 	}
 
-	// 写入 stdin（锁覆盖整个写入，防止并发消息交错）
+	// 写入 stdin（锁仅覆盖写入操作，防止并发消息交错）
 	c.mu.Lock()
 	stdin := c.stdin
+	c.mu.Unlock()
 	if stdin == nil {
-		c.mu.Unlock()
 		return nil, fmt.Errorf("stdin 管道未建立")
 	}
-	_, err = fmt.Fprintln(stdin, string(data))
-	c.mu.Unlock()
-	if err != nil {
+	if _, err := fmt.Fprintln(stdin, string(data)); err != nil {
 		return nil, fmt.Errorf("写入请求失败: %w", err)
 	}
 

@@ -4,10 +4,10 @@
 package agent
 
 import (
-	"sync"
 	"fmt"
 	"regexp"
 	"strconv"
+	"sync"
 	"time"
 
 	"nexus-agent/internal/llm"
@@ -43,10 +43,10 @@ const (
 // RecoveryRecipe 定义一条恢复配方。
 // 当条件函数返回 true 时，引擎选择该配方对应的恢复动作。
 type RecoveryRecipe struct {
-	Name      string                                               // 配方名称 (用于日志)
-	Condition func(err error, classified *llm.ClassifiedError) bool // 匹配条件
+	Name      string                                                          // 配方名称 (用于日志)
+	Condition func(err error, classified *llm.ClassifiedError) bool           // 匹配条件
 	Build     func(err error, classified *llm.ClassifiedError) RecoveryAction // 构建恢复动作
-	Priority  int                                                  // 优先级 (数字越小越优先)
+	Priority  int                                                             // 优先级 (数字越小越优先)
 }
 
 // ───────────────────────────── 恢复引擎 ─────────────────────────────

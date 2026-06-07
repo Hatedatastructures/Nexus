@@ -8,46 +8,46 @@ import (
 
 func TestScrubAnthropic(t *testing.T) {
 	tests := []struct {
-		name         string
-		deltas       []string
-		wantVisible  string
-		wantThink    string
+		name        string
+		deltas      []string
+		wantVisible string
+		wantThink   string
 	}{
 		{
-			name:         "<think>hello\nworld</think> 应输出空",
-			deltas:       []string{"<think>hello\nworld</think>"},
-			wantVisible:  "",
-			wantThink:    "hello\nworld",
+			name:        "<think>hello\nworld</think> 应输出空",
+			deltas:      []string{"<think>hello\nworld</think>"},
+			wantVisible: "",
+			wantThink:   "hello\nworld",
 		},
 		{
-			name:         "标签前后有文本",
-			deltas:       []string{"before<think>inside</think>after"},
-			wantVisible:  "beforeafter",
-			wantThink:    "inside",
+			name:        "标签前后有文本",
+			deltas:      []string{"before<think>inside</think>after"},
+			wantVisible: "beforeafter",
+			wantThink:   "inside",
 		},
 		{
-			name:         "多块 delta 传递",
-			deltas:       []string{"before<think>thin", "king content</think>after"},
-			wantVisible:  "beforeafter",
-			wantThink:    "thinking content",
+			name:        "多块 delta 传递",
+			deltas:      []string{"before<think>thin", "king content</think>after"},
+			wantVisible: "beforeafter",
+			wantThink:   "thinking content",
 		},
 		{
-			name:         "空思考内容",
-			deltas:       []string{"before<think></think>after"},
-			wantVisible:  "beforeafter",
-			wantThink:    "",
+			name:        "空思考内容",
+			deltas:      []string{"before<think></think>after"},
+			wantVisible: "beforeafter",
+			wantThink:   "",
 		},
 		{
-			name:         "多行思考内容",
-			deltas:       []string{"<think>line1\nline2\nline3</think>"},
-			wantVisible:  "",
-			wantThink:    "line1\nline2\nline3",
+			name:        "多行思考内容",
+			deltas:      []string{"<think>line1\nline2\nline3</think>"},
+			wantVisible: "",
+			wantThink:   "line1\nline2\nline3",
 		},
 		{
-			name:         "多个 think 标签",
-			deltas:       []string{"a<think>one</think>b<think>two</think>c"},
-			wantVisible:  "abc",
-			wantThink:    "onetwo",
+			name:        "多个 think 标签",
+			deltas:      []string{"a<think>one</think>b<think>two</think>c"},
+			wantVisible: "abc",
+			wantThink:   "onetwo",
 		},
 	}
 
@@ -74,28 +74,28 @@ func TestScrubAnthropic(t *testing.T) {
 
 func TestScrubDeepSeek(t *testing.T) {
 	tests := []struct {
-		name         string
-		deltas       []string
-		wantVisible  string
-		wantThink    string
+		name        string
+		deltas      []string
+		wantVisible string
+		wantThink   string
 	}{
 		{
-			name:         "完整 DeepSeek 标签",
-			deltas:       []string{"<|thinking|>deep thoughts<|/thinking|>"},
-			wantVisible:  "",
-			wantThink:    "deep thoughts",
+			name:        "完整 DeepSeek 标签",
+			deltas:      []string{"<|thinking|>deep thoughts<|/thinking|>"},
+			wantVisible: "",
+			wantThink:   "deep thoughts",
 		},
 		{
-			name:         "标签前后有文本",
-			deltas:       []string{"before<|thinking|>inside<|/thinking|>after"},
-			wantVisible:  "beforeafter",
-			wantThink:    "inside",
+			name:        "标签前后有文本",
+			deltas:      []string{"before<|thinking|>inside<|/thinking|>after"},
+			wantVisible: "beforeafter",
+			wantThink:   "inside",
 		},
 		{
-			name:         "多块 delta 传递",
-			deltas:       []string{"<|think", "ing|>content<|/thin", "king|>"},
-			wantVisible:  "",
-			wantThink:    "content",
+			name:        "多块 delta 传递",
+			deltas:      []string{"<|think", "ing|>content<|/thin", "king|>"},
+			wantVisible: "",
+			wantThink:   "content",
 		},
 	}
 
@@ -122,42 +122,42 @@ func TestScrubDeepSeek(t *testing.T) {
 
 func TestScrubPartialTag(t *testing.T) {
 	tests := []struct {
-		name         string
-		deltas       []string
-		wantVisible  string
-		wantThink    string
+		name        string
+		deltas      []string
+		wantVisible string
+		wantThink   string
 	}{
 		{
 			// <think = 7 chars: split as <thin + k>
-			name:         "Anthropic 开始标签被分割",
-			deltas:       []string{"<thin", "k>content</thin", "k>"},
-			wantVisible:  "",
-			wantThink:    "content",
+			name:        "Anthropic 开始标签被分割",
+			deltas:      []string{"<thin", "k>content</thin", "k>"},
+			wantVisible: "",
+			wantThink:   "content",
 		},
 		{
 			// </think = 8 chars: split as </thi + nk>
-			name:         "Anthropic 结束标签被分割",
-			deltas:       []string{"<think>content</thi", "nk>"},
-			wantVisible:  "",
-			wantThink:    "content",
+			name:        "Anthropic 结束标签被分割",
+			deltas:      []string{"<think>content</thi", "nk>"},
+			wantVisible: "",
+			wantThink:   "content",
 		},
 		{
-			name:         "每个字符一个 delta",
-			deltas:       []string{"<", "t", "h", "i", "n", "k", ">", "a", "b", "c", "<", "/", "t", "h", "i", "n", "k", ">"},
-			wantVisible:  "",
-			wantThink:    "abc",
+			name:        "每个字符一个 delta",
+			deltas:      []string{"<", "t", "h", "i", "n", "k", ">", "a", "b", "c", "<", "/", "t", "h", "i", "n", "k", ">"},
+			wantVisible: "",
+			wantThink:   "abc",
 		},
 		{
-			name:         "标签匹配失败回吐",
-			deltas:       []string{"<thinkX"},
-			wantVisible:  "<thinkX",
-			wantThink:    "",
+			name:        "标签匹配失败回吐",
+			deltas:      []string{"<thinkX"},
+			wantVisible: "<thinkX",
+			wantThink:   "",
 		},
 		{
-			name:         "部分匹配后失败回吐",
-			deltas:       []string{"<thi", "n", "X"},
-			wantVisible:  "<thinX",
-			wantThink:    "",
+			name:        "部分匹配后失败回吐",
+			deltas:      []string{"<thi", "n", "X"},
+			wantVisible: "<thinX",
+			wantThink:   "",
 		},
 	}
 

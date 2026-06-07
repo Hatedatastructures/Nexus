@@ -76,8 +76,11 @@ func (m *MockProvider) CreateChatCompletion(ctx context.Context, req *llm.ChatRe
 	}
 
 	// 默认返回一个简单的成功响应
+	m.mu.Lock()
+	n := len(m.ChatRequests)
+	m.mu.Unlock()
 	return &llm.ChatResponse{
-		ID:      fmt.Sprintf("mock-resp-%d", len(m.ChatRequests)),
+		ID:      fmt.Sprintf("mock-resp-%d", n),
 		Model:   req.Model,
 		Content: "mock response",
 		Usage: &llm.TokenUsage{

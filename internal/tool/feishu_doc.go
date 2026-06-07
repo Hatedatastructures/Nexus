@@ -50,10 +50,10 @@ func GetFeishuClient() FeishuClient {
 
 // DefaultFeishuClient 默认飞书客户端实现。
 type DefaultFeishuClient struct {
-	appID       string
-	appSecret   string
-	baseURL     string
-	httpClient  *http.Client
+	appID      string
+	appSecret  string
+	baseURL    string
+	httpClient *http.Client
 
 	tokenMu     sync.Mutex
 	tokenCache  string
@@ -86,7 +86,7 @@ func (c *DefaultFeishuClient) GetTenantAccessToken(ctx context.Context) (string,
 	}
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
-	return "", fmt.Errorf("序列化请求体失败: %w", err)
+		return "", fmt.Errorf("序列化请求体失败: %w", err)
 	}
 
 	url := c.baseURL + "/open-apis/auth/v3/tenant_access_token/internal"
@@ -100,7 +100,7 @@ func (c *DefaultFeishuClient) GetTenantAccessToken(ctx context.Context) (string,
 	if err != nil {
 		return "", fmt.Errorf("HTTP 请求失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
@@ -156,7 +156,7 @@ func (c *DefaultFeishuClient) Request(ctx context.Context, method, uri string, b
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024)) // 最大 1MB
 	if err != nil {
@@ -180,9 +180,9 @@ func bytesReader(data []byte) *strings.Reader {
 // FeishuDocReadTool 飞书文档读取工具。
 type FeishuDocReadTool struct{}
 
-func (t *FeishuDocReadTool) Name() string { return "feishu_doc_read" }
-func (t *FeishuDocReadTool) Toolset() string { return "feishu_doc" }
-func (t *FeishuDocReadTool) Emoji() string { return "📄" }
+func (t *FeishuDocReadTool) Name() string        { return "feishu_doc_read" }
+func (t *FeishuDocReadTool) Toolset() string     { return "feishu_doc" }
+func (t *FeishuDocReadTool) Emoji() string       { return "📄" }
 func (t *FeishuDocReadTool) MaxResultChars() int { return 50000 }
 
 func (t *FeishuDocReadTool) Description() string {
@@ -266,10 +266,4 @@ func (t *FeishuDocReadTool) Execute(ctx context.Context, args map[string]any) (s
 		"success": true,
 		"content": apiResp.Data.Content,
 	}), nil
-}
-
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&FeishuDocReadTool{})
 }

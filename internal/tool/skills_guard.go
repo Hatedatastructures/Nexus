@@ -21,20 +21,20 @@ type TrustLevel string
 
 const (
 	TrustBuiltin      TrustLevel = "builtin"       // 内置技能 (最高信任)
-	TrustTrusted      TrustLevel = "trusted"        // 受信任的技能
-	TrustCommunity    TrustLevel = "community"      // 社区技能
-	TrustAgentCreated TrustLevel = "agent_created"  // 代理创建的技能 (最低信任)
+	TrustTrusted      TrustLevel = "trusted"       // 受信任的技能
+	TrustCommunity    TrustLevel = "community"     // 社区技能
+	TrustAgentCreated TrustLevel = "agent_created" // 代理创建的技能 (最低信任)
 )
 
 // ───────────────────────────── 扫描结果 ─────────────────────────────
 
 // ScanResult 表示技能安全扫描的结果。
 type ScanResult struct {
-	TrustLevel TrustLevel   `json:"trust_level"` // 技能信任级别
-	Verdict    string       `json:"verdict"`     // 扫描结论: pass / warn / block
-	Findings   []Finding    `json:"findings"`    // 发现的问题列表
-	FileCount  int          `json:"file_count"`  // 扫描的文件数量
-	TotalSize  int64        `json:"total_size"`  // 扫描内容总字节数
+	TrustLevel TrustLevel `json:"trust_level"` // 技能信任级别
+	Verdict    string     `json:"verdict"`     // 扫描结论: pass / warn / block
+	Findings   []Finding  `json:"findings"`    // 发现的问题列表
+	FileCount  int        `json:"file_count"`  // 扫描的文件数量
+	TotalSize  int64      `json:"total_size"`  // 扫描内容总字节数
 }
 
 // Finding 表示扫描发现的单个安全问题。
@@ -118,7 +118,7 @@ func initThreatPatterns() []ThreatPattern {
 // ───────────────────────────── 结构限制 ─────────────────────────────
 
 const (
-	skillMaxFiles     = 50            // 最大文件数
+	skillMaxFiles     = 50              // 最大文件数
 	skillMaxTotalSize = 1 * 1024 * 1024 // 最大总大小: 1MB
 	skillMaxFileSize  = 256 * 1024      // 单文件最大: 256KB
 )
@@ -352,20 +352,14 @@ func (t *SkillScanTool) Execute(ctx context.Context, args map[string]any) (strin
 	}
 
 	output, _ := json.Marshal(map[string]any{
-		"dir":        dir,
-		"verdict":    result.Verdict,
+		"dir":         dir,
+		"verdict":     result.Verdict,
 		"trust_level": result.TrustLevel,
-		"findings":   result.Findings,
-		"file_count": result.FileCount,
-		"total_size": result.TotalSize,
+		"findings":    result.Findings,
+		"file_count":  result.FileCount,
+		"total_size":  result.TotalSize,
 	})
 
 	return string(output), nil
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	slog.Debug("registering skill security scan tool")
-	GetRegistry().Register(&SkillScanTool{})
-}

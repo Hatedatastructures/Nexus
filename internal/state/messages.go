@@ -8,6 +8,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	pkgerrors "nexus-agent/internal/errors"
 	"time"
 )
 
@@ -50,7 +52,7 @@ func (s *Store) InsertMessage(ctx context.Context, msg *MessageRecord) error {
 			nullStrOrNil(msg.Reasoning),
 		)
 		if err != nil {
-			return fmt.Errorf("插入消息失败: %w", err)
+			return pkgerrors.Wrap(pkgerrors.FileIO, "插入消息失败", err)
 		}
 
 		msgID, _ := result.LastInsertId()
@@ -115,7 +117,7 @@ func (s *Store) InsertMessagesBatch(ctx context.Context, msgs []*MessageRecord) 
 				nullStrOrNil(msg.Reasoning),
 			)
 			if err != nil {
-				return fmt.Errorf("批量插入消息失败(session=%s): %w", msg.SessionID, err)
+				return pkgerrors.Wrap(pkgerrors.FileIO, fmt.Sprintf("批量插入消息失败(session=%s)", msg.SessionID), err)
 			}
 
 			// 更新会话计数器
@@ -135,7 +137,7 @@ func (s *Store) InsertMessagesBatch(ctx context.Context, msgs []*MessageRecord) 
 				)
 			}
 			if err != nil {
-				return fmt.Errorf("更新会话计数器失败(session=%s): %w", msg.SessionID, err)
+				return pkgerrors.Wrap(pkgerrors.FileIO, fmt.Sprintf("更新会话计数器失败(session=%s)", msg.SessionID), err)
 			}
 		}
 		return nil
@@ -163,9 +165,9 @@ func (s *Store) GetMessages(ctx context.Context, sessionID string, limit, offset
 		sessionID, limit, offset,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("查询消息失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.FileIO, "查询消息失败", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var messages []*MessageRecord
 	for rows.Next() {
@@ -179,7 +181,7 @@ func (s *Store) GetMessages(ctx context.Context, sessionID string, limit, offset
 			&toolCallID, &toolCalls, &toolName,
 			&msg.Timestamp, &tokenCount, &finishReason, &reasoning,
 		); err != nil {
-			return nil, fmt.Errorf("扫描消息行失败: %w", err)
+			return nil, pkgerrors.Wrap(pkgerrors.FileIO, "扫描消息行失败", err)
 		}
 
 		msg.Content = nullStr(content)
@@ -213,7 +215,7 @@ func (s *Store) GetMessageCount(ctx context.Context, sessionID string) (int, err
 		sessionID,
 	).Scan(&count)
 	if err != nil {
-		return 0, fmt.Errorf("查询消息计数失败: %w", err)
+		return 0, pkgerrors.Wrap(pkgerrors.FileIO, "查询消息计数失败", err)
 	}
 	return count, nil
 }

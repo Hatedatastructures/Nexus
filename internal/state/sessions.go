@@ -9,8 +9,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
 	"log/slog"
 	"math/rand/v2"
+	pkgerrors "nexus-agent/internal/errors"
 	"strings"
 	"time"
 )
@@ -18,13 +20,13 @@ import (
 // ── 写事务重试 ──────────────────────────────────────────────
 
 const (
-	writeMaxRetries = 15                     // 最大重试次数
-	writeRetryMinMs = 20                     // 最小抖动时间 (毫秒)
-	writeRetryMaxMs = 150                    // 最大抖动时间 (毫秒)
-	checkpointEvery = 50                     // 每 N 次写入尝试一次 WAL checkpoint
+	writeMaxRetries = 15  // 最大重试次数
+	writeRetryMinMs = 20  // 最小抖动时间 (毫秒)
+	writeRetryMaxMs = 150 // 最大抖动时间 (毫秒)
+	checkpointEvery = 50  // 每 N 次写入尝试一次 WAL checkpoint
 )
 
-	// writeCount 已移入 Store 结构体，参见 db.go
+// writeCount 已移入 Store 结构体，参见 db.go
 
 // executeWrite 带重试的写事务执行器。
 //
@@ -47,7 +49,7 @@ func (s *Store) executeWrite(ctx context.Context, fn func(*sql.DB) error) error 
 				time.Sleep(jitterSleep())
 				continue
 			}
-			return fmt.Errorf("BEGIN IMMEDIATE 失败: %w", err)
+			return pkgerrors.Wrap(pkgerrors.FileIO, "BEGIN IMMEDIATE 失败", err)
 		}
 
 		// 执行写操作
@@ -72,7 +74,7 @@ func (s *Store) executeWrite(ctx context.Context, fn func(*sql.DB) error) error 
 				time.Sleep(jitterSleep())
 				continue
 			}
-			return fmt.Errorf("COMMIT 失败: %w", err)
+			return pkgerrors.Wrap(pkgerrors.FileIO, "COMMIT 失败", err)
 		}
 
 		if needCheckpoint {
@@ -83,9 +85,9 @@ func (s *Store) executeWrite(ctx context.Context, fn func(*sql.DB) error) error 
 	}
 
 	if lastErr != nil {
-		return fmt.Errorf("数据库写操作重试%d次后仍失败: %w", writeMaxRetries, lastErr)
+		return pkgerrors.Wrap(pkgerrors.FileIO, fmt.Sprintf("数据库写操作重试%d次后仍失败", writeMaxRetries), lastErr)
 	}
-	return fmt.Errorf("数据库写操作重试%d次后仍失败", writeMaxRetries)
+	return pkgerrors.New(pkgerrors.FileIO, fmt.Sprintf("数据库写操作重试%d次后仍失败", writeMaxRetries))
 }
 
 // jitterSleep 返回 20-150ms 之间的随机等待时长。
@@ -113,7 +115,7 @@ func (s *Store) tryCheckpoint(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	defer result.Close()
+	defer func() { _ = result.Close() }()
 
 	// wal_checkpoint 返回三列: busy, total, checkpointed
 	var busy, total, checkpointed int
@@ -275,15 +277,15 @@ func (s *Store) ListSessions(ctx context.Context, filter *SessionFilter) ([]*Ses
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("查询会话列表失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.FileIO, "查询会话列表失败", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []*Session
 	for rows.Next() {
 		sess, err := scanSessionRow(rows)
 		if err != nil {
-			return nil, fmt.Errorf("扫描会话行失败: %w", err)
+			return nil, pkgerrors.Wrap(pkgerrors.FileIO, "扫描会话行失败", err)
 		}
 		sessions = append(sessions, sess)
 	}
@@ -346,108 +348,3 @@ func (s *Store) getSessionLocked(ctx context.Context, id string) (*Session, erro
 	return scanSession(row)
 }
 
-// scanSession 从 sql.Row 扫描一个 Session 对象
-func scanSession(row *sql.Row) (*Session, error) {
-	session := &Session{}
-	var endedAt, estimatedCost sql.NullFloat64
-	var userID, model, modelConfig, systemPrompt, parentSessionID, endReason, title sql.NullString
-	var messageCount, toolCallCount, inputTokens, outputTokens sql.NullInt64
-	var cacheReadTokens, cacheWriteTokens, reasoningTokens, apiCallCount sql.NullInt64
-
-	err := row.Scan(
-		&session.ID, &session.Source,
-		&userID, &model, &modelConfig, &systemPrompt, &parentSessionID,
-		&session.StartedAt, &endedAt, &endReason, &title,
-		&messageCount, &toolCallCount, &inputTokens, &outputTokens,
-		&cacheReadTokens, &cacheWriteTokens, &reasoningTokens, &estimatedCost, &apiCallCount,
-	)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("扫描会话失败: %w", err)
-	}
-
-	session.UserID = nullStr(userID)
-	session.Model = nullStr(model)
-	session.ModelConfig = nullStr(modelConfig)
-	session.SystemPrompt = nullStr(systemPrompt)
-	session.ParentSessionID = nullStr(parentSessionID)
-	session.EndedAt = nullFloat(endedAt)
-	session.EndReason = nullStr(endReason)
-	session.Title = nullStr(title)
-	session.MessageCount = int(nullInt(messageCount))
-	session.ToolCallCount = int(nullInt(toolCallCount))
-	session.InputTokens = int(nullInt(inputTokens))
-	session.OutputTokens = int(nullInt(outputTokens))
-	session.CacheReadTokens = int(nullInt(cacheReadTokens))
-	session.CacheWriteTokens = int(nullInt(cacheWriteTokens))
-	session.ReasoningTokens = int(nullInt(reasoningTokens))
-	session.APICallCount = int(nullInt(apiCallCount))
-	session.EstimatedCostUSD = nullFloat(estimatedCost)
-
-	return session, nil
-}
-
-// scanSessionRow 从 sql.Rows 扫描一个 Session 对象
-func scanSessionRow(rows *sql.Rows) (*Session, error) {
-	session := &Session{}
-	var endedAt, estimatedCost sql.NullFloat64
-	var userID, model, modelConfig, systemPrompt, parentSessionID, endReason, title sql.NullString
-	var messageCount, toolCallCount, inputTokens, outputTokens sql.NullInt64
-	var cacheReadTokens, cacheWriteTokens, reasoningTokens, apiCallCount sql.NullInt64
-
-	err := rows.Scan(
-		&session.ID, &session.Source,
-		&userID, &model, &modelConfig, &systemPrompt, &parentSessionID,
-		&session.StartedAt, &endedAt, &endReason, &title,
-		&messageCount, &toolCallCount, &inputTokens, &outputTokens,
-		&cacheReadTokens, &cacheWriteTokens, &reasoningTokens, &estimatedCost, &apiCallCount,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	session.UserID = nullStr(userID)
-	session.Model = nullStr(model)
-	session.ModelConfig = nullStr(modelConfig)
-	session.SystemPrompt = nullStr(systemPrompt)
-	session.ParentSessionID = nullStr(parentSessionID)
-	session.EndedAt = nullFloat(endedAt)
-	session.EndReason = nullStr(endReason)
-	session.Title = nullStr(title)
-	session.MessageCount = int(nullInt(messageCount))
-	session.ToolCallCount = int(nullInt(toolCallCount))
-	session.InputTokens = int(nullInt(inputTokens))
-	session.OutputTokens = int(nullInt(outputTokens))
-	session.CacheReadTokens = int(nullInt(cacheReadTokens))
-	session.CacheWriteTokens = int(nullInt(cacheWriteTokens))
-	session.ReasoningTokens = int(nullInt(reasoningTokens))
-	session.APICallCount = int(nullInt(apiCallCount))
-	session.EstimatedCostUSD = nullFloat(estimatedCost)
-
-	return session, nil
-}
-
-// ── 可空类型辅助 ────────────────────────────────────────────
-
-func nullStr(ns sql.NullString) string {
-	if ns.Valid {
-		return ns.String
-	}
-	return ""
-}
-
-func nullFloat(nf sql.NullFloat64) float64 {
-	if nf.Valid {
-		return nf.Float64
-	}
-	return 0
-}
-
-func nullInt(ni sql.NullInt64) int64 {
-	if ni.Valid {
-		return ni.Int64
-	}
-	return 0
-}

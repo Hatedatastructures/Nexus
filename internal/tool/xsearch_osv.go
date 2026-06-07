@@ -93,7 +93,7 @@ func (t *XSearchTool) Execute(ctx context.Context, args map[string]any) (string,
 	if err != nil {
 		return ToolError(fmt.Sprintf("请求失败: %v", err)), nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
@@ -142,16 +142,16 @@ func (t *XSearchTool) Execute(ctx context.Context, args map[string]any) (string,
 
 	// 格式化为文本输出
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("搜索 \"%s\" 共找到 %d 条结果:\n\n", query, result.Meta.ResultCount))
+	fmt.Fprintf(&sb, "搜索 \"%s\" 共找到 %d 条结果:\n\n", query, result.Meta.ResultCount)
 	for i, tw := range result.Data {
 		a := userMap[tw.AuthorID]
-		sb.WriteString(fmt.Sprintf("--- [%d] ---\n", i+1))
-		sb.WriteString(fmt.Sprintf("作者: %s (@%s)\n", a.Name, a.Username))
-		sb.WriteString(fmt.Sprintf("内容: %s\n", tw.Text))
-		sb.WriteString(fmt.Sprintf("时间: %s\n", tw.CreatedAt))
-		sb.WriteString(fmt.Sprintf("互动: %d 转发, %d 回复, %d 点赞, %d 引用\n",
-			tw.Metrics.Retweets, tw.Metrics.Replies, tw.Metrics.Likes, tw.Metrics.Quotes))
-		sb.WriteString(fmt.Sprintf("链接: https://x.com/%s/status/%s\n\n", a.Username, tw.ID))
+		fmt.Fprintf(&sb, "--- [%d] ---\n", i+1)
+		fmt.Fprintf(&sb, "作者: %s (@%s)\n", a.Name, a.Username)
+		fmt.Fprintf(&sb, "内容: %s\n", tw.Text)
+		fmt.Fprintf(&sb, "时间: %s\n", tw.CreatedAt)
+		fmt.Fprintf(&sb, "互动: %d 转发, %d 回复, %d 点赞, %d 引用\n",
+			tw.Metrics.Retweets, tw.Metrics.Replies, tw.Metrics.Likes, tw.Metrics.Quotes)
+		fmt.Fprintf(&sb, "链接: https://x.com/%s/status/%s\n\n", a.Username, tw.ID)
 	}
 
 	return ToolResult(map[string]any{
@@ -240,7 +240,7 @@ func (t *OSVCheckTool) Execute(ctx context.Context, args map[string]any) (string
 	if err != nil {
 		return ToolError(fmt.Sprintf("请求失败: %v", err)), nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
@@ -253,9 +253,9 @@ func (t *OSVCheckTool) Execute(ctx context.Context, args map[string]any) (string
 
 	var osvResp struct {
 		Vulns []struct {
-			ID        string `json:"id"`
-			Summary   string `json:"summary"`
-			Severity  []struct {
+			ID       string `json:"id"`
+			Summary  string `json:"summary"`
+			Severity []struct {
 				Type  string `json:"type"`
 				Score string `json:"score"`
 			} `json:"severity"`
@@ -311,10 +311,3 @@ func (t *OSVCheckTool) Execute(ctx context.Context, args map[string]any) (string
 	}), nil
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	r := GetRegistry()
-	r.Register(&XSearchTool{})
-	r.Register(&OSVCheckTool{})
-}

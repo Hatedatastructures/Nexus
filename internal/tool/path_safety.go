@@ -46,13 +46,13 @@ var blockedWritePrefixes = []string{
 
 // blockedProjectEnvBasenames 是项目目录中禁止读取的 env 文件名。
 var blockedProjectEnvBasenames = map[string]bool{
-	".env":            true,
-	".env.local":      true,
+	".env":             true,
+	".env.local":       true,
 	".env.development": true,
-	".env.production": true,
-	".env.test":       true,
-	".env.staging":    true,
-	".envrc":          true,
+	".env.production":  true,
+	".env.test":        true,
+	".env.staging":     true,
+	".envrc":           true,
 }
 
 // nexusControlFiles 是 Nexus 控制平面文件（禁止工具写入）。

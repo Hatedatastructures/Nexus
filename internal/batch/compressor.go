@@ -17,10 +17,10 @@ import (
 
 // CompressionConfig 轨迹压缩配置。
 type CompressionConfig struct {
-	ProtectFirstN int           // 保护前 N 轮 (默认 4: system + human + gpt + tool)
-	ProtectLastN  int           // 保护后 N 轮 (默认 2)
-	MaxSummaryLen int           // 摘要最大字符数 (默认 2000)
-	Concurrency   int           // 并发压缩数 (默认 3)
+	ProtectFirstN        int           // 保护前 N 轮 (默认 4: system + human + gpt + tool)
+	ProtectLastN         int           // 保护后 N 轮 (默认 2)
+	MaxSummaryLen        int           // 摘要最大字符数 (默认 2000)
+	Concurrency          int           // 并发压缩数 (默认 3)
 	PerTrajectoryTimeout time.Duration // 每轨迹超时 (默认 5 分钟)
 }
 
@@ -133,7 +133,7 @@ func (c *Compressor) summarizeMiddle(ctx context.Context, middle []TrajectoryTur
 	// 构建摘要提示
 	var conversation strings.Builder
 	for _, turn := range middle {
-		conversation.WriteString(fmt.Sprintf("[%s]: %s\n\n", turn.From, truncateStr(turn.Value, 500)))
+		fmt.Fprintf(&conversation, "[%s]: %s\n\n", turn.From, truncateStr(turn.Value, 500))
 	}
 
 	prompt := fmt.Sprintf(`请将以下对话压缩为简洁摘要（不超过 %d 字符）。

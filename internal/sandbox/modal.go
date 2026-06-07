@@ -88,11 +88,11 @@ func (e *ModalEnvironment) Execute(ctx context.Context, command string, opts *Ex
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, fmt.Errorf("Modal API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("modal API 返回 HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
@@ -125,7 +125,7 @@ func (e *ModalEnvironment) Execute(ctx context.Context, command string, opts *Ex
 
 // ExecuteBackground 在 Modal 沙箱中后台执行命令。
 func (e *ModalEnvironment) ExecuteBackground(ctx context.Context, command string, opts *ExecuteOptions) (ProcessHandle, error) {
-	return nil, fmt.Errorf("Modal 沙箱不支持后台执行")
+	return nil, fmt.Errorf("modal 沙箱不支持后台执行")
 }
 
 // CWD 返回当前工作目录。
@@ -162,8 +162,8 @@ func (e *ModalEnvironment) Cleanup() error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	slog.Info("Modal sandbox cleaned up", "sandbox_id", sid)
 	e.mu.Lock()
@@ -196,11 +196,11 @@ func (e *ModalEnvironment) createSandbox(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("Modal API 返回 HTTP %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("modal API 返回 HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {

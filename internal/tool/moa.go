@@ -116,7 +116,7 @@ func (p *OpenRouterProvider) Call(ctx context.Context, model string, systemPromp
 	if err != nil {
 		return "", fmt.Errorf("HTTP 请求失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {
@@ -330,7 +330,7 @@ func (t *MoATool) constructAggregatorPrompt(userPrompt string, responses []strin
 	builder.WriteString("参考响应:\n")
 
 	for i, response := range responses {
-		builder.WriteString(fmt.Sprintf("\n--- 模型 %d 响应 ---\n", i+1))
+		fmt.Fprintf(&builder, "\n--- 模型 %d 响应 ---\n", i+1)
 		builder.WriteString(response)
 		builder.WriteString("\n")
 	}
@@ -340,8 +340,3 @@ func (t *MoATool) constructAggregatorPrompt(userPrompt string, responses []strin
 	return builder.String()
 }
 
-// ───────────────────────────── 注册工具 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&MoATool{})
-}

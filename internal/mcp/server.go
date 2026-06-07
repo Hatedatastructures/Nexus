@@ -197,7 +197,7 @@ func (s *MCPServer) RunStdioLoop(ctx context.Context) error {
 
 	reader := bufio.NewReader(os.Stdin)
 	writer := bufio.NewWriter(os.Stdout)
-	defer writer.Flush()
+	defer func() { _ = writer.Flush() }()
 
 	authenticated := authToken == ""
 
@@ -266,8 +266,8 @@ func writeResponse(w *bufio.Writer, resp *JSONRPCResponse) {
 		slog.Error("failed to serialize response", "err", err)
 		return
 	}
-	fmt.Fprintln(w, string(data))
-	w.Flush()
+	_, _ = fmt.Fprintln(w, string(data))
+	_ = w.Flush()
 }
 
 // errorResponse 创建 JSON-RPC 错误响应。
@@ -287,7 +287,7 @@ func errorResponse(id any, code int, message string) *JSONRPCResponse {
 // EmptyToolRegistry 是 ToolRegistry 的空实现。
 type EmptyToolRegistry struct{}
 
-func (e *EmptyToolRegistry) ListTools() []string          { return nil }
+func (e *EmptyToolRegistry) ListTools() []string                  { return nil }
 func (e *EmptyToolRegistry) GetSchema(string) (*ToolSchema, bool) { return nil, false }
 func (e *EmptyToolRegistry) Dispatch(context.Context, string, map[string]any) (string, error) {
 	return `{"error": "no tools registered"}`, nil

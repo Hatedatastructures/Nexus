@@ -90,7 +90,7 @@ func (e *TestEnv) setEnv(key, value string) {
 	} else {
 		e.origEnv[key] = nil
 	}
-	os.Setenv(key, value)
+	_ = os.Setenv(key, value)
 }
 
 // cleanSensitiveEnv 清理敏感环境变量。
@@ -128,16 +128,16 @@ func (e *TestEnv) unsetEnv(key string) {
 	} else {
 		e.origEnv[key] = nil
 	}
-	os.Unsetenv(key)
+	_ = os.Unsetenv(key)
 }
 
 // restore 恢复所有被修改的环境变量。
 func (e *TestEnv) restore() {
 	for key, val := range e.origEnv {
 		if val == nil {
-			os.Unsetenv(key)
+			_ = os.Unsetenv(key)
 		} else {
-			os.Setenv(key, *val)
+			_ = os.Setenv(key, *val)
 		}
 	}
 }
@@ -148,12 +148,12 @@ func (e *TestEnv) restore() {
 func Setenv(t *testing.T, key, value string) {
 	t.Helper()
 	old, exists := os.LookupEnv(key)
-	os.Setenv(key, value)
+	_ = os.Setenv(key, value)
 	t.Cleanup(func() {
 		if exists {
-			os.Setenv(key, old)
+			_ = os.Setenv(key, old)
 		} else {
-			os.Unsetenv(key)
+			_ = os.Unsetenv(key)
 		}
 	})
 }
@@ -162,10 +162,10 @@ func Setenv(t *testing.T, key, value string) {
 func Unsetenv(t *testing.T, key string) {
 	t.Helper()
 	old, exists := os.LookupEnv(key)
-	os.Unsetenv(key)
+	_ = os.Unsetenv(key)
 	t.Cleanup(func() {
 		if exists {
-			os.Setenv(key, old)
+			_ = os.Setenv(key, old)
 		}
 	})
 }

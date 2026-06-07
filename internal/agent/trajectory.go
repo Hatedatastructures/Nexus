@@ -26,8 +26,8 @@ type TrajectoryEntry struct {
 
 // TrajectoryTurn 表示轨迹中的一轮对话。
 type TrajectoryTurn struct {
-	From    string `json:"from"`    // "system" / "human" / "gpt" / "tool"
-	Value   string `json:"value"`   // 内容
+	From    string `json:"from"`               // "system" / "human" / "gpt" / "tool"
+	Value   string `json:"value"`              // 内容
 	ToolUse string `json:"tool_use,omitempty"` // 工具名称 (仅 tool 角色)
 }
 
@@ -55,10 +55,10 @@ func SaveTrajectory(path string, msgs []llm.Message, model string, completed boo
 	if err != nil {
 		return fmt.Errorf("创建轨迹文件: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	w := bufio.NewWriter(f)
-	defer w.Flush()
+	defer func() { _ = w.Flush() }()
 
 	entry := convertToTrajectory(msgs, model, completed)
 	data, err := json.Marshal(entry)
@@ -69,7 +69,7 @@ func SaveTrajectory(path string, msgs []llm.Message, model string, completed boo
 	if _, err := w.Write(data); err != nil {
 		return fmt.Errorf("写入轨迹数据: %w", err)
 	}
-	w.WriteByte('\n')
+	_ = w.WriteByte('\n')
 	return nil
 }
 
@@ -82,18 +82,18 @@ func SaveTrajectoryBatch(path string, entries []TrajectoryEntry) error {
 	if err != nil {
 		return fmt.Errorf("打开轨迹文件: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	w := bufio.NewWriter(f)
-	defer w.Flush()
+	defer func() { _ = w.Flush() }()
 
 	for _, entry := range entries {
 		data, err := json.Marshal(entry)
 		if err != nil {
 			continue
 		}
-		w.Write(data)
-		w.WriteByte('\n')
+		_, _ = w.Write(data)
+		_ = w.WriteByte('\n')
 	}
 	return nil
 }

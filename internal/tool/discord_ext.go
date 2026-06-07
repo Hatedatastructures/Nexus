@@ -3,13 +3,10 @@
 package tool
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
 	"time"
@@ -18,7 +15,7 @@ import (
 // ───────────────────────────── 常量 ─────────────────────────────
 
 const (
-	discordAPIBaseURL    = "https://discord.com/api/v10"
+	discordAPIBaseURL     = "https://discord.com/api/v10"
 	discordRequestTimeout = 15 * time.Second
 	discordMaxResultChars = 50000
 	discordMaxLimit       = 100
@@ -65,8 +62,8 @@ var discordActions = []string{
 
 // DiscordExtTool Discord 扩展功能工具。
 type DiscordExtTool struct {
-	token     string
-	apiURL    string
+	token      string
+	apiURL     string
 	httpClient *http.Client
 }
 
@@ -80,8 +77,8 @@ func NewDiscordExtTool() *DiscordExtTool {
 	}
 
 	return &DiscordExtTool{
-		token:     token,
-		apiURL:    apiURL,
+		token:      token,
+		apiURL:     apiURL,
 		httpClient: &http.Client{Timeout: discordRequestTimeout},
 	}
 }
@@ -206,304 +203,6 @@ func (t *DiscordExtTool) Execute(ctx context.Context, args map[string]any) (stri
 	}
 }
 
-// ───────────────────────────── 操作实现 ─────────────────────────────
-
-// listGuilds 列出服务器。
-func (t *DiscordExtTool) listGuilds(ctx context.Context) (string, error) {
-	resp, err := t.callAPI(ctx, "GET", "/users/@me/guilds", nil)
-	if err != nil {
-		return "", err
-	}
-
-	guilds, ok := resp["guilds"].([]any)
-	if !ok {
-		// resp 可能直接是数组
-		if respList, ok := resp["raw"].([]any); ok {
-			guilds = respList
-		} else {
-			guilds = []any{}
-		}
-	}
-
-	var simplified []map[string]any
-	for _, guild := range guilds {
-		if guildMap, ok := guild.(map[string]any); ok {
-			simplified = append(simplified, map[string]any{
-				"id":   getString(guildMap, "id", ""),
-				"name": getString(guildMap, "name", ""),
-			})
-		}
-	}
-
-	return jsonResult(map[string]any{
-		"success": true,
-		"count":   len(simplified),
-		"guilds":  simplified,
-	})
-}
-
-// serverInfo 获取服务器信息。
-func (t *DiscordExtTool) serverInfo(ctx context.Context, args map[string]any) (string, error) {
-	guildID := getString(args, "guild_id", "")
-	if err := validateDiscordID("guild_id", guildID); err != nil {
-		return "", err
-	}
-
-	resp, err := t.callAPI(ctx, "GET", "/guilds/"+guildID, nil)
-	if err != nil {
-		return "", err
-	}
-
-	return jsonResult(map[string]any{
-		"success": true,
-		"guild":   resp,
-	})
-}
-
-// listChannels 列出频道。
-func (t *DiscordExtTool) listChannels(ctx context.Context, args map[string]any) (string, error) {
-	guildID := getString(args, "guild_id", "")
-	if err := validateDiscordID("guild_id", guildID); err != nil {
-		return "", err
-	}
-
-	resp, err := t.callAPI(ctx, "GET", "/guilds/"+guildID+"/channels", nil)
-	if err != nil {
-		return "", err
-	}
-
-	// 从 resp 中提取数组
-	var channels []any
-	if rawList, ok := resp["raw"].([]any); ok {
-		channels = rawList
-	} else {
-		channels = getListAnyFromMap(resp, "channels")
-	}
-
-	var simplified []map[string]any
-	for _, channel := range channels {
-		if channelMap, ok := channel.(map[string]any); ok {
-			channelType := getInt(channelMap, "type", 0)
-			typeName := discordChannelTypeNames[channelType]
-			if typeName == "" {
-				typeName = "unknown"
-			}
-
-			simplified = append(simplified, map[string]any{
-				"id":        getString(channelMap, "id", ""),
-				"name":      getString(channelMap, "name", ""),
-				"type":      typeName,
-				"position":  getInt(channelMap, "position", 0),
-				"parent_id": getString(channelMap, "parent_id", ""),
-			})
-		}
-	}
-
-	return jsonResult(map[string]any{
-		"success":  true,
-		"count":    len(simplified),
-		"channels": simplified,
-	})
-}
-
-// channelInfo 获取频道信息。
-func (t *DiscordExtTool) channelInfo(ctx context.Context, args map[string]any) (string, error) {
-	channelID := getString(args, "channel_id", "")
-	if err := validateDiscordID("channel_id", channelID); err != nil {
-		return "", err
-	}
-
-	resp, err := t.callAPI(ctx, "GET", "/channels/"+channelID, nil)
-	if err != nil {
-		return "", err
-	}
-
-	return jsonResult(map[string]any{
-		"success": true,
-		"channel": resp,
-	})
-}
-
-// listRoles 列出角色。
-func (t *DiscordExtTool) listRoles(ctx context.Context, args map[string]any) (string, error) {
-	guildID := getString(args, "guild_id", "")
-	if err := validateDiscordID("guild_id", guildID); err != nil {
-		return "", err
-	}
-
-	resp, err := t.callAPI(ctx, "GET", "/guilds/"+guildID+"/roles", nil)
-	if err != nil {
-		return "", err
-	}
-
-	// 从 resp 中提取数组
-	var roles []any
-	if rawList, ok := resp["raw"].([]any); ok {
-		roles = rawList
-	} else {
-		roles = getListAnyFromMap(resp, "roles")
-	}
-
-	var simplified []map[string]any
-	for _, role := range roles {
-		if roleMap, ok := role.(map[string]any); ok {
-			simplified = append(simplified, map[string]any{
-				"id":       getString(roleMap, "id", ""),
-				"name":     getString(roleMap, "name", ""),
-				"color":    getInt(roleMap, "color", 0),
-				"position": getInt(roleMap, "position", 0),
-			})
-		}
-	}
-
-	return jsonResult(map[string]any{
-		"success": true,
-		"count":   len(simplified),
-		"roles":   simplified,
-	})
-}
-
-// memberInfo 获取成员信息。
-func (t *DiscordExtTool) memberInfo(ctx context.Context, args map[string]any) (string, error) {
-	guildID := getString(args, "guild_id", "")
-	userID := getString(args, "user_id", "")
-
-	if err := validateDiscordIDs("guild_id", guildID, "user_id", userID); err != nil {
-		return "", err
-	}
-
-	resp, err := t.callAPI(ctx, "GET", "/guilds/"+guildID+"/members/"+userID, nil)
-	if err != nil {
-		return "", err
-	}
-
-	return jsonResult(map[string]any{
-		"success": true,
-		"member":  resp,
-	})
-}
-
-// searchMembers 搜索成员。
-func (t *DiscordExtTool) searchMembers(ctx context.Context, args map[string]any) (string, error) {
-	guildID := getString(args, "guild_id", "")
-	query := getString(args, "query", "")
-	limit := clampLimit(getInt(args, "limit", 10), discordMaxLimit)
-
-	if err := validateDiscordID("guild_id", guildID); err != nil {
-		return "", err
-	}
-
-	if query == "" {
-		return "", fmt.Errorf("query 参数是必填项")
-	}
-
-	endpoint := fmt.Sprintf("/guilds/%s/members/search?query=%s&limit=%d",
-		url.PathEscape(guildID), url.QueryEscape(query), limit)
-
-	resp, err := t.callAPI(ctx, "GET", endpoint, nil)
-	if err != nil {
-		return "", err
-	}
-
-	// 从 resp 中提取数组
-	var members []any
-	if rawList, ok := resp["raw"].([]any); ok {
-		members = rawList
-	} else {
-		members = getListAnyFromMap(resp, "members")
-	}
-
-	var simplified []map[string]any
-	for _, member := range members {
-		if memberMap, ok := member.(map[string]any); ok {
-			user := getMap(memberMap, "user")
-			simplified = append(simplified, map[string]any{
-				"user_id":  getString(user, "id", ""),
-				"username": getString(user, "username", ""),
-				"nickname": getString(memberMap, "nick", ""),
-			})
-		}
-	}
-
-	return jsonResult(map[string]any{
-		"success": true,
-		"count":   len(simplified),
-		"members": simplified,
-	})
-}
-
-// fetchMessages 获取消息。
-func (t *DiscordExtTool) fetchMessages(ctx context.Context, args map[string]any) (string, error) {
-	channelID := getString(args, "channel_id", "")
-	limit := clampLimit(getInt(args, "limit", 50), discordMaxLimit)
-
-	if err := validateDiscordID("channel_id", channelID); err != nil {
-		return "", err
-	}
-
-	endpoint := fmt.Sprintf("/channels/%s/messages?limit=%d", channelID, limit)
-
-	resp, err := t.callAPI(ctx, "GET", endpoint, nil)
-	if err != nil {
-		return "", err
-	}
-
-	// 从 resp 中提取数组
-	var messages []any
-	if rawList, ok := resp["raw"].([]any); ok {
-		messages = rawList
-	} else {
-		messages = getListAnyFromMap(resp, "messages")
-	}
-
-	var simplified []map[string]any
-	for _, msg := range messages {
-		if msgMap, ok := msg.(map[string]any); ok {
-			author := getMap(msgMap, "author")
-			simplified = append(simplified, map[string]any{
-				"id":        getString(msgMap, "id", ""),
-				"content":   getString(msgMap, "content", ""),
-				"author_id": getString(author, "id", ""),
-				"author":    getString(author, "username", ""),
-				"timestamp": getString(msgMap, "timestamp", ""),
-			})
-		}
-	}
-
-	return jsonResult(map[string]any{
-		"success":  true,
-		"count":    len(simplified),
-		"messages": simplified,
-	})
-}
-
-// listPins 列出置顶消息。
-func (t *DiscordExtTool) listPins(ctx context.Context, args map[string]any) (string, error) {
-	channelID := getString(args, "channel_id", "")
-	if err := validateDiscordID("channel_id", channelID); err != nil {
-		return "", err
-	}
-
-	resp, err := t.callAPI(ctx, "GET", "/channels/"+channelID+"/pins", nil)
-	if err != nil {
-		return "", err
-	}
-
-	// 从 resp 中提取数组
-	var pins []any
-	if rawList, ok := resp["raw"].([]any); ok {
-		pins = rawList
-	} else {
-		pins = getListAnyFromMap(resp, "pins")
-	}
-
-	return jsonResult(map[string]any{
-		"success": true,
-		"count":   len(pins),
-		"pins":    pins,
-	})
-}
-
 // pinMessage 置顶消息。
 func (t *DiscordExtTool) pinMessage(ctx context.Context, args map[string]any) (string, error) {
 	channelID := getString(args, "channel_id", "")
@@ -541,51 +240,6 @@ func (t *DiscordExtTool) unpinMessage(ctx context.Context, args map[string]any) 
 	return jsonResult(map[string]any{
 		"success": true,
 		"message": "消息已取消置顶",
-	})
-}
-
-// createThread 创建线程。
-func (t *DiscordExtTool) createThread(ctx context.Context, args map[string]any) (string, error) {
-	channelID := getString(args, "channel_id", "")
-	name := getString(args, "name", "")
-	messageID := getString(args, "message_id", "")
-
-	if err := validateDiscordID("channel_id", channelID); err != nil {
-		return "", err
-	}
-	if name == "" {
-		return "", fmt.Errorf("name 参数是必填项")
-	}
-	if messageID != "" {
-		if err := validateDiscordID("message_id", messageID); err != nil {
-			return "", err
-		}
-	}
-
-	var endpoint string
-	var body map[string]any
-
-	if messageID != "" {
-		// 从消息创建线程
-		endpoint = "/channels/" + channelID + "/messages/" + messageID + "/threads"
-		body = map[string]any{"name": name}
-	} else {
-		// 创建新线程
-		endpoint = "/channels/" + channelID + "/threads"
-		body = map[string]any{
-			"name": name,
-			"type": 11, // public_thread
-		}
-	}
-
-	resp, err := t.callAPI(ctx, "POST", endpoint, body)
-	if err != nil {
-		return "", err
-	}
-
-	return jsonResult(map[string]any{
-		"success": true,
-		"thread":  resp,
 	})
 }
 
@@ -631,66 +285,6 @@ func (t *DiscordExtTool) removeRole(ctx context.Context, args map[string]any) (s
 	})
 }
 
-// ───────────────────────────── API 调用 ─────────────────────────────
-
-// callAPI 调用 Discord REST API。
-func (t *DiscordExtTool) callAPI(ctx context.Context, method string, endpoint string, body map[string]any) (map[string]any, error) {
-	url := t.apiURL + endpoint
-
-	var bodyBytes []byte
-	if body != nil {
-		var err error
-		bodyBytes, err = json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("序列化请求体失败: %w", err)
-		}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bot "+t.token)
-
-	resp, err := t.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode == 403 {
-		return nil, fmt.Errorf("权限不足 (HTTP 403)")
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API 错误 (HTTP %d)", resp.StatusCode)
-	}
-
-	// 尝试解析为 JSON
-	if len(respBody) == 0 {
-		return map[string]any{"success": true}, nil
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return map[string]any{"raw": string(respBody)}, nil
-	}
-
-	return result, nil
-}
-
-// ───────────────────────────── 注册工具 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(NewDiscordExtTool())
-}
 
 // ───────────────────────────── 辅助函数 ─────────────────────────────
 

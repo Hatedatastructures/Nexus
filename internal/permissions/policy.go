@@ -312,7 +312,7 @@ func DefaultPolicy() *Policy {
 			},
 		},
 		// 兜底: 未知工具默认每次询问
-		Default:      LevelAskAlways,
+		Default:       LevelAskAlways,
 		DefaultReason: "未知工具默认需要每次确认",
 	}
 }

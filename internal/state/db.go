@@ -38,17 +38,17 @@ type Session struct {
 
 // MessageRecord 表示一条持久化的消息
 type MessageRecord struct {
-	ID          int64   `json:"id"`
-	SessionID   string  `json:"session_id"`
-	Role        string  `json:"role"`
-	Content     string  `json:"content"`
-	ToolCallID  string  `json:"tool_call_id"`
-	ToolCalls   string  `json:"tool_calls"`  // JSON 编码
-	ToolName    string  `json:"tool_name"`
-	Timestamp   float64 `json:"timestamp"`
-	TokenCount  int     `json:"token_count"`
-	FinishReason string `json:"finish_reason"`
-	Reasoning   string  `json:"reasoning"`
+	ID           int64   `json:"id"`
+	SessionID    string  `json:"session_id"`
+	Role         string  `json:"role"`
+	Content      string  `json:"content"`
+	ToolCallID   string  `json:"tool_call_id"`
+	ToolCalls    string  `json:"tool_calls"` // JSON 编码
+	ToolName     string  `json:"tool_name"`
+	Timestamp    float64 `json:"timestamp"`
+	TokenCount   int     `json:"token_count"`
+	FinishReason string  `json:"finish_reason"`
+	Reasoning    string  `json:"reasoning"`
 }
 
 // SearchResult 表示 FTS5 搜索结果
@@ -61,11 +61,11 @@ type SearchResult struct {
 
 // SessionFilter 定义会话查询的过滤条件
 type SessionFilter struct {
-	Source  string // 按来源过滤
-	UserID  string // 按用户过滤
-	Ended   *bool  // 按是否结束过滤
-	Limit   int    // 最大返回数
-	Offset  int    // 偏移量
+	Source string // 按来源过滤
+	UserID string // 按用户过滤
+	Ended  *bool  // 按是否结束过滤
+	Limit  int    // 最大返回数
+	Offset int    // 偏移量
 }
 
 // ───────────────────────────── 存储 ─────────────────────────────

@@ -63,9 +63,9 @@ type ToolSchema struct {
 
 // ToolEntry 是注册中心存储的工具条目。
 type ToolEntry struct {
-	Tool             Tool   // 工具实例
-	IsAsync          bool   // 是否需要异步执行包装
-	MaxResultChars   int    // 结果最大字符数 (0 = 默认)
+	Tool           Tool // 工具实例
+	IsAsync        bool // 是否需要异步执行包装
+	MaxResultChars int  // 结果最大字符数 (0 = 默认)
 }
 
 // ───────────────────────────── 工具集信息 ─────────────────────────────

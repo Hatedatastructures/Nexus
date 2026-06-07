@@ -202,7 +202,7 @@ func (t *ImageGenTool) generateImage(ctx context.Context, model, prompt, size, q
 	if err != nil {
 		return "", "", fmt.Errorf("HTTP 请求失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
@@ -263,7 +263,7 @@ func (t *ImageGenTool) saveImage(path string, b64Data string, imageURL string) e
 		if reqErr != nil {
 			return fmt.Errorf("下载图片失败: %w", reqErr)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		imgData, err = io.ReadAll(io.LimitReader(resp.Body, 50*1024*1024)) // 限制 50MB
 		if err != nil {
 			return fmt.Errorf("读取图片数据失败: %w", err)
@@ -278,10 +278,4 @@ func (t *ImageGenTool) saveImage(path string, b64Data string, imageURL string) e
 
 	slog.Info("image saved", "path", path, "size", len(imgData))
 	return nil
-}
-
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&ImageGenTool{})
 }

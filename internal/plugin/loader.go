@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	pkgerrors "nexus-agent/internal/errors"
 	"strings"
 )
 
@@ -106,12 +108,12 @@ func (l *Loader) Discover() ([]*Manifest, error) {
 //   - 清单字段格式是否正确
 func (l *Loader) Validate(m *Manifest) error {
 	if m == nil {
-		return fmt.Errorf("清单为 nil")
+		return pkgerrors.New(pkgerrors.ConfigInvalid, "清单为 nil")
 	}
 
 	// 基本字段验证
 	if err := ValidateManifest(m); err != nil {
-		return fmt.Errorf("清单验证失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.ConfigInvalid, "清单验证失败", err)
 	}
 
 	// 检查必需的环境变量
@@ -121,7 +123,7 @@ func (l *Loader) Validate(m *Manifest) error {
 				"plugin", m.Name,
 				"env", envName,
 			)
-			return fmt.Errorf("插件 %s 缺少必需的环境变量: %s", m.Name, envName)
+			return pkgerrors.New(pkgerrors.ConfigMissing, fmt.Sprintf("插件 %s 缺少必需的环境变量: %s", m.Name, envName))
 		}
 	}
 
@@ -132,7 +134,7 @@ func (l *Loader) Validate(m *Manifest) error {
 				"plugin", m.Name,
 				"dep", dep,
 			)
-			return fmt.Errorf("插件 %s 的外部依赖不可用: %s", m.Name, dep)
+			return pkgerrors.New(pkgerrors.ConfigMissing, fmt.Sprintf("插件 %s 的外部依赖不可用: %s", m.Name, dep))
 		}
 	}
 

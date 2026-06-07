@@ -20,11 +20,11 @@ const (
 // Message 是统一的消息格式，兼容 OpenAI Chat Completions 结构。
 // 所有提供者的消息在进入代理核心之前，都会被转换为这种格式。
 type Message struct {
-	Role             MessageRole `json:"role"`                   // 消息角色
-	Content          string      `json:"content,omitempty"`      // 消息正文 (文本或工具调用组装)
-	ToolCalls        []ToolCall  `json:"tool_calls,omitempty"`   // 助理消息中的工具调用列表
-	ToolCallID       string      `json:"tool_call_id,omitempty"` // 工具消息关联的工具调用 ID
-	Name             string      `json:"name,omitempty"`         // 可选的参与者名称
+	Role             MessageRole `json:"role"`                        // 消息角色
+	Content          string      `json:"content,omitempty"`           // 消息正文 (文本或工具调用组装)
+	ToolCalls        []ToolCall  `json:"tool_calls,omitempty"`        // 助理消息中的工具调用列表
+	ToolCallID       string      `json:"tool_call_id,omitempty"`      // 工具消息关联的工具调用 ID
+	Name             string      `json:"name,omitempty"`              // 可选的参与者名称
 	ReasoningContent string      `json:"reasoning_content,omitempty"` // 推理内容 (DeepSeek 等模型需要传回)
 }
 
@@ -32,10 +32,10 @@ type Message struct {
 
 // ToolCall 表示模型发起的工具调用请求
 type ToolCall struct {
-	ID        string         `json:"id"`                  // 工具调用唯一标识
-	Name      string         `json:"name"`                // 工具名称
-	Arguments string         `json:"arguments"`           // JSON 编码的工具参数
-	Extra     map[string]any `json:"extra,omitempty"`     // 提供者特定附加数据
+	ID        string         `json:"id"`              // 工具调用唯一标识
+	Name      string         `json:"name"`            // 工具名称
+	Arguments string         `json:"arguments"`       // JSON 编码的工具参数
+	Extra     map[string]any `json:"extra,omitempty"` // 提供者特定附加数据
 }
 
 // ToolSchema 描述工具的 JSON Schema 定义，用于提交给 LLM
@@ -49,35 +49,35 @@ type ToolSchema struct {
 
 // ChatRequest 是统一的聊天补全请求，适用于所有提供者
 type ChatRequest struct {
-	Model       string            `json:"model"`                 // 模型名称
-	Messages    []Message         `json:"messages"`              // 消息历史
-	Tools       []ToolSchema      `json:"tools,omitempty"`       // 可用工具列表
-	MaxTokens   int               `json:"max_tokens,omitempty"`  // 最大生成 token 数 (0 = 使用模型默认值)
-	Temperature float64           `json:"temperature,omitempty"` // 采样温度 (0 = 使用模型默认值)
-	Metadata    map[string]any    `json:"-"`                     // 提供者特定附加参数 (不序列化到 JSON)
+	Model       string         `json:"model"`                 // 模型名称
+	Messages    []Message      `json:"messages"`              // 消息历史
+	Tools       []ToolSchema   `json:"tools,omitempty"`       // 可用工具列表
+	MaxTokens   int            `json:"max_tokens,omitempty"`  // 最大生成 token 数 (0 = 使用模型默认值)
+	Temperature float64        `json:"temperature,omitempty"` // 采样温度 (0 = 使用模型默认值)
+	Metadata    map[string]any `json:"-"`                     // 提供者特定附加参数 (不序列化到 JSON)
 }
 
 // ChatResponse 是统一的聊天补全响应，适用于所有提供者
 type ChatResponse struct {
-	ID           string      `json:"id"`                      // 响应的唯一标识
-	Model        string      `json:"model"`                   // 实际使用的模型名称
-	Content      string      `json:"content,omitempty"`       // 文本回复内容
-	ToolCalls    []ToolCall  `json:"tool_calls,omitempty"`    // 工具调用列表
-	StopReason   string      `json:"stop_reason"`             // 停止原因: "end_turn" / "max_tokens" / "tool_use" / "content_filter"
-	Usage        *TokenUsage `json:"usage,omitempty"`         // token 用量统计
-	Reasoning    string      `json:"reasoning,omitempty"`     // 推理/思维链文本 (Claude/Gemini 扩展思考)
-	CachedPrompt bool        `json:"cached_prompt"`           // 是否命中了提示缓存
+	ID           string      `json:"id"`                   // 响应的唯一标识
+	Model        string      `json:"model"`                // 实际使用的模型名称
+	Content      string      `json:"content,omitempty"`    // 文本回复内容
+	ToolCalls    []ToolCall  `json:"tool_calls,omitempty"` // 工具调用列表
+	StopReason   string      `json:"stop_reason"`          // 停止原因: "end_turn" / "max_tokens" / "tool_use" / "content_filter"
+	Usage        *TokenUsage `json:"usage,omitempty"`      // token 用量统计
+	Reasoning    string      `json:"reasoning,omitempty"`  // 推理/思维链文本 (Claude/Gemini 扩展思考)
+	CachedPrompt bool        `json:"cached_prompt"`        // 是否命中了提示缓存
 }
 
 // StreamDelta 是流式响应的单个增量
 type StreamDelta struct {
-	Content    string     `json:"content,omitempty"`    // 当前增量文本
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`  // 完整的工具调用 (在流结束时填充)
-	Reasoning  string     `json:"reasoning,omitempty"`  // 推理过程增量
-	Usage      *TokenUsage `json:"usage,omitempty"`     // 累积 token 用量 (流式结束时填充)
-	StopReason string     `json:"stop_reason,omitempty"` // 停止原因 (end_turn, tool_use, max_tokens, stop)
-	Done       bool       `json:"done"`                  // 是否为最终增量
-	Error      error      `json:"-"`                     // 发生的错误 (不序列化)
+	Content    string      `json:"content,omitempty"`     // 当前增量文本
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`  // 完整的工具调用 (在流结束时填充)
+	Reasoning  string      `json:"reasoning,omitempty"`   // 推理过程增量
+	Usage      *TokenUsage `json:"usage,omitempty"`       // 累积 token 用量 (流式结束时填充)
+	StopReason string      `json:"stop_reason,omitempty"` // 停止原因 (end_turn, tool_use, max_tokens, stop)
+	Done       bool        `json:"done"`                  // 是否为最终增量
+	Error      error       `json:"-"`                     // 发生的错误 (不序列化)
 }
 
 // TokenUsage 统计一次 API 调用的 token 用量
@@ -105,10 +105,10 @@ type ModelInfo struct {
 // ───────────────────────────── 停止原因常量 ─────────────────────────────
 
 const (
-	StopEndTurn      = "end_turn"       // 模型自然结束对话
-	StopMaxTokens    = "max_tokens"     // 达到最大 token 限制
-	StopToolUse      = "tool_use"       // 模型请求工具调用
+	StopEndTurn       = "end_turn"       // 模型自然结束对话
+	StopMaxTokens     = "max_tokens"     // 达到最大 token 限制
+	StopToolUse       = "tool_use"       // 模型请求工具调用
 	StopContentFilter = "content_filter" // 内容过滤器触发
-	StopLength       = "length"         // 已达到长度限制 (兼容旧格式)
-	StopToolCalls    = "tool_calls"     // 工具调用触发 (兼容旧格式)
+	StopLength        = "length"         // 已达到长度限制 (兼容旧格式)
+	StopToolCalls     = "tool_calls"     // 工具调用触发 (兼容旧格式)
 )

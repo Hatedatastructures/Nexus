@@ -7,11 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
 	"io"
 	"log/slog"
 	"net/http"
+	pkgerrors "nexus-agent/internal/errors"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -23,9 +24,6 @@ const (
 
 	// copilotDefaultModel Copilot 默认模型。
 	copilotDefaultModel = "gpt-4o"
-
-	// copilotAPIMode Copilot 使用的 API 模式。
-	copilotAPIMode = "chat_completions"
 )
 
 // ───────────────────────────── CopilotProvider 结构 ─────────────────────────────
@@ -44,7 +42,6 @@ type CopilotProvider struct {
 	endpoint   string // Copilot API 端点
 	token      string // Copilot 访问令牌
 	model      string // 默认模型
-	mu         sync.Mutex
 }
 
 // NewCopilotProvider 创建 GitHub Copilot ACP 提供者。
@@ -102,19 +99,19 @@ func (p *CopilotProvider) CreateChatCompletion(ctx context.Context, req *ChatReq
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("Copilot HTTP 请求失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.NetworkHTTP, "Copilot HTTP 请求失败", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
 	if err != nil {
-		return nil, fmt.Errorf("读取 Copilot 响应体失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.NetworkHTTP, "读取 Copilot 响应体失败", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("Copilot API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
+		return nil, pkgerrors.New(pkgerrors.ProviderAPI, fmt.Sprintf("Copilot API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr)))
 	}
 
 	return p.transport.ParseResponse(body)
@@ -137,15 +134,15 @@ func (p *CopilotProvider) CreateChatCompletionStream(ctx context.Context, req *C
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("Copilot 流式 HTTP 请求失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.NetworkHTTP, "Copilot 流式 HTTP 请求失败", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		bodyStr := string(body)
 		classified := ClassifyError(resp.StatusCode, bodyStr)
-		return nil, fmt.Errorf("Copilot 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr))
+		return nil, pkgerrors.New(pkgerrors.ProviderAPI, fmt.Sprintf("Copilot 流式 API 错误 (HTTP %d, %s): %s", resp.StatusCode, classified.Reason, RedactErrorBody(bodyStr)))
 	}
 
 	// 直接将 HTTP 响应体传递给 ParseStream 进行真正的流式解析。
@@ -161,7 +158,7 @@ func (p *CopilotProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	url := p.endpoint + "/v1/models"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("创建 Copilot 模型列表请求失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "创建 Copilot 模型列表请求失败", err)
 	}
 
 	p.setAuthHeaders(httpReq)
@@ -172,7 +169,7 @@ func (p *CopilotProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 		slog.Debug("failed to fetch Copilot model list, returning known models", "error", err)
 		return p.defaultModels(), nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLLMResponseSize))
 	if err != nil {
@@ -224,13 +221,13 @@ func (p *CopilotProvider) buildCopilotRequest(ctx context.Context, req *ChatRequ
 
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("序列化 Copilot 请求体失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "序列化 Copilot 请求体失败", err)
 	}
 
 	url := p.endpoint + "/v1/chat/completions"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return nil, fmt.Errorf("创建 Copilot HTTP 请求失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ProviderAPI, "创建 Copilot HTTP 请求失败", err)
 	}
 
 	// 设置请求头
@@ -273,8 +270,3 @@ func (p *CopilotProvider) defaultModels() []ModelInfo {
 	}
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	slog.Debug("Copilot ACP provider loaded", "time", time.Now())
-}

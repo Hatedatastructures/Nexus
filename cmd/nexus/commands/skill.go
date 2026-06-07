@@ -16,7 +16,7 @@ import (
 // SkillCommand 实现 nexus skill 命令。
 type SkillCommand struct{}
 
-func (c *SkillCommand) Name() string    { return "skill" }
+func (c *SkillCommand) Name() string     { return "skill" }
 func (c *SkillCommand) Synopsis() string { return "技能管理 (list/search/install)" }
 
 func (c *SkillCommand) Run(args []string) {
@@ -44,12 +44,13 @@ func (c *SkillCommand) Run(args []string) {
 }
 
 func (c *SkillCommand) listSkills() {
-	tool.DiscoverBuiltin()
+	registry := tool.NewRegistry()
+	tool.RegisterAllTools(registry)
 
 	PrintTitle("已注册的可用工具")
 	fmt.Println(strings.Repeat("━", 60))
 
-	defs := tool.GetRegistry().GetDefinitions(nil)
+	defs := registry.GetDefinitions(nil)
 	for i, d := range defs {
 		fmt.Printf("  %2d. %-25s  %s\n", i+1, d.Name, d.Description)
 	}
@@ -179,8 +180,4 @@ func cloneGitRepo(repoURL, targetDir string) error {
 	}
 
 	return nil
-}
-
-func init() {
-	Register(&SkillCommand{})
 }

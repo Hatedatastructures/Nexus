@@ -12,7 +12,7 @@ import (
 // LogsCommand 实现 nexus logs 命令。
 type LogsCommand struct{}
 
-func (c *LogsCommand) Name() string    { return "logs" }
+func (c *LogsCommand) Name() string     { return "logs" }
 func (c *LogsCommand) Synopsis() string { return "查看日志" }
 
 func (c *LogsCommand) Run(args []string) {
@@ -27,7 +27,7 @@ func (c *LogsCommand) Run(args []string) {
 		switch args[i] {
 		case "--tail", "-n":
 			if i+1 < len(args) {
-				fmt.Sscanf(args[i+1], "%d", &tail)
+				_, _ = fmt.Sscanf(args[i+1], "%d", &tail)
 				i++
 			}
 		case "--follow", "-f":
@@ -78,7 +78,7 @@ func (c *LogsCommand) showTail(filePath string, lines int, level string) {
 		PrintError("无法打开日志文件: %v", err)
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// 读取所有行
 	var allLines []string
@@ -115,13 +115,13 @@ func (c *LogsCommand) followFile(filePath string, level string) {
 		PrintError("无法打开日志文件: %v", err)
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// 先显示最后 10 行
 	c.showTail(filePath, 10, level)
 
 	// 跳到文件末尾
-	file.Seek(0, 2)
+	_, _ = file.Seek(0, 2)
 
 	reader := bufio.NewReader(file)
 	for {
@@ -155,8 +155,4 @@ func (c *LogsCommand) printLogLine(line string) {
 	default:
 		fmt.Println("  " + line)
 	}
-}
-
-func init() {
-	Register(&LogsCommand{})
 }

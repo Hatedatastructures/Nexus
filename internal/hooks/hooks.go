@@ -8,6 +8,8 @@ package hooks
 import (
 	"context"
 	"fmt"
+
+	pkgerrors "nexus-agent/internal/errors"
 	"regexp"
 )
 
@@ -54,10 +56,10 @@ func (r *HookResponse) IsModify() bool {
 // HookSpec 定义一个 Shell Hook 的配置规格。
 // 用于从 YAML/JSON 配置文件反序列化。
 type HookSpec struct {
-	Event      string `yaml:"event"      json:"event"`      // 事件类型: pre_tool_call / post_tool_call
-	Command    string `yaml:"command"    json:"command"`     // hook 脚本路径
-	Matcher    string `yaml:"matcher"    json:"matcher"`     // 工具名匹配正则 (空 = 匹配所有)
-	TimeoutSec int    `yaml:"timeout"    json:"timeout"`     // 超时秒数 (默认 60, 最大 300)
+	Event      string `yaml:"event"      json:"event"`   // 事件类型: pre_tool_call / post_tool_call
+	Command    string `yaml:"command"    json:"command"` // hook 脚本路径
+	Matcher    string `yaml:"matcher"    json:"matcher"` // 工具名匹配正则 (空 = 匹配所有)
+	TimeoutSec int    `yaml:"timeout"    json:"timeout"` // 超时秒数 (默认 60, 最大 300)
 }
 
 // ───────────────────────────── Hook 接口 ─────────────────────────────
@@ -114,7 +116,7 @@ func CompileMatcher(pattern string) (*regexp.Regexp, error) {
 	}
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		return nil, fmt.Errorf("编译 hook matcher 失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ConfigInvalid, "编译 hook matcher 失败", err)
 	}
 	return re, nil
 }
@@ -125,6 +127,6 @@ func ValidateEvent(event string) error {
 	case EventPreToolCall, EventPostToolCall:
 		return nil
 	default:
-		return fmt.Errorf("不支持的 hook 事件类型: %q (支持: pre_tool_call, post_tool_call)", event)
+		return pkgerrors.New(pkgerrors.ConfigInvalid, fmt.Sprintf("不支持的 hook 事件类型: %q (支持: pre_tool_call, post_tool_call)", event))
 	}
 }

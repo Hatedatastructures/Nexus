@@ -15,11 +15,11 @@ import (
 // 所有工具通过 Register 方法注册到此中心。
 // 代理通过 Dispatch 方法调用工具。
 type Registry struct {
-	mu             sync.RWMutex
-	tools          map[string]*ToolEntry       // name → entry
-	toolsets       map[string][]string         // toolset → tool names
-	aliases        map[string]string           // alias → canonical toolset
-	toolsetChecks  map[string]func() bool      // toolset → availability check
+	mu            sync.RWMutex
+	tools         map[string]*ToolEntry  // name → entry
+	toolsets      map[string][]string    // toolset → tool names
+	aliases       map[string]string      // alias → canonical toolset
+	toolsetChecks map[string]func() bool // toolset → availability check
 }
 
 // 全局注册中心单例
@@ -30,7 +30,19 @@ var globalRegistry = &Registry{
 	toolsetChecks: make(map[string]func() bool),
 }
 
-// GetRegistry 返回全局注册中心实例
+// NewRegistry 创建新的工具注册中心实例。
+func NewRegistry() *Registry {
+	return &Registry{
+		tools:         make(map[string]*ToolEntry),
+		toolsets:      make(map[string][]string),
+		aliases:       make(map[string]string),
+		toolsetChecks: make(map[string]func() bool),
+	}
+}
+
+// GetRegistry 返回全局注册中心实例。
+//
+// Deprecated: 使用 NewRegistry() + RegisterAllTools() 替代。将在未来版本移除。
 func GetRegistry() *Registry {
 	return globalRegistry
 }

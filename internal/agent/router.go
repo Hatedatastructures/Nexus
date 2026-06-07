@@ -72,7 +72,6 @@ func NewProviderRouterWithConfig(entries []*ProviderRouterConfigEntry, cfg *Prov
 			Provider: e.Provider,
 			Model:    e.Model,
 			Priority: e.Priority,
-			
 		})
 	}
 	return newProviderRouter(providerEntries, cfg)

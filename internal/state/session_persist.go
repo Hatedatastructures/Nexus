@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+
 	"log/slog"
+	pkgerrors "nexus-agent/internal/errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,8 +16,8 @@ import (
 
 // jsonlRecord is a single line in a JSONL session log.
 type jsonlRecord struct {
-	Type      string `json:"type"`       // "session_meta", "message", "compaction", "prompt_history"
-	Timestamp int64  `json:"timestamp"`  // Unix timestamp
+	Type      string `json:"type"`      // "session_meta", "message", "compaction", "prompt_history"
+	Timestamp int64  `json:"timestamp"` // Unix timestamp
 	Data      any    `json:"data"`
 }
 
@@ -72,20 +74,20 @@ func (sp *SessionPersister) Open() error {
 	defer sp.mu.Unlock()
 
 	if err := os.MkdirAll(sp.dir, 0o700); err != nil {
-		return fmt.Errorf("create session dir: %w", err)
+		return pkgerrors.Wrap(pkgerrors.FileIO, "create session dir", err)
 	}
 
 	path := sp.filePath()
 
 	info, err := os.Stat(path)
 	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("stat session file: %w", err)
+		return pkgerrors.Wrap(pkgerrors.FileIO, "stat session file", err)
 	}
 
 	flag := os.O_CREATE | os.O_WRONLY | os.O_APPEND
 	f, err := os.OpenFile(path, flag, 0o600)
 	if err != nil {
-		return fmt.Errorf("open session file: %w", err)
+		return pkgerrors.Wrap(pkgerrors.FileIO, "open session file", err)
 	}
 
 	sp.file = f
@@ -129,12 +131,12 @@ func (sp *SessionPersister) Close() error {
 
 	if sp.writer != nil {
 		if err := sp.writer.Flush(); err != nil {
-			return fmt.Errorf("flush writer: %w", err)
+			return pkgerrors.Wrap(pkgerrors.FileIO, "flush writer", err)
 		}
 	}
 	if sp.file != nil {
 		if err := sp.file.Close(); err != nil {
-			return fmt.Errorf("close file: %w", err)
+			return pkgerrors.Wrap(pkgerrors.FileIO, "close file", err)
 		}
 		sp.file = nil
 		sp.writer = nil
@@ -148,7 +150,7 @@ func (sp *SessionPersister) writeRecord(recordType string, data any) error {
 	defer sp.mu.Unlock()
 
 	if sp.writer == nil {
-		return fmt.Errorf("session persister is not open")
+		return pkgerrors.New(pkgerrors.FileIO, "session persister is not open")
 	}
 
 	if err := sp.rotateIfNeeded(); err != nil {
@@ -164,10 +166,10 @@ func (sp *SessionPersister) writeRecord(recordType string, data any) error {
 
 	before := sp.currentSize
 	if err := json.NewEncoder(sp.writer).Encode(rec); err != nil {
-		return fmt.Errorf("encode jsonl record: %w", err)
+		return pkgerrors.Wrap(pkgerrors.FileIO, "encode jsonl record", err)
 	}
 	if err := sp.writer.Flush(); err != nil {
-		return fmt.Errorf("flush writer: %w", err)
+		return pkgerrors.Wrap(pkgerrors.FileIO, "flush writer", err)
 	}
 
 	// Estimate bytes written from the encoder — we need a stat-free approximation.
@@ -191,12 +193,12 @@ func (sp *SessionPersister) rotateIfNeeded() error {
 	// Flush and close the current file.
 	if sp.writer != nil {
 		if err := sp.writer.Flush(); err != nil {
-			return fmt.Errorf("flush during rotation: %w", err)
+			return pkgerrors.Wrap(pkgerrors.FileIO, "flush during rotation", err)
 		}
 	}
 	if sp.file != nil {
 		if err := sp.file.Close(); err != nil {
-			return fmt.Errorf("close during rotation: %w", err)
+			return pkgerrors.Wrap(pkgerrors.FileIO, "close during rotation", err)
 		}
 	}
 
@@ -206,7 +208,7 @@ func (sp *SessionPersister) rotateIfNeeded() error {
 	oldest := sp.rotatedPath(sp.maxRotations)
 	if _, err := os.Stat(oldest); err == nil {
 		if err := os.Remove(oldest); err != nil {
-			return fmt.Errorf("remove oldest rotation: %w", err)
+			return pkgerrors.Wrap(pkgerrors.FileIO, "remove oldest rotation", err)
 		}
 	}
 
@@ -216,20 +218,20 @@ func (sp *SessionPersister) rotateIfNeeded() error {
 		dst := sp.rotatedPath(i + 1)
 		if _, err := os.Stat(src); err == nil {
 			if err := os.Rename(src, dst); err != nil {
-				return fmt.Errorf("rotate %d to %d: %w", i, i+1, err)
+				return pkgerrors.Wrap(pkgerrors.FileIO, fmt.Sprintf("rotate %d to %d", i, i+1), err)
 			}
 		}
 	}
 
 	// Move current file to .1 rotation.
 	if err := os.Rename(base, sp.rotatedPath(1)); err != nil {
-		return fmt.Errorf("rotate current to .1: %w", err)
+		return pkgerrors.Wrap(pkgerrors.FileIO, "rotate current to .1", err)
 	}
 
 	// Open a fresh file.
 	f, err := os.OpenFile(base, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return fmt.Errorf("open new session file after rotation: %w", err)
+		return pkgerrors.Wrap(pkgerrors.FileIO, "open new session file after rotation", err)
 	}
 	sp.file = f
 	sp.writer = bufio.NewWriter(f)

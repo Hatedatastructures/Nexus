@@ -237,7 +237,7 @@ func (t *BrowserCDPTool) Execute(ctx context.Context, args map[string]any) (stri
 		slog.Error("CDP WebSocket connection failed", "url", ctrlURL, "err", err)
 		return ToolError(fmt.Sprintf("CDP 连接失败: %v", err)), nil
 	}
-	defer ws.Close()
+	defer func() { _ = ws.Close() }()
 
 	// 发送 CDP 命令
 	result, err := cdpCallWithTarget(ctx, ws, method, params, targetID, timeout)
@@ -268,9 +268,4 @@ func browserCheck() bool {
 	}
 	_, ok := launcher.LookPath()
 	return ok
-}
-
-func init() {
-	reg := GetRegistry()
-	reg.Register(&BrowserCDPTool{})
 }

@@ -12,15 +12,15 @@ import (
 // 这些工具可能修改共享状态 (文件系统、终端状态、浏览器状态)，
 // 或需要严格的执行顺序。
 var unsafeParallelTools = map[string]bool{
-	"terminal":          true, // 终端命令修改系统状态
-	"file_write":        true, // 文件写入修改文件系统
-	"file_edit":         true, // 文件编辑修改文件系统
-	"browser_navigate":  true, // 浏览器导航改变页面状态
-	"browser_click":     true, // 浏览器点击改变页面状态
-	"browser_type":      true, // 浏览器输入改变页面状态
-	"delegate_task":     true, // 子代理委派可能修改系统状态
-	"code_execute":      true, // 代码执行修改系统状态
-	"memory":            true, // 记忆写入修改记忆状态
+	"terminal":         true, // 终端命令修改系统状态
+	"file_write":       true, // 文件写入修改文件系统
+	"file_edit":        true, // 文件编辑修改文件系统
+	"browser_navigate": true, // 浏览器导航改变页面状态
+	"browser_click":    true, // 浏览器点击改变页面状态
+	"browser_type":     true, // 浏览器输入改变页面状态
+	"delegate_task":    true, // 子代理委派可能修改系统状态
+	"code_execute":     true, // 代码执行修改系统状态
+	"memory":           true, // 记忆写入修改记忆状态
 }
 
 // safeGuardTools 包含共享状态保护伞下的工具。
@@ -33,9 +33,9 @@ var safeGuardTools = map[string]bool{
 
 // ShouldParallelize 判断一组工具调用是否可以并行执行。
 // 检查规则:
-//   1. 无环依赖: 没有工具的输出作为另一个工具的输入 (在客户端判断)
-//   2. 无共享状态工具: 不含 unsafeParallelTools 中的工具
-//   3. 无状态保护伞: 不含 safeGuardTools 中的工具
+//  1. 无环依赖: 没有工具的输出作为另一个工具的输入 (在客户端判断)
+//  2. 无共享状态工具: 不含 unsafeParallelTools 中的工具
+//  3. 无状态保护伞: 不含 safeGuardTools 中的工具
 //
 // 如果所有检查通过，返回 true 表示可以安全并行。
 func ShouldParallelize(toolCalls []llm.ToolCall) bool {

@@ -98,7 +98,7 @@ func (m *FileSyncManager) SyncBack(downloadFn func(remotePath string) (io.ReadCl
 	if err != nil {
 		return fmt.Errorf("下载远程文件失败: %w", err)
 	}
-	defer remoteArchive.Close()
+	defer func() { _ = remoteArchive.Close() }()
 
 	// 解析 tar 归档
 	tr := tar.NewReader(remoteArchive)
@@ -178,7 +178,7 @@ func (m *FileSyncManager) SyncBack(downloadFn func(remotePath string) (io.ReadCl
 // CreateTarArchive 将变更文件打包为 tar 归档。
 func (m *FileSyncManager) CreateTarArchive(files []string, w io.Writer) error {
 	tw := tar.NewWriter(w)
-	defer tw.Close()
+	defer func() { _ = tw.Close() }()
 
 	for _, relPath := range files {
 		localPath := filepath.Join(m.localRoot, relPath)
@@ -205,7 +205,7 @@ func (m *FileSyncManager) CreateTarArchive(files []string, w io.Writer) error {
 		if _, err := io.Copy(tw, f); err != nil {
 			slog.Warn("file_sync: failed to write file to tar", "path", relPath, "err", err)
 		}
-		f.Close()
+		_ = f.Close()
 	}
 
 	return nil
@@ -223,7 +223,7 @@ func (m *FileSyncManager) StateHash() string {
 	}
 	sort.Strings(keys)
 	for _, path := range keys {
-		fmt.Fprintf(h, "%s:%s\n", path, m.state[path])
+		_, _ = fmt.Fprintf(h, "%s:%s\n", path, m.state[path])
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
@@ -236,7 +236,7 @@ func fileHash(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {

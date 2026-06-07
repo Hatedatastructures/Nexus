@@ -44,7 +44,7 @@ func (b *Builder) buildSkillsPrompt() string {
 		if len(desc) > 200 {
 			desc = desc[:200] + "..."
 		}
-		sb.WriteString(fmt.Sprintf("- `%s` (v%s) — %s\n", s.Name, version, desc))
+		fmt.Fprintf(&sb, "- `%s` (v%s) — %s\n", s.Name, version, desc)
 	}
 
 	// 追加技能使用指导

@@ -14,12 +14,14 @@ import (
 // SkillManageTool 技能管理工具。
 type SkillManageTool struct{}
 
-func (t *SkillManageTool) Name() string        { return "skill_manage" }
-func (t *SkillManageTool) Description() string  { return "管理技能。支持安装、卸载、更新、搜索技能。" }
-func (t *SkillManageTool) Toolset() string      { return "skills" }
-func (t *SkillManageTool) IsAvailable() bool    { return true }
-func (t *SkillManageTool) Emoji() string        { return "📦" }
-func (t *SkillManageTool) MaxResultChars() int  { return 10000 }
+func (t *SkillManageTool) Name() string { return "skill_manage" }
+func (t *SkillManageTool) Description() string {
+	return "管理技能。支持安装、卸载、更新、搜索技能。"
+}
+func (t *SkillManageTool) Toolset() string     { return "skills" }
+func (t *SkillManageTool) IsAvailable() bool   { return true }
+func (t *SkillManageTool) Emoji() string       { return "📦" }
+func (t *SkillManageTool) MaxResultChars() int { return 10000 }
 
 func (t *SkillManageTool) Schema() *ToolSchema {
 	return &ToolSchema{
@@ -125,10 +127,10 @@ func (t *SkillManageTool) installSkill(ctx context.Context, identifier string) (
 		}
 
 		return ToolResult(map[string]any{
-			"success":    true,
-			"message":    fmt.Sprintf("技能已安装: %s", skillName),
-			"name":       skillName,
-			"path":       targetDir,
+			"success": true,
+			"message": fmt.Sprintf("技能已安装: %s", skillName),
+			"name":    skillName,
+			"path":    targetDir,
 		}), nil
 	}
 
@@ -329,6 +331,3 @@ func IsAllowedGitHost(host string) bool {
 	}
 }
 
-func init() {
-	GetRegistry().Register(&SkillManageTool{})
-}

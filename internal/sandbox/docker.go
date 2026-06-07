@@ -24,9 +24,9 @@ type DockerEnvironment struct {
 	containerID    string        // Docker 容器 ID 或名称
 	defaultTimeout time.Duration // 默认命令超时
 	// 安全加固参数
-	securityOpts   []string // Docker 安全选项
-	pidsLimit      int      // 容器内进程数限制
-	tmpfsSizeMB    int      // /tmp 挂载大小 (MB)
+	securityOpts []string // Docker 安全选项
+	pidsLimit    int      // 容器内进程数限制
+	tmpfsSizeMB  int      // /tmp 挂载大小 (MB)
 }
 
 // dockerDefaultSecurityArgs 返回默认的安全加固参数。
@@ -46,13 +46,13 @@ var dockerDefaultSecurityArgs = []string{
 
 // DockerSecurityOptions 定义 Docker 容器的安全加固选项。
 type DockerSecurityOptions struct {
-	CapDrop      []string // 要移除的 capabilities
-	CapAdd       []string // 要添加的 capabilities
-	SecurityOpt  []string // 安全选项
-	PIDsLimit    int      // 进程数限制
-	NoNewPrivs   bool     // 禁止新权限提升
-	TmpfsSizeMB  int      // /tmp tmpfs 大小 (MB)
-	NetworkNone  bool     // 禁用网络 (--network=none)
+	CapDrop     []string // 要移除的 capabilities
+	CapAdd      []string // 要添加的 capabilities
+	SecurityOpt []string // 安全选项
+	PIDsLimit   int      // 进程数限制
+	NoNewPrivs  bool     // 禁止新权限提升
+	TmpfsSizeMB int      // /tmp tmpfs 大小 (MB)
+	NetworkNone bool     // 禁用网络 (--network=none)
 }
 
 // DefaultDockerSecurity 返回默认的安全加固配置。
@@ -226,7 +226,7 @@ func (e *DockerEnvironment) ExecuteBackground(ctx context.Context, command strin
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("Docker 后台进程启动失败: %w", err)
+		return nil, fmt.Errorf("docker 后台进程启动失败: %w", err)
 	}
 
 	handle := &OSProcessHandle{

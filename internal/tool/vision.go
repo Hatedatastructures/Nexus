@@ -122,10 +122,10 @@ func (t *VisionAnalyzeTool) Execute(ctx context.Context, args map[string]any) (s
 
 	slog.Info("vision analysis succeeded", "path", imagePath, "model", model)
 	return ToolResult(map[string]any{
-		"output":  result,
-		"image":   imagePath,
-		"model":   model,
-		"prompt":  prompt,
+		"output": result,
+		"image":  imagePath,
+		"model":  model,
+		"prompt": prompt,
 	}), nil
 }
 
@@ -219,7 +219,7 @@ func (t *VisionAnalyzeTool) analyzeImage(ctx context.Context, model, prompt, bas
 	if err != nil {
 		return "", fmt.Errorf("HTTP 请求失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
@@ -265,8 +265,3 @@ func formatSize(bytes int64) string {
 	return fmt.Sprintf("%.1f %s", float64(bytes)/float64(div), units[exp])
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&VisionAnalyzeTool{})
-}

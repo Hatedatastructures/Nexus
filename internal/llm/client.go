@@ -232,7 +232,7 @@ func DoWithRetry(
 			return resp, resp.StatusCode, nil
 		}
 		// 非 2xx 视为错误，关闭响应体并重试
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		return nil, resp.StatusCode, &httpError{StatusCode: resp.StatusCode, Message: resp.Status}
 	})
 }

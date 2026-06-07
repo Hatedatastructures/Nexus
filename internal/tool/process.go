@@ -16,12 +16,12 @@ import (
 
 // ManagedProcess 表示一个被管理的后台进程。
 type ManagedProcess struct {
-	mu     sync.Mutex `json:"-"`
-	PID    int        `json:"pid"`
-	Name   string     `json:"name"`
-	Command string    `json:"command"`
-	Status string     `json:"status"` // running, stopped, error
-	Started int64     `json:"started"`
+	mu      sync.Mutex `json:"-"`
+	PID     int        `json:"pid"`
+	Name    string     `json:"name"`
+	Command string     `json:"command"`
+	Status  string     `json:"status"` // running, stopped, error
+	Started int64      `json:"started"`
 }
 
 // SetStatus 安全更新进程状态。
@@ -81,12 +81,14 @@ func ListProcesses() []*ManagedProcess {
 // ProcessTool 后台进程管理工具。
 type ProcessTool struct{}
 
-func (t *ProcessTool) Name() string        { return "process" }
-func (t *ProcessTool) Description() string  { return "管理后台进程。支持列出进程、查看状态、终止进程。" }
-func (t *ProcessTool) Toolset() string      { return "terminal" }
-func (t *ProcessTool) IsAvailable() bool    { return true }
-func (t *ProcessTool) Emoji() string        { return "⚙️" }
-func (t *ProcessTool) MaxResultChars() int  { return 10000 }
+func (t *ProcessTool) Name() string { return "process" }
+func (t *ProcessTool) Description() string {
+	return "管理后台进程。支持列出进程、查看状态、终止进程。"
+}
+func (t *ProcessTool) Toolset() string     { return "terminal" }
+func (t *ProcessTool) IsAvailable() bool   { return true }
+func (t *ProcessTool) Emoji() string       { return "⚙️" }
+func (t *ProcessTool) MaxResultChars() int { return 10000 }
 
 func (t *ProcessTool) Schema() *ToolSchema {
 	return &ToolSchema{
@@ -148,8 +150,8 @@ func (t *ProcessTool) listProcesses() (string, error) {
 	}
 
 	return ToolResult(map[string]any{
-		"success":  true,
-		"count":    len(procs),
+		"success":   true,
+		"count":     len(procs),
 		"processes": procs,
 	}), nil
 }
@@ -261,6 +263,3 @@ func getIntFromArgs(args map[string]any, key string) int {
 	return 0
 }
 
-func init() {
-	GetRegistry().Register(&ProcessTool{})
-}

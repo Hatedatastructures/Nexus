@@ -48,13 +48,13 @@ const (
 // 调用方逐块调用 Scrub(delta), 获取用户可见文本;
 // 流结束后通过 ThinkContent() 获取完整的思考内容。
 type ThinkScrubber struct {
-	provider     string       // 提供者名称, 决定标签格式
-	openTag      string       // 开始标签
-	closeTag     string       // 结束标签
-	buffer       string       // 部分标签累积缓冲 (匹配失败时回吐)
-	state        scrubState   // 当前状态
+	provider     string          // 提供者名称, 决定标签格式
+	openTag      string          // 开始标签
+	closeTag     string          // 结束标签
+	buffer       string          // 部分标签累积缓冲 (匹配失败时回吐)
+	state        scrubState      // 当前状态
 	thinkContent strings.Builder // 捕获的思考内容
-	onThink      func(string) // 思考内容增量回调 (可选)
+	onThink      func(string)    // 思考内容增量回调 (可选)
 }
 
 // NewThinkScrubber 创建 ThinkScrubber 实例。
@@ -101,7 +101,6 @@ func (s *ThinkScrubber) Reset() {
 }
 
 // ───────────────────────────── 状态机核心 ─────────────────────────────
-
 
 // firstRune returns the first rune of a string.
 func firstRune(s string) rune {

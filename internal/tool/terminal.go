@@ -145,7 +145,6 @@ func sanitizeLog(s string) string {
 	return b.String()
 }
 
-
 // Execute 执行终端命令。
 // 流程: 审批检查 → 构建执行选项 → sandbox.Execute() → 格式化结果。
 func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (string, error) {
@@ -251,8 +250,3 @@ func (t *TerminalTool) Execute(ctx context.Context, args map[string]any) (string
 	return string(resultJSON), nil
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(NewTerminalTool())
-}

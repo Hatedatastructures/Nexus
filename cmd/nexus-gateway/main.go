@@ -16,12 +16,15 @@ import (
 	"nexus-agent/internal/config"
 	"nexus-agent/internal/cron"
 	"nexus-agent/internal/gateway"
+	"nexus-agent/internal/gateway/platforms"
+	"nexus-agent/internal/llm"
 	"nexus-agent/internal/state"
 	"nexus-agent/internal/tool"
 	"nexus-agent/pkg/logutil"
 )
 
 func main() {
+	llm.RegisterAllTransports()
 	// 1. 加载完整配置
 	cfg, err := config.Load("")
 	if err != nil {
@@ -49,7 +52,7 @@ func main() {
 		slog.Error("创建状态存储失败", "err", err)
 		os.Exit(1)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	// 执行数据库迁移
 	if err := state.RunMigrations(context.Background(), st.DB()); err != nil {
@@ -57,11 +60,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 3b. 注入子代理执行器 (供 delegate_task 工具使用)
+	// 3b. 初始化工具和平台适配器注册中心
+	toolRegistry := tool.NewRegistry()
+	tool.RegisterAllTools(toolRegistry)
+
+	platformRegistry := platforms.NewAdapterRegistry()
+	platforms.RegisterAllAdapters(platformRegistry)
+
+	// 3c. 注入子代理执行器 (供 delegate_task 工具使用)
 	tool.SetSubAgentRunner(func(ctx context.Context, systemPrompt, task string) (string, error) {
 		subAgent := agent.NewAgent(
 			agent.WithConfigProvider(cfg),
-			agent.WithToolRegistry(tool.GetRegistry()),
+			agent.WithToolRegistry(toolRegistry),
 			agent.WithMaxIterations(15),
 		)
 		if subAgent.Provider() == nil {
@@ -137,4 +147,3 @@ func createCronScheduler(cfg *config.Config, st *state.Store) (*cron.Scheduler, 
 
 	return cron.NewScheduler(jobMgr, executor), nil
 }
-

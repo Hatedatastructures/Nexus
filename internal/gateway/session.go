@@ -19,12 +19,12 @@ import (
 // Session 表示一个网关会话。
 // 每个会话对应一个唯一的会话键和代理会话 ID。
 type Session struct {
-	Key        string                // 会话键: "agent:main:{platform}:{chat_type}:{chat_id}"
+	Key        string                   // 会话键: "agent:main:{platform}:{chat_type}:{chat_id}"
 	Source     *platforms.SessionSource // 会话来源信息
-	AgentID    string                // 代理会话 ID (UUID 格式)
-	CreatedAt  time.Time             // 创建时间
-	LastActive time.Time             // 最后活跃时间
-	ResetCount int                   // 重置次数
+	AgentID    string                   // 代理会话 ID (UUID 格式)
+	CreatedAt  time.Time                // 创建时间
+	LastActive time.Time                // 最后活跃时间
+	ResetCount int                      // 重置次数
 }
 
 // ───────────────────────────── 会话管理器 ─────────────────────────────

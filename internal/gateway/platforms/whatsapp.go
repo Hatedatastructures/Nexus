@@ -227,16 +227,6 @@ func (w *WhatsAppAdapter) VerifyWebhookSignature(signature string, body []byte) 
 	return subtle.ConstantTimeCompare([]byte(sigHex), []byte(expectedSig)) == 1
 }
 
-// ───────────────────────────── 自注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&AdapterEntry{
-		Platform: PlatformWhatsApp,
-		Name:     "WhatsApp",
-		Factory:  func() PlatformAdapter { return NewWhatsAppAdapter("", "") },
-	})
-}
-
 // Configure 注入 WhatsApp 平台配置。
 // settings 必须包含 "token" 和 "phone_id" 键。
 func (w *WhatsAppAdapter) Configure(settings map[string]any) error {
@@ -328,7 +318,7 @@ func (w *WhatsAppAdapter) doAPI(ctx context.Context, method string, path string,
 	if err != nil {
 		return &SendResult{Success: false, Error: err.Error(), Retryable: true}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
 	if err != nil {

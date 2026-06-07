@@ -34,7 +34,7 @@ var (
 // ChatCommand 实现 nexus chat 命令。
 type ChatCommand struct{}
 
-func (c *ChatCommand) Name() string    { return "chat" }
+func (c *ChatCommand) Name() string     { return "chat" }
 func (c *ChatCommand) Synopsis() string { return "启动交互式对话" }
 
 func (c *ChatCommand) Run(args []string) {
@@ -44,7 +44,9 @@ func (c *ChatCommand) Run(args []string) {
 	}
 
 	logutil.InitLogger(cfg.Logging.Level, cfg.Logging.Format, "")
-	tool.DiscoverBuiltin()
+
+	registry := tool.NewRegistry()
+	tool.RegisterAllTools(registry)
 
 	// 构建记忆管理器 (如果配置了)
 	var memMgr *memory.Manager
@@ -65,7 +67,7 @@ func (c *ChatCommand) Run(args []string) {
 
 	sessionAgent := agent.NewAgent(
 		agent.WithConfigProvider(cfg),
-		agent.WithToolRegistry(tool.GetRegistry()),
+		agent.WithToolRegistry(registry),
 		agent.WithContextBuilder(ctxBuilder),
 		agent.WithMemoryManager(memMgr),
 	)
@@ -77,7 +79,7 @@ func (c *ChatCommand) Run(args []string) {
 	tool.SetSubAgentRunner(func(ctx context.Context, systemPrompt, task string) (string, error) {
 		subAgent := agent.NewAgent(
 			agent.WithConfigProvider(cfg),
-			agent.WithToolRegistry(tool.GetRegistry()),
+			agent.WithToolRegistry(registry),
 			agent.WithMaxIterations(15),
 		)
 		if subAgent.Provider() == nil {
@@ -269,8 +271,4 @@ func deduplicateResponse(resp string) string {
 		}
 	}
 	return resp
-}
-
-func init() {
-	Register(&ChatCommand{})
 }

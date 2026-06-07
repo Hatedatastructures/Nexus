@@ -18,9 +18,9 @@ import (
 // ───────────────────────────── 常量 ─────────────────────────────
 
 const (
-	haDefaultAPIURL   = "https://homeassistant.local:8123/api"
-	haRequestTimeout  = 15 * time.Second
-	haMaxResultChars  = 50000
+	haDefaultAPIURL  = "https://homeassistant.local:8123/api"
+	haRequestTimeout = 15 * time.Second
+	haMaxResultChars = 50000
 )
 
 // 危险 domain 列表（阻止调用）
@@ -37,8 +37,8 @@ var haBlockedDomains = []string{
 
 // HomeAssistantTool Home Assistant 工具。
 type HomeAssistantTool struct {
-	apiURL  string
-	token   string
+	apiURL     string
+	token      string
 	httpClient *http.Client
 }
 
@@ -52,8 +52,8 @@ func NewHomeAssistantTool() *HomeAssistantTool {
 	token := os.Getenv("HASS_TOKEN")
 
 	return &HomeAssistantTool{
-		apiURL:  apiURL,
-		token:   token,
+		apiURL:     apiURL,
+		token:      token,
 		httpClient: &http.Client{Timeout: haRequestTimeout},
 	}
 }
@@ -285,12 +285,9 @@ func (t *HomeAssistantTool) callService(ctx context.Context, args map[string]any
 
 	// 合并额外参数
 	data := getMap(args, "data")
-	if data != nil {
-		for k, v := range data {
-			body[k] = v
-		}
+	for k, v := range data {
+		body[k] = v
 	}
-
 	endpoint := "/services/" + domain + "/" + service
 
 	resp, err := t.callAPI(ctx, "POST", endpoint, body)
@@ -332,7 +329,7 @@ func (t *HomeAssistantTool) callAPI(ctx context.Context, method string, endpoint
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	if err != nil {
@@ -341,7 +338,7 @@ func (t *HomeAssistantTool) callAPI(ctx context.Context, method string, endpoint
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		slog.Warn("homeassistant API error response", "status", resp.StatusCode, "body", string(respBody))
-		return nil, fmt.Errorf("Home Assistant API error (HTTP %d)", resp.StatusCode)
+		return nil, fmt.Errorf("home assistant API error (HTTP %d)", resp.StatusCode)
 	}
 
 	// 尝试解析为 JSON
@@ -374,10 +371,4 @@ func validateHAInput(s string) error {
 		return fmt.Errorf("值包含空字节")
 	}
 	return nil
-}
-
-// ───────────────────────────── 注册工具 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(NewHomeAssistantTool())
 }

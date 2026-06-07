@@ -7,7 +7,7 @@ import (
 func TestTransportRegistry_Get_Found(t *testing.T) {
 	reg := NewTransportRegistry()
 	mock := &OpenAITransport{baseURL: "https://example.com"}
-	reg.Register("test_mode", mock)
+	_ = reg.Register("test_mode", mock)
 
 	got, ok := reg.Get("test_mode")
 	if !ok {
@@ -29,8 +29,8 @@ func TestTransportRegistry_Get_NotFound(t *testing.T) {
 func TestTransportRegistry_List(t *testing.T) {
 	reg := NewTransportRegistry()
 	mock := &OpenAITransport{}
-	reg.Register("mode_a", mock)
-	reg.Register("mode_b", mock)
+	_ = reg.Register("mode_a", mock)
+	_ = reg.Register("mode_b", mock)
 
 	modes := reg.List()
 	if len(modes) != 2 {
@@ -79,9 +79,10 @@ func TestTransportRegistry_Register_Duplicate(t *testing.T) {
 }
 
 func TestGetTransport_GlobalRegistry(t *testing.T) {
+	RegisterAllTransports()
 	got, ok := GetTransport("chat_completions")
 	if !ok {
-		t.Fatal("global registry should have chat_completions from init()")
+		t.Fatal("global registry should have chat_completions after RegisterAllTransports()")
 	}
 	if got.APIMode() != "chat_completions" {
 		t.Errorf("APIMode = %q, want chat_completions", got.APIMode())

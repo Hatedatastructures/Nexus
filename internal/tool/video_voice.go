@@ -144,7 +144,7 @@ func (t *VideoGenerateTool) generate(ctx context.Context, prompt string, duratio
 	if err != nil {
 		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
@@ -231,21 +231,22 @@ func (t *VoiceRecordTool) Execute(ctx context.Context, args map[string]any) (str
 
 	// 构建 ffmpeg 命令
 	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		cmd = exec.CommandContext(ctx, "ffmpeg", "-y",
 			"-f", "dshow", "-i", "audio=麦克风",
 			"-t", fmt.Sprintf("%d", duration),
 			"-acodec", "pcm_s16le", "-ar", "44100", "-ac", "1",
 			outPath,
 		)
-	} else if runtime.GOOS == "darwin" {
+	case "darwin":
 		cmd = exec.CommandContext(ctx, "ffmpeg", "-y",
 			"-f", "avfoundation", "-i", ":0",
 			"-t", fmt.Sprintf("%d", duration),
 			"-acodec", "pcm_s16le", "-ar", "44100", "-ac", "1",
 			outPath,
 		)
-	} else {
+	default:
 		cmd = exec.CommandContext(ctx, "ffmpeg", "-y",
 			"-f", "alsa", "-i", "default",
 			"-t", fmt.Sprintf("%d", duration),
@@ -269,9 +270,9 @@ func (t *VoiceRecordTool) Execute(ctx context.Context, args map[string]any) (str
 
 	slog.Info("recording completed", "path", outPath, "duration", duration, "size", info.Size())
 	return ToolResult(map[string]any{
-		"output":    fmt.Sprintf("录音完成: %s (%s)", outPath, formatFileSize(int(info.Size()))),
-		"path":      outPath,
-		"duration":  duration,
+		"output":     fmt.Sprintf("录音完成: %s (%s)", outPath, formatFileSize(int(info.Size()))),
+		"path":       outPath,
+		"duration":   duration,
 		"size_bytes": info.Size(),
 	}), nil
 }
@@ -342,14 +343,8 @@ func (t *VoicePlayTool) Execute(ctx context.Context, args map[string]any) (strin
 
 	slog.Info("audio playback completed", "path", filePath)
 	return ToolResult(map[string]any{
-		"output":   fmt.Sprintf("播放完成: %s", filePath),
+		"output":    fmt.Sprintf("播放完成: %s", filePath),
 		"file_path": filePath,
 	}), nil
 }
-// ───────────────────────────── init 注册 ─────────────────────────────
 
-func init() {
-	GetRegistry().Register(&VideoGenerateTool{})
-	GetRegistry().Register(&VoiceRecordTool{})
-	GetRegistry().Register(&VoicePlayTool{})
-}

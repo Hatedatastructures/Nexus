@@ -3,11 +3,9 @@
 package platforms
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,12 +19,12 @@ import (
 // ───────────────────────────── 常量 ─────────────────────────────
 
 const (
-	mattermostDefaultAPIURL    = "https://mattermost.example.com/api/v4"
-	mattermostMaxMessageLength = 4000
+	mattermostDefaultAPIURL     = "https://mattermost.example.com/api/v4"
+	mattermostMaxMessageLength  = 4000
 	mattermostHeartbeatInterval = 30 * time.Second
-	mattermostRequestTimeout   = 15 * time.Second
-	mattermostConnectTimeout   = 20 * time.Second
-	mattermostDedupMaxSize     = 1000
+	mattermostRequestTimeout    = 15 * time.Second
+	mattermostConnectTimeout    = 20 * time.Second
+	mattermostDedupMaxSize      = 1000
 )
 
 // 频道类型映射
@@ -41,29 +39,24 @@ var mattermostChannelTypeMap = map[string]string{
 
 // MattermostAdapter Mattermost 平台适配器。
 type MattermostAdapter struct {
-	serverURL string
-	token     string
-	botUserID string
+	serverURL      string
+	token          string
+	botUserID      string
 	messageHandler func(*MessageEvent)
-
 	// HTTP 客户端
 	httpClient *http.Client
-
 	// WebSocket 连接
 	conn      *websocket.Conn
 	running   bool
 	connected bool
-
 	// 并发控制
 	mu              sync.Mutex
-	writeMu         sync.Mutex // WebSocket 写锁，保护并发 WriteJSON
+	writeMu         sync.Mutex
 	dedup           *mattermostDeduplicator
 	seqNo           int64
 	heartbeatCancel context.CancelFunc
-
 	// @mention 配置
 	requireMention bool
-
 	// 通道关闭保护
 	closeOnce sync.Once
 }
@@ -168,7 +161,7 @@ func (a *MattermostAdapter) Disconnect(ctx context.Context) error {
 	a.mu.Unlock()
 
 	if a.conn != nil {
-		a.conn.Close()
+		_ = a.conn.Close()
 		a.conn = nil
 	}
 
@@ -187,22 +180,17 @@ func (a *MattermostAdapter) getUserInfo(ctx context.Context) (map[string]any, er
 func (a *MattermostAdapter) connectWebSocket(ctx context.Context, msgCh chan *MessageEvent) {
 	backoff := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
 	backoffIdx := 0
-
 	for {
 		a.mu.Lock()
 		running := a.running
 		a.mu.Unlock()
-
 		if !running {
 			a.closeOnce.Do(func() { close(msgCh) })
 			return
 		}
-
-		// 构建 WebSocket URL
 		wsURL := strings.Replace(a.serverURL, "https://", "wss://", 1)
 		wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
 		wsURL = wsURL + "/websocket"
-
 		dialer := websocket.DefaultDialer
 		conn, _, err := dialer.DialContext(ctx, wsURL, nil)
 		if err != nil {
@@ -216,25 +204,20 @@ func (a *MattermostAdapter) connectWebSocket(ctx context.Context, msgCh chan *Me
 			}
 			continue
 		}
-
 		a.mu.Lock()
 		a.conn = conn
 		a.connected = true
 		a.mu.Unlock()
-
 		backoffIdx = 0
-
 		// 发送认证（加写锁）
 		authReq := map[string]any{
-			"seq":    1,
-			"action": "authentication_challenge",
-			"data":   map[string]any{"token": a.token},
+			"seq": 1, "action": "authentication_challenge",
+			"data": map[string]any{"token": a.token},
 		}
 		if err := a.writeWS(conn, authReq); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			continue
 		}
-
 		// 启动心跳（先取消旧的）
 		if a.heartbeatCancel != nil {
 			a.heartbeatCancel()
@@ -242,15 +225,13 @@ func (a *MattermostAdapter) connectWebSocket(ctx context.Context, msgCh chan *Me
 		hbCtx, hbCancel := context.WithCancel(ctx)
 		a.heartbeatCancel = hbCancel
 		go a.heartbeatLoop(hbCtx)
-
 		// 监听消息
 		a.listenLoop(msgCh)
-
 		// 连接断开，尝试重连
 		a.mu.Lock()
 		a.connected = false
 		if a.conn != nil {
-			a.conn.Close()
+			_ = a.conn.Close()
 			a.conn = nil
 		}
 		a.mu.Unlock()
@@ -287,56 +268,48 @@ func (a *MattermostAdapter) listenLoop(msgCh chan *MessageEvent) {
 // dispatchPayload 处理 WebSocket 消息。
 func (a *MattermostAdapter) dispatchPayload(payload map[string]any, msgCh chan *MessageEvent) {
 	event := getString(payload, "event", "")
-
-	if event == "posted" {
-		data := getMap(payload, "data")
-		if data == nil {
-			return
-		}
-
-		// 解析双层 JSON 编码的 post
-		postStr := getString(data, "post", "")
-		if postStr == "" {
-			return
-		}
-
-		var post map[string]any
-		if err := json.Unmarshal([]byte(postStr), &post); err != nil {
-			return
-		}
-
-		// 检查是否是自己发送的消息
-		if getString(post, "user_id", "") == a.botUserID {
-			return
-		}
-
-		// 去重
-		postID := getString(post, "id", "")
-		if a.dedup.isDuplicate(postID) {
-			return
-		}
-
-		// 解析消息
-		event := a.parsePost(post, data)
-		if event != nil {
-			select {
-			case msgCh <- event:
-			default:
-				slog.Warn("[Mattermost] message channel full, dropping message")
-			}
+	if event != "posted" {
+		return
+	}
+	data := getMap(payload, "data")
+	if data == nil {
+		return
+	}
+	postStr := getString(data, "post", "")
+	if postStr == "" {
+		return
+	}
+	var post map[string]any
+	if err := json.Unmarshal([]byte(postStr), &post); err != nil {
+		return
+	}
+	// 检查是否是自己发送的消息
+	if getString(post, "user_id", "") == a.botUserID {
+		return
+	}
+	// 去重
+	postID := getString(post, "id", "")
+	if a.dedup.isDuplicate(postID) {
+		return
+	}
+	// 解析消息
+	evt := a.parsePost(post, data)
+	if evt != nil {
+		select {
+		case msgCh <- evt:
+		default:
+			slog.Warn("[Mattermost] message channel full, dropping message")
 		}
 	}
 }
 
 // parsePost 解析 post 消息。
 func (a *MattermostAdapter) parsePost(post, data map[string]any) *MessageEvent {
-	// 提取文本
 	text := getString(post, "message", "")
 	if text == "" {
 		return nil
 	}
 
-	// 提取发送者信息
 	userID := getString(post, "user_id", "")
 	channelID := getString(post, "channel_id", "")
 
@@ -352,8 +325,7 @@ func (a *MattermostAdapter) parsePost(post, data map[string]any) *MessageEvent {
 		if !strings.Contains(text, "@"+a.botUserID) {
 			return nil
 		}
-		// 去除 @mention
-		text = strings.Replace(text, "@"+a.botUserID, "", -1)
+		text = strings.ReplaceAll(text, "@"+a.botUserID, "")
 		text = strings.TrimSpace(text)
 	}
 
@@ -382,232 +354,25 @@ func (a *MattermostAdapter) parsePost(post, data map[string]any) *MessageEvent {
 func (a *MattermostAdapter) heartbeatLoop(ctx context.Context) {
 	ticker := time.NewTicker(mattermostHeartbeatInterval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
-
 		a.mu.Lock()
 		running := a.running
 		conn := a.conn
 		seq := a.seqNo + 1
 		a.seqNo = seq
 		a.mu.Unlock()
-
 		if !running || conn == nil {
 			return
 		}
-
-		pingReq := map[string]any{
-			"seq":    seq,
-			"action": "ping",
-		}
-
+		pingReq := map[string]any{"seq": seq, "action": "ping"}
 		if err := a.writeWS(conn, pingReq); err != nil {
 			slog.Debug("[Mattermost] heartbeat send failed", "err", err)
 		}
 	}
 }
 
-// ───────────────────────────── 发送消息 ─────────────────────────────
-
-// Send 发送消息。
-func (a *MattermostAdapter) Send(ctx context.Context, chatID string, content string, opts *SendOptions) (*SendResult, error) {
-	if chatID == "" {
-		return &SendResult{Success: false, Error: "channel_id 是必填项"}, nil
-	}
-
-	// 分块发送（超过最大长度，按 rune 计数）
-	if len([]rune(content)) > mattermostMaxMessageLength {
-		return a.sendChunked(ctx, chatID, content, opts)
-	}
-
-	// 构建请求
-	post := map[string]any{
-		"channel_id": chatID,
-		"message":    content,
-	}
-
-	// 如果有 thread_id，使用线程回复
-	if opts != nil && opts.Metadata != nil {
-		if threadID, ok := opts.Metadata["thread_id"].(string); ok && threadID != "" {
-			post["root_id"] = threadID
-		}
-	}
-
-	resp, err := a.callAPI(ctx, "POST", "/posts", post)
-	if err != nil {
-		return &SendResult{Success: false, Error: err.Error()}, nil
-	}
-
-	postID := getString(resp, "id", "")
-	return &SendResult{Success: true, MessageID: postID}, nil
-}
-
-// sendChunked 分块发送长消息。
-func (a *MattermostAdapter) sendChunked(ctx context.Context, chatID string, content string, opts *SendOptions) (*SendResult, error) {
-	// 分割消息
-	chunks := splitMessage(content, mattermostMaxMessageLength)
-
-	var lastPostID string
-	for i, chunk := range chunks {
-		result, err := a.Send(ctx, chatID, chunk, opts)
-		if err != nil {
-			return result, err
-		}
-		if i == len(chunks)-1 {
-			lastPostID = result.MessageID
-		}
-	}
-
-	return &SendResult{Success: true, MessageID: lastPostID}, nil
-}
-
-// SendImage 发送图片。
-func (a *MattermostAdapter) SendImage(ctx context.Context, chatID string, imageURL string, caption string, opts *SendOptions) (*SendResult, error) {
-	// Mattermost 需要先上传文件，简化为发送 URL 文本
-	text := caption
-	if text == "" {
-		text = imageURL
-	} else {
-		text = text + "\n" + imageURL
-	}
-	return a.Send(ctx, chatID, text, opts)
-}
-
-// SendTyping 发送正在输入指示。
-func (a *MattermostAdapter) SendTyping(ctx context.Context, chatID string) error {
-	_, err := a.callAPI(ctx, "POST", "/users/me/typing/"+chatID, nil)
-	return err
-}
-
-// EditMessage 编辑消息。
-func (a *MattermostAdapter) EditMessage(ctx context.Context, chatID string, messageID string, content string) (*SendResult, error) {
-	if err := validateMessageID(messageID); err != nil {
-		return nil, err
-	}
-
-	post := map[string]any{
-		"id":      messageID,
-		"message": content,
-	}
-
-	resp, err := a.callAPI(ctx, "PUT", "/posts/"+messageID, post)
-	if err != nil {
-		return &SendResult{Success: false, Error: err.Error()}, nil
-	}
-
-	return &SendResult{Success: true, MessageID: getString(resp, "id", "")}, nil
-}
-
-// DeleteMessage 删除消息。
-func (a *MattermostAdapter) DeleteMessage(ctx context.Context, chatID string, messageID string) error {
-	if err := validateMessageID(messageID); err != nil {
-		return err
-	}
-	_, err := a.callAPI(ctx, "DELETE", "/posts/"+messageID, nil)
-	return err
-}
-
-// ───────────────────────────── API 调用 ─────────────────────────────
-
-// callAPI 调用 REST API。
-func (a *MattermostAdapter) callAPI(ctx context.Context, method, endpoint string, body map[string]any) (map[string]any, error) {
-	url := a.serverURL + endpoint
-
-	var bodyBytes []byte
-	if body != nil {
-		var err error
-		bodyBytes, err = json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("序列化请求体失败: %w", err)
-		}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+a.token)
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API 错误 (HTTP %d)", resp.StatusCode)
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %w", err)
-	}
-
-	return result, nil
-}
-
-// ───────────────────────────── 接口实现 ─────────────────────────────
-
-// Name 返回适配器名称。
-func (a *MattermostAdapter) Name() string { return "Mattermost" }
-
-// PlatformType 返回平台类型。
-func (a *MattermostAdapter) PlatformType() Platform { return PlatformMattermost }
-
-// SendVoice 发送语音（需要上传）。
-func (a *MattermostAdapter) SendVoice(ctx context.Context, chatID string, audioPath string, opts *SendOptions) (*SendResult, error) {
-	return &SendResult{Success: false, Error: "Mattermost 语音发送需要文件上传"}, nil
-}
-
-// SendVideo 发送视频（需要上传）。
-func (a *MattermostAdapter) SendVideo(ctx context.Context, chatID string, videoPath string, caption string, opts *SendOptions) (*SendResult, error) {
-	return &SendResult{Success: false, Error: "Mattermost 视频发送需要文件上传"}, nil
-}
-
-// SendDocument 发送文件（需要上传）。
-func (a *MattermostAdapter) SendDocument(ctx context.Context, chatID string, filePath string, caption string, opts *SendOptions) (*SendResult, error) {
-	return &SendResult{Success: false, Error: "Mattermost 文件发送需要文件上传"}, nil
-}
-
-// MaxMessageLength 返回最大消息长度。
-func (a *MattermostAdapter) MaxMessageLength() int { return mattermostMaxMessageLength }
-
-// SupportsStreaming 返回是否支持流式输出。
-func (a *MattermostAdapter) SupportsStreaming() bool { return false }
-
-// ───────────────────────────── 自注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&AdapterEntry{
-		Platform: PlatformMattermost,
-		Name:     "Mattermost",
-		Factory:  func() PlatformAdapter { return NewMattermostAdapter(nil) },
-	})
-}
-
-// ───────────────────────────── 辅助函数 ─────────────────────────────
-
-func splitMessage(content string, maxLength int) []string {
-	runes := []rune(content)
-	var chunks []string
-	for len(runes) > maxLength {
-		chunks = append(chunks, string(runes[:maxLength]))
-		runes = runes[maxLength:]
-	}
-	if len(runes) > 0 {
-		chunks = append(chunks, string(runes))
-	}
-	return chunks
-}

@@ -20,11 +20,11 @@ import (
 // 设计目标: 将同步的 streamCallback 转换为异步的平台消息编辑流。
 //
 // 工作流程:
-//   1. AIAgent 调用 OnDelta(text) 推送文本增量
-//   2. deltaCh 缓冲增量
-//   3. Run goroutine 消费增量，累积到 buffer
-//   4. 缓冲区达到阈值 → adapter.Send/EditMessage
-//   5. 编辑间隔未到 → 跳过 (防速率限制)
+//  1. AIAgent 调用 OnDelta(text) 推送文本增量
+//  2. deltaCh 缓冲增量
+//  3. Run goroutine 消费增量，累积到 buffer
+//  4. 缓冲区达到阈值 → adapter.Send/EditMessage
+//  5. 编辑间隔未到 → 跳过 (防速率限制)
 //
 // 第一次发送使用 adapter.Send(), 后续使用 adapter.EditMessage()。
 type StreamConsumer struct {
@@ -36,8 +36,8 @@ type StreamConsumer struct {
 	editInterval time.Duration             // 最小编辑间隔
 	lastEditTime time.Time                 // 上次编辑时间
 	deltaCh      chan string               // 增量通道
-	done         chan struct{}              // 完成信号
-	runDone      chan struct{}              // Run goroutine 退出信号
+	done         chan struct{}             // 完成信号
+	runDone      chan struct{}             // Run goroutine 退出信号
 	finished     atomic.Bool               // 是否已完成
 	closeOnce    sync.Once                 // 确保 Finish 只关闭一次
 }

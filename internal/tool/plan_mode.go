@@ -147,9 +147,3 @@ func (t *ExitPlanModeTool) Execute(ctx context.Context, args map[string]any) (st
 	}), nil
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&EnterPlanModeTool{})
-	GetRegistry().Register(&ExitPlanModeTool{})
-}

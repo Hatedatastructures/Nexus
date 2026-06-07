@@ -13,7 +13,7 @@ import (
 // BackupCommand 实现 nexus backup 命令。
 type BackupCommand struct{}
 
-func (c *BackupCommand) Name() string    { return "backup" }
+func (c *BackupCommand) Name() string     { return "backup" }
 func (c *BackupCommand) Synopsis() string { return "备份配置和数据" }
 
 func (c *BackupCommand) Run(args []string) {
@@ -57,15 +57,15 @@ func createTarGz(sourceDir, targetFile string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// 创建 gzip writer
 	gw := gzip.NewWriter(file)
-	defer gw.Close()
+	defer func() { _ = gw.Close() }()
 
 	// 创建 tar writer
 	tw := tar.NewWriter(gw)
-	defer tw.Close()
+	defer func() { _ = tw.Close() }()
 
 	// 遍历源目录
 	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
@@ -97,7 +97,7 @@ func createTarGz(sourceDir, targetFile string) error {
 			if err != nil {
 				return err
 			}
-			defer file.Close()
+			defer func() { _ = file.Close() }()
 
 			if _, err := io.Copy(tw, file); err != nil {
 				return err
@@ -106,8 +106,4 @@ func createTarGz(sourceDir, targetFile string) error {
 
 		return nil
 	})
-}
-
-func init() {
-	Register(&BackupCommand{})
 }

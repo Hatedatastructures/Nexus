@@ -13,11 +13,13 @@ import (
 	"syscall"
 
 	"nexus-agent/internal/config"
+	"nexus-agent/internal/llm"
 	"nexus-agent/internal/mcp"
 	"nexus-agent/internal/tool"
 )
 
 func main() {
+	llm.RegisterAllTransports()
 	closeFn := initLogger()
 	defer closeFn()
 
@@ -34,8 +36,8 @@ func main() {
 	)
 
 	// 2. 初始化工具注册中心
-	tool.DiscoverBuiltin()
-	registry := tool.GetRegistry()
+	registry := tool.NewRegistry()
+	tool.RegisterAllTools(registry)
 	slog.Info("工具注册中心已初始化", "count", len(registry.ListTools()))
 
 	// 3. 创建 MCP Server

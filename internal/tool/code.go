@@ -121,7 +121,7 @@ func (t *CodeExecuteTool) Execute(ctx context.Context, args map[string]any) (str
 		slog.Error("failed to create temp directory", "err", err)
 		return ToolError(fmt.Sprintf("创建临时目录失败: %v", err)), nil
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// 创建代码文件
 	ext := t.fileExtension(language)
@@ -248,8 +248,3 @@ func (t *CodeExecuteTool) fileExtension(language string) string {
 	}
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&CodeExecuteTool{})
-}

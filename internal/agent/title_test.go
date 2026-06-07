@@ -222,7 +222,7 @@ func TestMaybeAutoTitle_WithStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 
 	ctx := context.Background()
 	if err := state.RunMigrations(ctx, store.DB()); err != nil {
@@ -263,7 +263,7 @@ func TestMaybeAutoTitle_SessionAlreadyTitled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 
 	ctx := context.Background()
 	if err := state.RunMigrations(ctx, store.DB()); err != nil {
@@ -306,7 +306,7 @@ func TestMaybeAutoTitle_SessionNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 
 	if err := state.RunMigrations(context.Background(), store.DB()); err != nil {
 		t.Fatalf("RunMigrations: %v", err)
@@ -329,7 +329,7 @@ func TestMaybeAutoTitle_ProviderError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 
 	ctx := context.Background()
 	if err := state.RunMigrations(ctx, store.DB()); err != nil {

@@ -14,7 +14,7 @@ import (
 // SessionCommand 实现 nexus session 命令。
 type SessionCommand struct{}
 
-func (c *SessionCommand) Name() string    { return "session" }
+func (c *SessionCommand) Name() string     { return "session" }
 func (c *SessionCommand) Synopsis() string { return "会话管理 (list/search/export/stats)" }
 
 func (c *SessionCommand) Run(args []string) {
@@ -52,7 +52,7 @@ func (c *SessionCommand) listSessions() {
 	if err != nil {
 		PrintError("打开数据库失败: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -101,7 +101,7 @@ func (c *SessionCommand) searchSessions(query string) {
 	if err != nil {
 		PrintError("打开数据库失败: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -137,7 +137,7 @@ func (c *SessionCommand) exportSession(sessionID string) {
 	if err != nil {
 		PrintError("打开数据库失败: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -179,7 +179,7 @@ func (c *SessionCommand) sessionStats() {
 	if err != nil {
 		PrintError("打开数据库失败: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -219,8 +219,4 @@ func min(a, b int) int {
 		return a
 	}
 	return b
-}
-
-func init() {
-	Register(&SessionCommand{})
 }

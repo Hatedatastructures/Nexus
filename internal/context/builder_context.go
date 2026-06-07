@@ -3,8 +3,8 @@
 package context
 
 import (
-	"html"
 	"encoding/base64"
+	"html"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -43,7 +43,7 @@ var contextThreatPatterns = []contextThreatPattern{
 	// ── 中文模式 ──
 	{regexp.MustCompile(`忽略(之前|上面|以上|先前)(的)?(指令|提示|规则|指示)`), "prompt_injection_zh"},
 	{regexp.MustCompile(`你(现在|从现在开始)(是|扮演|叫做)`), "role_override_zh"},
-		{regexp.MustCompile(`无视(之前|上面|以上|先前)(的)?(指令|提示|规则|指示)`), "prompt_injection_zh"},
+	{regexp.MustCompile(`无视(之前|上面|以上|先前)(的)?(指令|提示|规则|指示)`), "prompt_injection_zh"},
 	{regexp.MustCompile(`抛弃(之前|上面|以上|先前)(的)?(指令|提示|规则|指示)`), "prompt_injection_zh"},
 	// ── 俄语模式 ──
 	{regexp.MustCompile(`(?i)игнориру(й|ть)\s+(предыдущие|все)\s+(инструкции|указания)`), "prompt_injection_ru"},
@@ -192,7 +192,7 @@ func (b *Builder) loadContextFiles() string {
 			}
 
 			// Hash 去重 (使用内容前 64 字节作为简易 hash)
-			h :=简易Hash(content)
+			h := 简易Hash(content)
 			if seen[h] {
 				continue
 			}

@@ -13,7 +13,7 @@ import (
 // ConfigCommand 实现 nexus config 命令。
 type ConfigCommand struct{}
 
-func (c *ConfigCommand) Name() string    { return "config" }
+func (c *ConfigCommand) Name() string     { return "config" }
 func (c *ConfigCommand) Synopsis() string { return "配置管理 (show/validate/edit/set/path)" }
 
 func (c *ConfigCommand) Run(args []string) {
@@ -226,8 +226,4 @@ func (c *ConfigCommand) setConfig(key string, value string) {
 	fmt.Printf("  键: %s\n", key)
 	fmt.Printf("  值: %s\n", value)
 	fmt.Printf("  文件: %s\n", cfgPath)
-}
-
-func init() {
-	Register(&ConfigCommand{})
 }

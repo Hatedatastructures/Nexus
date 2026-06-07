@@ -20,17 +20,17 @@ type stubProvider struct {
 	block string
 }
 
-func (s *stubProvider) Name() string                                          { return "stub" }
+func (s *stubProvider) Name() string                                         { return "stub" }
 func (s *stubProvider) Initialize(_ context.Context, _ string) error         { return nil }
-func (s *stubProvider) SystemPromptBlock() string                             { return s.block }
+func (s *stubProvider) SystemPromptBlock() string                            { return s.block }
 func (s *stubProvider) Prefetch(_ context.Context, _ string) (string, error) { return "", nil }
 func (s *stubProvider) QueuePrefetch(_ context.Context, _ string)            {}
 func (s *stubProvider) SyncTurn(_ context.Context, _, _ string) error        { return nil }
-func (s *stubProvider) GetToolSchemas() []llm.ToolSchema                      { return nil }
+func (s *stubProvider) GetToolSchemas() []llm.ToolSchema                     { return nil }
 func (s *stubProvider) HandleToolCall(_ context.Context, _ string, _ map[string]any) (string, error) {
 	return `{"success":true}`, nil
 }
-func (s *stubProvider) Shutdown(_ context.Context) error   { return nil }
+func (s *stubProvider) Shutdown(_ context.Context) error { return nil }
 func (s *stubProvider) OnTurnStart(_ context.Context, _ int, _ string) error {
 	return nil
 }
@@ -69,8 +69,8 @@ func TestBuild_FullPipeline(t *testing.T) {
 	}
 
 	checks := []struct {
-		label   string
-		needle  string
+		label  string
+		needle string
 	}{
 		{"identity text", "You are Nexus"},
 		{"dynamic boundary marker", boundaryMarker},

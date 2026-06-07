@@ -20,17 +20,17 @@ import (
 
 // dialogInfo 存储当前待处理的对话框信息。
 type dialogInfo struct {
-	Type         string // 对话框类型: alert, confirm, prompt
-	Message      string // 对话框文本
+	Type          string // 对话框类型: alert, confirm, prompt
+	Message       string // 对话框文本
 	DefaultPrompt string // prompt 默认值
-	URL          string // 触发对话框的页面 URL
+	URL           string // 触发对话框的页面 URL
 }
 
 // dialogState 管理对话框状态，并发安全。
 type dialogState struct {
-	mu           sync.RWMutex
-	pending      *dialogInfo
-	listenerSet  bool
+	mu             sync.RWMutex
+	pending        *dialogInfo
+	listenerSet    bool
 	listenerCancel func()
 }
 
@@ -65,9 +65,9 @@ func (t *BrowserHandleDialogTool) Description() string {
 	return "处理页面中的 alert/confirm/prompt 对话框。支持接受、拒绝、或向 prompt 输入文本。"
 }
 
-func (t *BrowserHandleDialogTool) Toolset() string { return "browser" }
-func (t *BrowserHandleDialogTool) Emoji() string { return "⚠️" }
-func (t *BrowserHandleDialogTool) IsAvailable() bool { return true }
+func (t *BrowserHandleDialogTool) Toolset() string     { return "browser" }
+func (t *BrowserHandleDialogTool) Emoji() string       { return "⚠️" }
+func (t *BrowserHandleDialogTool) IsAvailable() bool   { return true }
 func (t *BrowserHandleDialogTool) MaxResultChars() int { return 5000 }
 
 func (t *BrowserHandleDialogTool) Schema() *ToolSchema {
@@ -177,7 +177,7 @@ func handleDialogViaCDP(ctx context.Context, ctrlURL string, accept bool, prompt
 	if err != nil {
 		return fmt.Errorf("CDP WebSocket 连接失败: %w", err)
 	}
-	defer ws.Close()
+	defer func() { _ = ws.Close() }()
 
 	id := nextCDPID()
 	params := map[string]any{
@@ -203,7 +203,7 @@ func handleDialogViaCDP(ctx context.Context, ctrlURL string, accept bool, prompt
 	}
 
 	var result struct {
-		ID    int    `json:"id"`
+		ID    int `json:"id"`
 		Error *struct {
 			Code    int    `json:"code"`
 			Message string `json:"message"`
@@ -242,10 +242,10 @@ func SetupDialogListener(page *rod.Page) {
 			"message", e.Message,
 		)
 		globalDialogState.setPending(&dialogInfo{
-			Type:         string(e.Type),
-			Message:      e.Message,
+			Type:          string(e.Type),
+			Message:       e.Message,
 			DefaultPrompt: e.DefaultPrompt,
-			URL:          e.URL,
+			URL:           e.URL,
 		})
 	})
 
@@ -254,10 +254,4 @@ func SetupDialogListener(page *rod.Page) {
 	globalDialogState.mu.Unlock()
 
 	slog.Info("dialog listener started")
-}
-
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&BrowserHandleDialogTool{})
 }

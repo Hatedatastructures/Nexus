@@ -4,24 +4,18 @@ package auth
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"sync"
 	"time"
+
+	pkgerrors "nexus-agent/internal/errors"
 )
 
 // ───────────────────────────── 常量 ─────────────────────────────
@@ -35,9 +29,6 @@ const (
 
 	// googleTokenEndpoint Google token 端点。
 	googleTokenEndpoint = "https://oauth2.googleapis.com/token"
-
-	// codeVerifierLen PKCE code_verifier 长度 (43-128 字符，RFC 7636)。
-	codeVerifierLen = 64
 
 	// callbackPath 本地 HTTP server 回调路径。
 	callbackPath = "/oauth/callback"
@@ -117,26 +108,6 @@ func (g *GoogleOAuth) WithTokenFile(path string) *GoogleOAuth {
 	return g
 }
 
-// ───────────────────────────── PKCE 辅助函数 ─────────────────────────────
-
-// generateCodeVerifier 生成 PKCE code_verifier。
-// 长度为 43-128 字符，仅包含 [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~"。
-func generateCodeVerifier() (string, error) {
-	// 使用 32 字节随机数，base64url 编码后为 43 字符
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("生成随机数失败: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-// generateCodeChallenge 从 code_verifier 计算 PKCE code_challenge。
-// 使用 S256 方法: BASE64URL(SHA256(code_verifier))。
-func generateCodeChallenge(verifier string) string {
-	h := sha256.Sum256([]byte(verifier))
-	return base64.RawURLEncoding.EncodeToString(h[:])
-}
-
 // ───────────────────────────── 授权流程 ─────────────────────────────
 
 // StartFlow 启动 Google OAuth 浏览器授权流程。
@@ -154,14 +125,14 @@ func (g *GoogleOAuth) StartFlow(ctx context.Context) (*Token, error) {
 	// 1. 生成 PKCE 参数
 	codeVerifier, err := generateCodeVerifier()
 	if err != nil {
-		return nil, fmt.Errorf("生成 PKCE code_verifier 失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.AuthOAuth, "生成 PKCE code_verifier 失败", err)
 	}
 	codeChallenge := generateCodeChallenge(codeVerifier)
 
 	// 2. 启动本地回调 server，随机分配端口
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, fmt.Errorf("启动本地监听失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.AuthOAuth, "启动本地监听失败", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	redirectURI := fmt.Sprintf("http://127.0.0.1:%d%s", port, callbackPath)
@@ -170,16 +141,16 @@ func (g *GoogleOAuth) StartFlow(ctx context.Context) (*Token, error) {
 	// 3. 构建授权 URL
 	state, err := generateCodeVerifier() // 复用生成随机 state
 	if err != nil {
-		listener.Close()
-		return nil, fmt.Errorf("生成 state 参数失败: %w", err)
+		_ = listener.Close()
+		return nil, pkgerrors.Wrap(pkgerrors.AuthOAuth, "生成 state 参数失败", err)
 	}
 
 	authURL := g.buildAuthURL(codeChallenge, state)
 
 	// 4. 创建 channel 接收回调结果
 	type callbackResult struct {
-		code  string
-		err   error
+		code string
+		err  error
 	}
 	resultCh := make(chan callbackResult, 1)
 
@@ -190,7 +161,7 @@ func (g *GoogleOAuth) StartFlow(ctx context.Context) (*Token, error) {
 		returnedState := r.URL.Query().Get("state")
 		if subtle.ConstantTimeCompare([]byte(returnedState), []byte(state)) != 1 {
 			http.Error(w, "state 参数不匹配，可能存在 CSRF 攻击", http.StatusBadRequest)
-			resultCh <- callbackResult{err: fmt.Errorf("state 参数不匹配")}
+			resultCh <- callbackResult{err: pkgerrors.New(pkgerrors.AuthOAuth, "state 参数不匹配")}
 			return
 		}
 
@@ -198,7 +169,7 @@ func (g *GoogleOAuth) StartFlow(ctx context.Context) (*Token, error) {
 		if errParam := r.URL.Query().Get("error"); errParam != "" {
 			desc := r.URL.Query().Get("error_description")
 			http.Error(w, fmt.Sprintf("授权失败: %s - %s", errParam, desc), http.StatusBadRequest)
-			resultCh <- callbackResult{err: fmt.Errorf("OAuth 错误: %s - %s", errParam, desc)}
+			resultCh <- callbackResult{err: pkgerrors.New(pkgerrors.AuthOAuth, fmt.Sprintf("OAuth 错误: %s - %s", errParam, desc))}
 			return
 		}
 
@@ -206,13 +177,13 @@ func (g *GoogleOAuth) StartFlow(ctx context.Context) (*Token, error) {
 		code := r.URL.Query().Get("code")
 		if code == "" {
 			http.Error(w, "缺少 authorization code", http.StatusBadRequest)
-			resultCh <- callbackResult{err: fmt.Errorf("回调中缺少 authorization code")}
+			resultCh <- callbackResult{err: pkgerrors.New(pkgerrors.AuthOAuth, "回调中缺少 authorization code")}
 			return
 		}
 
 		// 返回成功页面
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>Nexus OAuth</title></head><body>
+		_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>Nexus OAuth</title></head><body>
 <h2>授权成功</h2><p>您现在可以关闭此页面并返回 Nexus。</p></body></html>`)
 
 		resultCh <- callbackResult{code: code}
@@ -237,11 +208,11 @@ func (g *GoogleOAuth) StartFlow(ctx context.Context) (*Token, error) {
 	var code string
 	select {
 	case <-ctx.Done():
-		server.Shutdown(context.Background())
+		_ = server.Shutdown(context.Background())
 		return nil, ctx.Err()
 	case result := <-resultCh:
 		if result.err != nil {
-			server.Shutdown(context.Background())
+			_ = server.Shutdown(context.Background())
 			return nil, result.err
 		}
 		code = result.code
@@ -250,12 +221,12 @@ func (g *GoogleOAuth) StartFlow(ctx context.Context) (*Token, error) {
 	// 8. 关闭 server
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), serverShutdownTimeout)
 	defer cancel()
-	server.Shutdown(shutdownCtx)
+	_ = server.Shutdown(shutdownCtx)
 
 	// 9. 用 authorization code 换取 token
 	token, err := g.exchangeCode(ctx, code, codeVerifier)
 	if err != nil {
-		return nil, fmt.Errorf("用 authorization code 换取 token 失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.AuthOAuth, "用 authorization code 换取 token 失败", err)
 	}
 
 	// 10. 持久化 token
@@ -267,35 +238,6 @@ func (g *GoogleOAuth) StartFlow(ctx context.Context) (*Token, error) {
 	return token, nil
 }
 
-// buildAuthURL 构建 Google OAuth 授权 URL。
-func (g *GoogleOAuth) buildAuthURL(codeChallenge, state string) string {
-	params := url.Values{
-		"client_id":             {g.clientID},
-		"redirect_uri":          {g.redirectURI},
-		"response_type":         {"code"},
-		"scope":                 {strings.Join(g.scopes, " ")},
-		"code_challenge":        {codeChallenge},
-		"code_challenge_method": {"S256"},
-		"state":                 {state},
-		"access_type":           {"offline"}, // 请求 refresh_token
-		"prompt":                {"consent"}, // 强制显示同意页面以获取 refresh_token
-	}
-	return googleAuthEndpoint + "?" + params.Encode()
-}
-
-// exchangeCode 用 authorization code + PKCE code_verifier 换取 token。
-func (g *GoogleOAuth) exchangeCode(ctx context.Context, code, codeVerifier string) (*Token, error) {
-	data := url.Values{
-		"client_id":     {g.clientID},
-		"code":          {code},
-		"code_verifier": {codeVerifier},
-		"grant_type":    {"authorization_code"},
-		"redirect_uri":  {g.redirectURI},
-	}
-
-	return g.doTokenRequest(ctx, data)
-}
-
 // ───────────────────────────── Token 刷新 ─────────────────────────────
 
 // RefreshToken 使用 refresh_token 获取新的 access_token。
@@ -305,7 +247,7 @@ func (g *GoogleOAuth) RefreshToken(ctx context.Context, token *Token) (*Token, e
 	defer g.mu.Unlock()
 
 	if token == nil || token.RefreshToken == "" {
-		return nil, fmt.Errorf("token 或 refresh_token 为空，无法刷新")
+		return nil, pkgerrors.New(pkgerrors.AuthFailed, "token 或 refresh_token 为空，无法刷新")
 	}
 
 	data := url.Values{
@@ -316,7 +258,7 @@ func (g *GoogleOAuth) RefreshToken(ctx context.Context, token *Token) (*Token, e
 
 	newToken, err := g.doTokenRequest(ctx, data)
 	if err != nil {
-		return nil, fmt.Errorf("刷新 token 失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.AuthOAuth, "刷新 token 失败", err)
 	}
 
 	// Google 刷新时可能不返回新的 refresh_token，保留原有的
@@ -332,7 +274,7 @@ func (g *GoogleOAuth) RefreshToken(ctx context.Context, token *Token) (*Token, e
 	return newToken, nil
 }
 
-// ───────────────────────────── Token 持久化 ─────────────────────────────
+// ───────────────────────────── Token 持久化 (公开方法) ─────────────────────────────
 
 // LoadToken 从文件加载已保存的 token。
 // 如果文件不存在，返回 nil (非错误)。
@@ -343,24 +285,6 @@ func (g *GoogleOAuth) LoadToken() (*Token, error) {
 	return g.loadTokenFile()
 }
 
-// loadTokenFile 内部加载实现（调用者需持锁）。
-func (g *GoogleOAuth) loadTokenFile() (*Token, error) {
-	data, err := os.ReadFile(g.tokenFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil // 文件不存在，非错误
-		}
-		return nil, fmt.Errorf("读取 token 文件失败: %w", err)
-	}
-
-	var token Token
-	if err := json.Unmarshal(data, &token); err != nil {
-		return nil, fmt.Errorf("解析 token 文件失败: %w", err)
-	}
-
-	return &token, nil
-}
-
 // SaveToken 将 token 保存到文件。
 // 自动创建目录，文件权限设为 0600（仅所有者可读写）。
 func (g *GoogleOAuth) SaveToken(token *Token) error {
@@ -368,109 +292,4 @@ func (g *GoogleOAuth) SaveToken(token *Token) error {
 	defer g.mu.Unlock()
 
 	return g.saveTokenFile(token)
-}
-
-// saveTokenFile 内部保存实现（调用者需持锁）。
-func (g *GoogleOAuth) saveTokenFile(token *Token) error {
-	if token == nil {
-		return fmt.Errorf("token 为空，无法保存")
-	}
-
-	// 确保目录存在
-	dir := filepath.Dir(g.tokenFile)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("创建凭证目录失败: %w", err)
-	}
-
-	data, err := json.MarshalIndent(token, "", "  ")
-	if err != nil {
-		return fmt.Errorf("序列化 token 失败: %w", err)
-	}
-
-	// 写入临时文件后重写，确保原子性
-	tmpFile := g.tokenFile + ".tmp"
-	if err := os.WriteFile(tmpFile, data, 0600); err != nil {
-		return fmt.Errorf("写入 token 文件失败: %w", err)
-	}
-
-	if err := os.Rename(tmpFile, g.tokenFile); err != nil {
-		os.Remove(tmpFile) // 清理临时文件
-		return fmt.Errorf("重命名 token 文件失败: %w", err)
-	}
-
-	return nil
-}
-
-// ───────────────────────────── HTTP 请求 ─────────────────────────────
-
-// doTokenRequest 执行 OAuth token 端点请求。
-func (g *GoogleOAuth) doTokenRequest(ctx context.Context, data url.Values) (*Token, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, googleTokenEndpoint, strings.NewReader(data.Encode()))
-	if err != nil {
-		return nil, fmt.Errorf("创建 token 请求失败: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("token 请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxOAuthResponseSize))
-	if err != nil {
-		return nil, fmt.Errorf("读取 token 响应失败: %w", err)
-	}
-
-	if resp.StatusCode == 401 {
-		return nil, fmt.Errorf("OAuth 认证失败 (HTTP 401): token 已失效或被撤销。请重新运行 OAuth 授权流程以获取新凭证")
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("token 端点返回 HTTP %d", resp.StatusCode)
-	}
-
-	// 解析 Google token 响应
-	var tokenResp struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int    `json:"expires_in"` // 秒数
-		TokenType    string `json:"token_type"`
-		Scope        string `json:"scope"`
-	}
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, fmt.Errorf("解析 token 响应失败: %w", err)
-	}
-
-	token := &Token{
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: tokenResp.RefreshToken,
-		Expiry:       time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
-		TokenType:    tokenResp.TokenType,
-	}
-
-	if token.TokenType == "" {
-		token.TokenType = "Bearer"
-	}
-
-	return token, nil
-}
-
-// ───────────────────────────── 浏览器打开 ─────────────────────────────
-
-// openBrowser 用系统默认浏览器打开指定 URL。
-// 支持 Windows / macOS / Linux。
-func openBrowser(url string) error {
-	switch runtime.GOOS {
-	case "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
-	case "darwin":
-		return exec.Command("open", url).Start()
-	case "linux":
-		return exec.Command("xdg-open", url).Start()
-	default:
-		return fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
-	}
 }

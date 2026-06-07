@@ -10,7 +10,7 @@ import (
 // ToolCommand 实现 nexus tool 命令。
 type ToolCommand struct{}
 
-func (c *ToolCommand) Name() string    { return "tool" }
+func (c *ToolCommand) Name() string     { return "tool" }
 func (c *ToolCommand) Synopsis() string { return "工具管理 (list/info)" }
 
 func (c *ToolCommand) Run(args []string) {
@@ -33,11 +33,11 @@ func (c *ToolCommand) Run(args []string) {
 }
 
 func (c *ToolCommand) listTools() {
-	tool.DiscoverBuiltin()
+	registry := tool.NewRegistry()
+	tool.RegisterAllTools(registry)
 
 	PrintTitle("已注册的可用工具")
 
-	registry := tool.GetRegistry()
 	names := registry.ListTools()
 
 	if len(names) == 0 {
@@ -82,9 +82,9 @@ func (c *ToolCommand) listTools() {
 }
 
 func (c *ToolCommand) toolInfo(name string) {
-	tool.DiscoverBuiltin()
+	registry := tool.NewRegistry()
+	tool.RegisterAllTools(registry)
 
-	registry := tool.GetRegistry()
 	entry := registry.GetEntry(name)
 	if entry == nil {
 		PrintError("未找到工具: %s", name)
@@ -116,8 +116,4 @@ func (c *ToolCommand) toolInfo(name string) {
 			fmt.Printf("    %s\n", string(paramsJSON))
 		}
 	}
-}
-
-func init() {
-	Register(&ToolCommand{})
 }

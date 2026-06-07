@@ -21,13 +21,13 @@ import (
 //   - 使用文件锁 (~/.nexus/cron/.tick.lock) 防跨进程并发
 //   - 同一时刻只有一个 Scheduler 实例执行 tick
 type Scheduler struct {
-	manager   *JobManager          // 作业管理器
-	executor  *Executor            // 作业执行器
-	interval  time.Duration        // 检查间隔 (默认 60 秒)
-	lockFile  string               // 文件锁路径
-	mu        sync.Mutex
-	running   bool
-	cancel    context.CancelFunc
+	manager  *JobManager   // 作业管理器
+	executor *Executor     // 作业执行器
+	interval time.Duration // 检查间隔 (默认 60 秒)
+	lockFile string        // 文件锁路径
+	mu       sync.Mutex
+	running  bool
+	cancel   context.CancelFunc
 }
 
 // NewScheduler 创建调度器。
@@ -199,7 +199,7 @@ func (s *Scheduler) tickWithAdapters(ctx context.Context, adapters map[platforms
 	slog.Info("Cron: due jobs", "count", len(dueJobs))
 
 	for _, job := range dueJobs {
-		s.manager.AdvanceNextRun(ctx, job)
+		_ = s.manager.AdvanceNextRun(ctx, job)
 
 		if err := s.executor.Execute(ctx, job); err != nil {
 			slog.Error("Cron: job execution failed",
@@ -217,7 +217,7 @@ func (s *Scheduler) tickWithAdapters(ctx context.Context, adapters map[platforms
 			)
 		}
 
-		DeliverResult(ctx, job, job.LastStatus, adapters)
+		_ = DeliverResult(ctx, job, job.LastStatus, adapters)
 	}
 
 	return nil
@@ -242,7 +242,7 @@ func (s *Scheduler) acquireLock() (*os.File, error) {
 
 	// 获取排他锁 (非阻塞)
 	if err := lockFile(f); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 
@@ -252,7 +252,7 @@ func (s *Scheduler) acquireLock() (*os.File, error) {
 // releaseLock 释放 tick 锁。
 func (s *Scheduler) releaseLock(f *os.File) {
 	if f != nil {
-		unlockFile(f)
-		f.Close()
+		_ = unlockFile(f)
+		_ = f.Close()
 	}
 }

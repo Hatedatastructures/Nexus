@@ -15,7 +15,7 @@ import (
 // ModelCommand 实现 nexus model 命令。
 type ModelCommand struct{}
 
-func (c *ModelCommand) Name() string    { return "model" }
+func (c *ModelCommand) Name() string     { return "model" }
 func (c *ModelCommand) Synopsis() string { return "交互式选择默认模型" }
 
 func (c *ModelCommand) Run(args []string) {
@@ -177,8 +177,4 @@ func (c *ModelCommand) updateConfig(provider, model string) {
 	PrintSuccess("默认模型已更新")
 	fmt.Printf("  提供者: %s\n", provider)
 	fmt.Printf("  模型: %s\n", model)
-}
-
-func init() {
-	Register(&ModelCommand{})
 }

@@ -4,20 +4,15 @@
 package agent
 
 import (
-	"log/slog"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
-	"nexus-agent/internal/approval"
 	"nexus-agent/internal/config"
-	"nexus-agent/internal/context"
-	"nexus-agent/internal/credential"
+	"nexus-agent/internal/interfaces"
 	"nexus-agent/internal/llm"
-	"nexus-agent/internal/memory"
 	"nexus-agent/internal/sandbox"
-	"nexus-agent/internal/skill"
-	"nexus-agent/internal/state"
 	"nexus-agent/internal/tool"
 )
 
@@ -26,8 +21,8 @@ import (
 // IterationBudget 跟踪代理主循环的工具调用迭代次数。
 // 每次工具调用消耗一次预算，防止无限循环。
 type IterationBudget struct {
-	max      int           // 最大迭代次数 (默认 90)
-	consumed atomic.Int64  // 已消耗次数
+	max      int          // 最大迭代次数 (默认 90)
+	consumed atomic.Int64 // 已消耗次数
 }
 
 // NewIterationBudget 创建迭代预算
@@ -65,9 +60,9 @@ func (b *IterationBudget) Consumed() int {
 
 // ReasoningConfig 定义模型的推理/思维链配置
 type ReasoningConfig struct {
-	Effort      string // 推理努力程度: "low" / "medium" / "high" (OpenAI) 或 "" (Anthropic budget 模式)
-	BudgetTokens int   // 推理 token 预算 (Anthropic: 1024-64000, 0 = 自动)
-	Enabled     bool   // 是否启用推理
+	Effort       string // 推理努力程度: "low" / "medium" / "high" (OpenAI) 或 "" (Anthropic budget 模式)
+	BudgetTokens int    // 推理 token 预算 (Anthropic: 1024-64000, 0 = 自动)
+	Enabled      bool   // 是否启用推理
 }
 
 // ───────────────────────────── 对话结果 ─────────────────────────────
@@ -146,42 +141,42 @@ func WithClarifyCallback(fn func(question string, choices []string) string) Agen
 }
 
 // WithToolRegistry 设置工具注册中心
-func WithToolRegistry(r *tool.Registry) AgentOption {
+func WithToolRegistry(r interfaces.ToolRegistry) AgentOption {
 	return func(a *AIAgent) { a.registry = r }
 }
 
 // WithMemoryManager 设置记忆管理器
-func WithMemoryManager(m *memory.Manager) AgentOption {
+func WithMemoryManager(m interfaces.MemoryManager) AgentOption {
 	return func(a *AIAgent) { a.memoryManager = m }
 }
 
 // WithSkillManager 设置技能管理器
-func WithSkillManager(s *skill.Manager) AgentOption {
+func WithSkillManager(s interfaces.SkillManager) AgentOption {
 	return func(a *AIAgent) { a.skillManager = s }
 }
 
 // WithContextBuilder 设置系统提示词构建器
-func WithContextBuilder(b *context.Builder) AgentOption {
+func WithContextBuilder(b interfaces.ContextBuilder) AgentOption {
 	return func(a *AIAgent) { a.contextBuilder = b }
 }
 
 // WithCompressor 设置上下文压缩器
-func WithCompressor(c *context.Compressor) AgentOption {
+func WithCompressor(c interfaces.ContextCompressor) AgentOption {
 	return func(a *AIAgent) { a.compressor = c }
 }
 
 // WithState 设置状态持久化存储
-func WithStateStore(s *state.Store) AgentOption {
+func WithStateStore(s interfaces.StateStore) AgentOption {
 	return func(a *AIAgent) { a.state = s }
 }
 
 // WithSessionPersister 设置会话 JSONL 持久化器
-func WithSessionPersister(p *state.SessionPersister) AgentOption {
+func WithSessionPersister(p interfaces.SessionPersister) AgentOption {
 	return func(a *AIAgent) { a.persister = p }
 }
 
 // WithCredentialPool 设置凭证池
-func WithCredentialPool(p *credential.Pool) AgentOption {
+func WithCredentialPool(p interfaces.CredentialPool) AgentOption {
 	return func(a *AIAgent) { a.credentialPool = p }
 }
 
@@ -195,7 +190,7 @@ func WithResumeSession(sessionID string) AgentOption {
 }
 
 // WithApprovalChecker 设置命令审批检查器
-func WithApprovalChecker(c *approval.Checker) AgentOption {
+func WithApprovalChecker(c interfaces.ApprovalChecker) AgentOption {
 	return func(a *AIAgent) { a.approvalChecker = c }
 }
 
@@ -260,13 +255,11 @@ func WithGuardrails(g *ToolCallGuardrails) AgentOption {
 }
 
 // WithRouter 设置多提供者路由器。
-// 当主提供者重试失败后，会委托 Router 进行按优先级的提供者切换。
 func WithRouter(r *ProviderRouter) AgentOption {
 	return func(a *AIAgent) { a.router = r }
 }
 
 // WithFallbackChain 设置回退链。
-// 当 Router 也失败（或未配置 Router）时，按回退链优先级尝试备选提供者。
 func WithFallbackChain(fc *FallbackChain) AgentOption {
 	return func(a *AIAgent) { a.fallbackChain = fc }
 }

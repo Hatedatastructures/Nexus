@@ -18,12 +18,12 @@ type mockChannelListerAdapter struct {
 	listErr      error
 }
 
-func (m *mockChannelListerAdapter) Name() string                                          { return "mockLister" }
-func (m *mockChannelListerAdapter) PlatformType() platforms.Platform                      { return m.platformType }
+func (m *mockChannelListerAdapter) Name() string                     { return "mockLister" }
+func (m *mockChannelListerAdapter) PlatformType() platforms.Platform { return m.platformType }
 func (m *mockChannelListerAdapter) Connect(_ context.Context) (<-chan *platforms.MessageEvent, error) {
 	return nil, nil
 }
-func (m *mockChannelListerAdapter) Disconnect(_ context.Context) error  { return nil }
+func (m *mockChannelListerAdapter) Disconnect(_ context.Context) error { return nil }
 func (m *mockChannelListerAdapter) Send(_ context.Context, _, _ string, _ *platforms.SendOptions) (*platforms.SendResult, error) {
 	return &platforms.SendResult{Success: true, MessageID: "m1"}, nil
 }
@@ -44,7 +44,7 @@ func (m *mockChannelListerAdapter) SendVideo(_ context.Context, _, _, _ string, 
 func (m *mockChannelListerAdapter) SendDocument(_ context.Context, _, _, _ string, _ *platforms.SendOptions) (*platforms.SendResult, error) {
 	return &platforms.SendResult{Success: true, MessageID: "doc1"}, nil
 }
-func (m *mockChannelListerAdapter) MaxMessageLength() int { return 4096 }
+func (m *mockChannelListerAdapter) MaxMessageLength() int   { return 4096 }
 func (m *mockChannelListerAdapter) SupportsStreaming() bool { return false }
 func (m *mockChannelListerAdapter) ListChannels(_ context.Context) ([]ChannelEntry, error) {
 	return m.channels, m.listErr
@@ -55,12 +55,12 @@ type mockNoListerAdapter struct {
 	platformType platforms.Platform
 }
 
-func (m *mockNoListerAdapter) Name() string                                          { return "mockNoLister" }
-func (m *mockNoListerAdapter) PlatformType() platforms.Platform                      { return m.platformType }
+func (m *mockNoListerAdapter) Name() string                     { return "mockNoLister" }
+func (m *mockNoListerAdapter) PlatformType() platforms.Platform { return m.platformType }
 func (m *mockNoListerAdapter) Connect(_ context.Context) (<-chan *platforms.MessageEvent, error) {
 	return nil, nil
 }
-func (m *mockNoListerAdapter) Disconnect(_ context.Context) error  { return nil }
+func (m *mockNoListerAdapter) Disconnect(_ context.Context) error { return nil }
 func (m *mockNoListerAdapter) Send(_ context.Context, _, _ string, _ *platforms.SendOptions) (*platforms.SendResult, error) {
 	return &platforms.SendResult{Success: true}, nil
 }

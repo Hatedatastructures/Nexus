@@ -4,9 +4,9 @@ package telemetry
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"log/slog"
 	"sync"
 	"time"
 )
@@ -17,16 +17,16 @@ import (
 type EventType string
 
 const (
-	EventHTTPStarted       EventType = "HttpRequestStarted"
-	EventHTTPSucceeded     EventType = "HttpRequestSucceeded"
-	EventHTTPFailed        EventType = "HttpRequestFailed"
-	EventTurnStarted       EventType = "TurnStarted"
-	EventTurnCompleted     EventType = "TurnCompleted"
-	EventTurnFailed        EventType = "TurnFailed"
-	EventToolStarted       EventType = "ToolExecutionStarted"
-	EventToolFinished      EventType = "ToolExecutionFinished"
-	EventCompTriggered     EventType = "CompressionTriggered"
-	EventCompCompleted     EventType = "CompressionCompleted"
+	EventHTTPStarted   EventType = "HttpRequestStarted"
+	EventHTTPSucceeded EventType = "HttpRequestSucceeded"
+	EventHTTPFailed    EventType = "HttpRequestFailed"
+	EventTurnStarted   EventType = "TurnStarted"
+	EventTurnCompleted EventType = "TurnCompleted"
+	EventTurnFailed    EventType = "TurnFailed"
+	EventToolStarted   EventType = "ToolExecutionStarted"
+	EventToolFinished  EventType = "ToolExecutionFinished"
+	EventCompTriggered EventType = "CompressionTriggered"
+	EventCompCompleted EventType = "CompressionCompleted"
 )
 
 // Event 表示一个遥测事件。
@@ -51,10 +51,10 @@ type Sink interface {
 
 // JsonlTelemetrySink 将遥测事件写入 JSONL 文件。
 type JsonlTelemetrySink struct {
-	mu       sync.Mutex
-	file     *os.File
-	encoder  *json.Encoder
-	count    int64
+	mu      sync.Mutex
+	file    *os.File
+	encoder *json.Encoder
+	count   int64
 }
 
 // NewJsonlTelemetrySink 创建 JSONL 遥测输出。

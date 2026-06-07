@@ -15,10 +15,10 @@ import (
 
 // ChannelEntry 表示频道目录中的一个频道条目。
 type ChannelEntry struct {
-	Platform   platforms.Platform // 平台类型 (telegram / discord / slack 等)
-	ChannelID  string             // 平台频道 ID
-	Name       string             // 频道显示名称
-	GuildInfo  string             // 所属服务器/群组信息 (可选)
+	Platform  platforms.Platform // 平台类型 (telegram / discord / slack 等)
+	ChannelID string             // 平台频道 ID
+	Name      string             // 频道显示名称
+	GuildInfo string             // 所属服务器/群组信息 (可选)
 }
 
 // ───────────────────────────── 频道目录构建 ─────────────────────────────

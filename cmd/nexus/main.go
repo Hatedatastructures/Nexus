@@ -7,9 +7,13 @@ import (
 	"sort"
 
 	"nexus-agent/cmd/nexus/commands"
+	"nexus-agent/internal/llm"
 )
 
 func main() {
+	commands.RegisterAllCommands()
+	llm.RegisterAllTransports()
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)

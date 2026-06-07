@@ -7,6 +7,8 @@ import (
 	"os"
 
 	"gopkg.in/yaml.v3"
+
+	pkgerrors "nexus-agent/internal/errors"
 )
 
 // ───────────────────────────── 插件清单 ─────────────────────────────
@@ -15,15 +17,15 @@ import (
 // 描述插件的元数据、依赖关系和能力声明。
 type Manifest struct {
 	// ── 基本信息 ──
-	Name        string `yaml:"name"`                 // 插件名称 (必填，唯一标识)
-	Version     string `yaml:"version"`              // 语义版本号 (必填)
+	Name        string `yaml:"name"`                  // 插件名称 (必填，唯一标识)
+	Version     string `yaml:"version"`               // 语义版本号 (必填)
 	Description string `yaml:"description,omitempty"` // 插件描述
-	Author      string `yaml:"author,omitempty"`     // 作者信息
-	License     string `yaml:"license,omitempty"`    // SPDX 许可证标识
+	Author      string `yaml:"author,omitempty"`      // 作者信息
+	License     string `yaml:"license,omitempty"`     // SPDX 许可证标识
 
 	// ── 分类与兼容性 ──
-	Kind       string   `yaml:"kind,omitempty"`       // 插件类型: tool / hook / memory / composite
-	Platforms  []string `yaml:"platforms,omitempty"`   // 兼容平台 (空 = 全平台)
+	Kind      string   `yaml:"kind,omitempty"`      // 插件类型: tool / hook / memory / composite
+	Platforms []string `yaml:"platforms,omitempty"` // 兼容平台 (空 = 全平台)
 
 	// ── 能力声明 ──
 	ProvidesTools []string `yaml:"provides_tools,omitempty"` // 提供的工具名列表
@@ -34,8 +36,8 @@ type Manifest struct {
 	RequiresEnv  []string `yaml:"requires_env,omitempty"`  // 必需的环境变量名
 
 	// ── 入口配置 ──
-	Entrypoint string            `yaml:"entrypoint,omitempty"` // 入口文件 (Go 插件 .so 路径)
-	Config     map[string]any    `yaml:"config,omitempty"`     // 默认配置 (可被运行时覆盖)
+	Entrypoint string         `yaml:"entrypoint,omitempty"` // 入口文件 (Go 插件 .so 路径)
+	Config     map[string]any `yaml:"config,omitempty"`     // 默认配置 (可被运行时覆盖)
 }
 
 // ───────────────────────────── 清单解析 ─────────────────────────────
@@ -51,28 +53,28 @@ type Manifest struct {
 func ParseManifest(path string) (*Manifest, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("读取清单文件 %s: %w", path, err)
+		return nil, pkgerrors.Wrap(pkgerrors.FileIO, fmt.Sprintf("读取清单文件 %s", path), err)
 	}
 
 	var m Manifest
 	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("解析清单文件 %s: %w", path, err)
+		return nil, pkgerrors.Wrap(pkgerrors.ConfigInvalid, fmt.Sprintf("解析清单文件 %s", path), err)
 	}
 
 	// 验证必填字段
 	if m.Name == "" {
-		return nil, fmt.Errorf("清单缺少必填字段: name")
+		return nil, pkgerrors.New(pkgerrors.ConfigInvalid, "清单缺少必填字段: name")
 	}
 	if len(m.Name) > 64 {
-		return nil, fmt.Errorf("插件名称过长 (最多 64 字符): %s", m.Name)
+		return nil, pkgerrors.New(pkgerrors.ConfigInvalid, fmt.Sprintf("插件名称过长 (最多 64 字符): %s", m.Name))
 	}
 	if m.Version == "" {
-		return nil, fmt.Errorf("清单缺少必填字段: version")
+		return nil, pkgerrors.New(pkgerrors.ConfigInvalid, "清单缺少必填字段: version")
 	}
 
 	// 验证 kind 类型
 	if m.Kind != "" && !isValidPluginKind(m.Kind) {
-		return nil, fmt.Errorf("未知的插件类型: %s (有效值: tool, hook, memory, composite)", m.Kind)
+		return nil, pkgerrors.New(pkgerrors.ConfigInvalid, fmt.Sprintf("未知的插件类型: %s (有效值: tool, hook, memory, composite)", m.Kind))
 	}
 
 	return &m, nil
@@ -110,20 +112,20 @@ func isValidPluginKind(kind string) bool {
 // 检查必填字段、格式约束和声明一致性。
 func ValidateManifest(m *Manifest) error {
 	if m == nil {
-		return fmt.Errorf("清单为 nil")
+		return pkgerrors.New(pkgerrors.ConfigInvalid, "清单为 nil")
 	}
 
 	if m.Name == "" {
-		return fmt.Errorf("清单缺少必填字段: name")
+		return pkgerrors.New(pkgerrors.ConfigInvalid, "清单缺少必填字段: name")
 	}
 	if m.Version == "" {
-		return fmt.Errorf("清单缺少必填字段: version")
+		return pkgerrors.New(pkgerrors.ConfigInvalid, "清单缺少必填字段: version")
 	}
 
 	// 验证 name 格式 (只允许字母、数字、下划线、连字符)
 	for _, c := range m.Name {
 		if !isNameChar(c) {
-			return fmt.Errorf("插件名称包含非法字符 '%c' (只允许字母、数字、下划线、连字符)", c)
+			return pkgerrors.New(pkgerrors.ConfigInvalid, fmt.Sprintf("插件名称包含非法字符 '%c' (只允许字母、数字、下划线、连字符)", c))
 		}
 	}
 

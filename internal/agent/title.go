@@ -139,12 +139,13 @@ func extractSnippets(messages []llm.Message, maxTurns int) string {
 			break
 		}
 
-		role := string(msg.Role)
-		if msg.Role == llm.RoleUser {
+		var role string
+		switch msg.Role {
+		case llm.RoleUser:
 			role = "用户"
-		} else if msg.Role == llm.RoleAssistant {
+		case llm.RoleAssistant:
 			role = "助手"
-		} else {
+		default:
 			continue
 		}
 
@@ -153,7 +154,7 @@ func extractSnippets(messages []llm.Message, maxTurns int) string {
 			content = string([]rune(content)[:titleSnippetLen]) + "..."
 		}
 
-		b.WriteString(fmt.Sprintf("%s: %s\n", role, content))
+		fmt.Fprintf(&b, "%s: %s\n", role, content)
 		count++
 	}
 

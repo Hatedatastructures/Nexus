@@ -42,10 +42,10 @@ func (r Result) String() string {
 // Checker 是命令安全审批检查器。
 // 维护危险命令模式列表和审批状态。
 type Checker struct {
-	mode      string   // 审批模式: "off" / "smart" / "always"
+	mode      string       // 审批模式: "off" / "smart" / "always"
 	modeMu    sync.RWMutex // 保护 mode 字段的并发读写
-	allowlist []string // 永久允许的模式
-	blocklist []string // 永久禁止的模式
+	allowlist []string     // 永久允许的模式
+	blocklist []string     // 永久禁止的模式
 }
 
 // NewChecker 创建审批检查器
@@ -173,29 +173,29 @@ var dangerousPatterns = []dangerousPattern{
 
 // dangerousFlagPatterns matches dangerous command flags that bypass safe pattern checks.
 var dangerousFlagPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`-(delete|exec|execdir|ok)`),
-	regexp.MustCompile(`xargs`),
+	regexp.MustCompile(`\b-(delete|exec|execdir|ok)\b`),
+	regexp.MustCompile(`\bxargs\b`),
 }
 
 // safePatterns 包含明确安全的命令模式。
 // 匹配这些模式的命令在任何模式下都自动通过。
 var safePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`^\s*(ls|dir)\s`),             // 列出目录
-	regexp.MustCompile(`^\s*(pwd|cwd)\s*$`),          // 显示当前目录
-	regexp.MustCompile(`^\s*(cat|head|tail|less)\s`), // 查看文件内容
-	regexp.MustCompile(`^\s*(echo|print|printf)\s`),  // 打印文本
-	regexp.MustCompile(`^\s*(whoami|who|id)\s*$`),    // 用户信息
-	regexp.MustCompile(`^\s*(date|time|uptime)\s*$`), // 系统时间信息
-	regexp.MustCompile(`^\s*(uname|hostname)\s`),     // 系统信息
-	regexp.MustCompile(`^\s*(env|printenv|set)\s`),   // 环境变量
-	regexp.MustCompile(`^\s*(which|whereis|type)\s`), // 查找命令路径
-	regexp.MustCompile(`^\s*(find|locate)\s`),        // 查找文件 (安全，无 -exec)
-	regexp.MustCompile(`^\s*(grep|rg|ag)\s`),         // 文本搜索
-	regexp.MustCompile(`^\s*(wc|sort|uniq)\s`),       // 文本处理
-	regexp.MustCompile(`^\s*(df|du)\s`),              // 磁盘使用情况
-	regexp.MustCompile(`^\s*(ps|top|htop)\s`),        // 进程查看
-	regexp.MustCompile(`^\s*(curl|wget)\s+-[oO]`),    // 下载到文件
-	regexp.MustCompile(`^\s*(git\s+status|git\s+log|git\s+diff|git\s+branch|git\s+show)`), // Git 只读操作
+	regexp.MustCompile(`^\s*(ls|dir)\s`),                                                                  // 列出目录
+	regexp.MustCompile(`^\s*(pwd|cwd)\s*$`),                                                               // 显示当前目录
+	regexp.MustCompile(`^\s*(cat|head|tail|less)\s`),                                                      // 查看文件内容
+	regexp.MustCompile(`^\s*(echo|print|printf)\s`),                                                       // 打印文本
+	regexp.MustCompile(`^\s*(whoami|who|id)\s*$`),                                                         // 用户信息
+	regexp.MustCompile(`^\s*(date|time|uptime)\s*$`),                                                      // 系统时间信息
+	regexp.MustCompile(`^\s*(uname|hostname)\s`),                                                          // 系统信息
+	regexp.MustCompile(`^\s*(env|printenv|set)\s`),                                                        // 环境变量
+	regexp.MustCompile(`^\s*(which|whereis|type)\s`),                                                      // 查找命令路径
+	regexp.MustCompile(`^\s*(find|locate)\s`),                                                             // 查找文件 (安全，无 -exec)
+	regexp.MustCompile(`^\s*(grep|rg|ag)\s`),                                                              // 文本搜索
+	regexp.MustCompile(`^\s*(wc|sort|uniq)\s`),                                                            // 文本处理
+	regexp.MustCompile(`^\s*(df|du)\s`),                                                                   // 磁盘使用情况
+	regexp.MustCompile(`^\s*(ps|top|htop)\s`),                                                             // 进程查看
+	regexp.MustCompile(`^\s*(curl|wget)\s+-[oO]`),                                                         // 下载到文件
+	regexp.MustCompile(`^\s*(git\s+status|git\s+log|git\s+diff|git\s+branch|git\s+show)`),                 // Git 只读操作
 	regexp.MustCompile(`^\s*(docker\s+ps|docker\s+images|docker\s+inspect|docker\s+logs|docker\s+stats)`), // Docker 只读操作
 }
 

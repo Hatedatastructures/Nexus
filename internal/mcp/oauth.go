@@ -158,9 +158,9 @@ func doTokenRequest(tokenURL string, data url.Values, clientID string) (*OAuthTo
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("Token 请求失败: %w", err)
+		return nil, fmt.Errorf("token 请求失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxOAuthResponseSize))
 	if err != nil {
@@ -173,7 +173,7 @@ func doTokenRequest(tokenURL string, data url.Values, clientID string) (*OAuthTo
 			"status", resp.StatusCode,
 			"body_len", len(body),
 		)
-		return nil, fmt.Errorf("Token 端点返回 HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("token 端点返回 HTTP %d", resp.StatusCode)
 	}
 
 	// 解析标准 OAuthToken 响应
@@ -220,9 +220,9 @@ func doTokenRequest(tokenURL string, data url.Values, clientID string) (*OAuthTo
 
 // OAuthFlowResult 保存交互式 OAuth 授权流程的中间结果。
 type OAuthFlowResult struct {
-	AuthURL   string // 用户需要打开的授权 URL
-	Verifier  string // 内部 code_verifier，用于后续 Token 交换
-	State     string // 随机 state 参数
+	AuthURL  string // 用户需要打开的授权 URL
+	Verifier string // 内部 code_verifier，用于后续 Token 交换
+	State    string // 随机 state 参数
 }
 
 // StartOAuthFlow 启动 OAuth 2.1 PKCE 授权流程，返回授权 URL 和中间状态。

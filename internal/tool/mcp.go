@@ -140,7 +140,7 @@ func callMCPTool(ctx context.Context, endpoint, toolName string, toolArgs map[st
 	if err != nil {
 		return "", fmt.Errorf("HTTP 请求失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
@@ -177,10 +177,4 @@ func callMCPTool(ctx context.Context, endpoint, toolName string, toolArgs map[st
 	}
 
 	return string(respBody), nil
-}
-
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&MCPTool{})
 }

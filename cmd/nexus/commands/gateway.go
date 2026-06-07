@@ -14,8 +14,10 @@ import (
 // GatewayCommand 实现 nexus gateway 命令。
 type GatewayCommand struct{}
 
-func (c *GatewayCommand) Name() string    { return "gateway" }
-func (c *GatewayCommand) Synopsis() string { return "网关服务管理 (run/start/stop/restart/status)" }
+func (c *GatewayCommand) Name() string { return "gateway" }
+func (c *GatewayCommand) Synopsis() string {
+	return "网关服务管理 (run/start/stop/restart/status)"
+}
 
 func (c *GatewayCommand) Run(args []string) {
 	if len(args) == 0 {
@@ -141,7 +143,7 @@ func (c *GatewayCommand) stopGateway() {
 
 	if !c.isProcessRunning(pid) {
 		fmt.Println(DimStyle.Render("  网关未运行"))
-		os.Remove(pidFile)
+		_ = os.Remove(pidFile)
 		return
 	}
 
@@ -155,7 +157,7 @@ func (c *GatewayCommand) stopGateway() {
 		PrintError("发送停止信号失败: %v", err)
 	}
 
-	os.Remove(pidFile)
+	_ = os.Remove(pidFile)
 	fmt.Println(GreenBold.Render("  网关已停止"))
 }
 
@@ -181,7 +183,7 @@ func (c *GatewayCommand) statusGateway() {
 		fmt.Printf("  %s (PID: %d)\n", GreenBold.Render("● 运行中"), pid)
 	} else {
 		fmt.Printf("  %s (PID: %d)\n", DimStyle.Render("○ 已停止"), pid)
-		os.Remove(pidFile)
+		_ = os.Remove(pidFile)
 	}
 
 	// 显示配置的平台
@@ -220,8 +222,4 @@ func (c *GatewayCommand) isProcessRunning(pid int) bool {
 	// 在 Unix 上，FindProcess 总是成功，需要发送信号 0 检查
 	err = process.Signal(syscall.Signal(0))
 	return err == nil
-}
-
-func init() {
-	Register(&GatewayCommand{})
 }

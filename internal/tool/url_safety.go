@@ -37,8 +37,8 @@ type URLSafetyConfig struct {
 // 包级 URL 安全检查器单例，用于中间件模式的主动拦截。
 // 在代理初始化时通过 SetURLSafetyConfig() 设置。
 var (
-	globalURLSafety     *URLSafetyChecker
-	globalURLSafetyMu   sync.RWMutex
+	globalURLSafety   *URLSafetyChecker
+	globalURLSafetyMu sync.RWMutex
 )
 
 // SetURLSafetyConfig 设置全局 URL 安全检查器。
@@ -263,9 +263,3 @@ func (t *URLSafetyTool) Execute(ctx context.Context, args map[string]any) (strin
 	return string(result), nil
 }
 
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	slog.Debug("registering URL safety check tool")
-	GetRegistry().Register(&URLSafetyTool{})
-}

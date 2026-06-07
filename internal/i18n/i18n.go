@@ -82,6 +82,7 @@ func New(locale string) (Translator, error) {
 	}
 	if _, ok := t.locales[locale]; !ok {
 		// 若请求的 locale 不在内嵌文件中，仍然允许创建，只是翻译会回退
+		_ = ok
 	}
 	return t, nil
 }

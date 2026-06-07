@@ -170,9 +170,9 @@ func TestIsSafeURL(t *testing.T) {
 	})
 
 	tests := []struct {
-		name      string // 测试用例名称
-		url       string // 输入 URL
-		expectSafe bool  // 是否应被判定为安全
+		name       string // 测试用例名称
+		url        string // 输入 URL
+		expectSafe bool   // 是否应被判定为安全
 	}{
 		// 不允许的协议
 		{

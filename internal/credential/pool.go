@@ -39,10 +39,10 @@ type Credential struct {
 type Pool struct {
 	mu              sync.RWMutex
 	credentials     []Credential
-	strategy        string // 选择策略: fill_first / round_robin / random / least_used
-	cursor          int    // round_robin 游标
-	useCounts       []int  // 每个凭证的使用计数 (least_used 策略)
-	lastSelectedIdx int    // 上次选择的凭证索引 (用于 MarkExhausted)
+	strategy        string               // 选择策略: fill_first / round_robin / random / least_used
+	cursor          int                  // round_robin 游标
+	useCounts       []int                // 每个凭证的使用计数 (least_used 策略)
+	lastSelectedIdx int                  // 上次选择的凭证索引 (用于 MarkExhausted)
 	exhaustedAt     map[string]time.Time // 凭证耗尽时间戳 (用于冷却恢复)
 	exhaustCooldown time.Duration        // 耗尽冷却时间 (默认 30 分钟)
 }
@@ -308,10 +308,10 @@ func (p *Pool) MarshalJSON() ([]byte, error) {
 	defer p.mu.RUnlock()
 
 	type credInfo struct {
-		ID        string `json:"id"`
-		Label     string `json:"label"`
-		Provider  string `json:"provider"`
-		UseCount  int    `json:"use_count"`
+		ID       string `json:"id"`
+		Label    string `json:"label"`
+		Provider string `json:"provider"`
+		UseCount int    `json:"use_count"`
 	}
 
 	out := struct {

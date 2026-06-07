@@ -17,8 +17,8 @@ type AdapterFactory func() PlatformAdapter
 
 // AdapterEntry 注册中心中的适配器条目。
 type AdapterEntry struct {
-	Platform Platform      // 平台类型枚举
-	Name     string        // 适配器显示名称
+	Platform Platform       // 平台类型枚举
+	Name     string         // 适配器显示名称
 	Factory  AdapterFactory // 工厂函数
 }
 
@@ -34,7 +34,16 @@ var defaultRegistry = &AdapterRegistry{
 	entries: make(map[Platform]*AdapterEntry),
 }
 
+// NewAdapterRegistry 创建新的平台适配器注册中心实例。
+func NewAdapterRegistry() *AdapterRegistry {
+	return &AdapterRegistry{
+		entries: make(map[Platform]*AdapterEntry),
+	}
+}
+
 // GetRegistry 返回全局注册中心实例。
+//
+// Deprecated: 使用 NewAdapterRegistry() + RegisterAllAdapters() 替代。将在未来版本移除。
 func GetRegistry() *AdapterRegistry {
 	return defaultRegistry
 }
@@ -151,9 +160,10 @@ func (r *AdapterRegistry) Has(platform Platform) bool {
 // ───────────────────────────── 自动发现 ─────────────────────────────
 
 // DiscoverAdapters 列出所有已注册的平台适配器。
-// 类似于 tool.DiscoverBuiltin，用于显式触发和日志记录。
+//
+// Deprecated: 使用 NewAdapterRegistry() + RegisterAllAdapters() 替代。
 func DiscoverAdapters() {
-	registry := GetRegistry()
+	registry := defaultRegistry
 	platforms := registry.List()
 
 	names := make([]string, 0, len(platforms))

@@ -154,8 +154,8 @@ func formatBucket(b *strings.Builder, label string, bucket RateLimitBucket) {
 		warn = " ⚡ 警告"
 	}
 
-	b.WriteString(fmt.Sprintf("  %-12s [%s] %d/%d (%.0f%%) 重置: %.0fs%s\n",
-		label, bar, used, bucket.Limit, pct, bucket.ResetSecs, warn))
+	fmt.Fprintf(b, "  %-12s [%s] %d/%d (%.0f%%) 重置: %.0fs%s\n",
+		label, bar, used, bucket.Limit, pct, bucket.ResetSecs, warn)
 }
 
 // FormatRateLimitCompact 返回单行紧凑格式（适合日志）。

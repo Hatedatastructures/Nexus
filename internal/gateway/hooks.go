@@ -20,7 +20,7 @@ import (
 type HookType string
 
 const (
-	HookPreDispatch   HookType = "pre_dispatch"   // 消息投递前执行
+	HookPreDispatch   HookType = "pre_dispatch"    // 消息投递前执行
 	HookPostDelivery  HookType = "post_delivery"   // 消息投递后执行
 	HookGatewayStart  HookType = "gateway:startup" // 网关启动时执行
 	HookSessionStart  HookType = "session:start"   // 会话开始时执行

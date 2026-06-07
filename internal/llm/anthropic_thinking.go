@@ -16,18 +16,18 @@ const (
 
 // Effort 等级（用于自适应思维模式）。
 const (
-	EffortLow     = "low"
-	EffortMedium  = "medium"
-	EffortHigh    = "high"
-	EffortXHigh   = "xhigh"
-	EffortMax     = "max"
+	EffortLow    = "low"
+	EffortMedium = "medium"
+	EffortHigh   = "high"
+	EffortXHigh  = "xhigh"
+	EffortMax    = "max"
 )
 
 // ThinkingBudget 预定义的 token 预算映射。
 var ThinkingBudget = map[string]int{
-	EffortMax:   32000,
-	EffortXHigh: 32000,
-	EffortHigh:  16000,
+	EffortMax:    32000,
+	EffortXHigh:  32000,
+	EffortHigh:   16000,
 	EffortMedium: 8000,
 	EffortLow:    4000,
 }
@@ -174,7 +174,7 @@ func buildAdaptiveThinkingParam(cfg *ThinkingConfig, model string) map[string]an
 	}
 
 	return map[string]any{
-		"thinking":       thinking,
+		"thinking": thinking,
 		"output_config": map[string]any{
 			"effort": adaptiveEffort,
 		},

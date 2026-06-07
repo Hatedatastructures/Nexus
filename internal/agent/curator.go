@@ -18,7 +18,7 @@ import (
 // ───────────────────────────── 常量 ─────────────────────────────
 
 const (
-	curatorInterval    = 7 * 24 * time.Hour // 7 天检查间隔
+	curatorInterval    = 7 * 24 * time.Hour  // 7 天检查间隔
 	curatorMaxSkillAge = 30 * 24 * time.Hour // 30 天未使用视为过期
 	curatorArchiveAge  = 90 * 24 * time.Hour // 90 天未使用归档
 )
@@ -29,9 +29,9 @@ const (
 type SkillState string
 
 const (
-	SkillStateActive    SkillState = "active"    // 活跃
-	SkillStateStale     SkillState = "stale"     // 过期
-	SkillStateArchived  SkillState = "archived"  // 已归档
+	SkillStateActive      SkillState = "active"      // 活跃
+	SkillStateStale       SkillState = "stale"       // 过期
+	SkillStateArchived    SkillState = "archived"    // 已归档
 	SkillStateReactivated SkillState = "reactivated" // 重新激活
 )
 
@@ -47,18 +47,18 @@ type CuratorSkill struct {
 
 // CuratorState 策展状态。
 type CuratorState struct {
-	LastRun   time.Time      `json:"last_run"`
-	Skills    []CuratorSkill `json:"skills"`
-	RunCount  int            `json:"run_count"`
+	LastRun  time.Time      `json:"last_run"`
+	Skills   []CuratorSkill `json:"skills"`
+	RunCount int            `json:"run_count"`
 }
 
 // ReviewResult LLM 审查结果。
 type ReviewResult struct {
-	Summary      string            `json:"summary"`
-	KeepSkills   []string          `json:"keep_skills"`
-	RemoveSkills []string          `json:"remove_skills"`
-	NewSkills    []string          `json:"new_skills"`
-	Actions      []string          `json:"actions"`
+	Summary      string   `json:"summary"`
+	KeepSkills   []string `json:"keep_skills"`
+	RemoveSkills []string `json:"remove_skills"`
+	NewSkills    []string `json:"new_skills"`
+	Actions      []string `json:"actions"`
 }
 
 // Curator 技能策展器。
@@ -243,8 +243,8 @@ func (c *Curator) scanSkills() error {
 	}
 	if len(newSkills) > 0 {
 		c.mu.Lock()
+		defer c.mu.Unlock()
 		c.state.Skills = append(c.state.Skills, newSkills...)
-		c.mu.Unlock()
 	}
 	return nil
 }
@@ -257,8 +257,8 @@ func (c *Curator) WriteRunReport(outputDir string, result *ReviewResult) error {
 
 	var b strings.Builder
 	b.WriteString("# 策展报告\n\n")
-	b.WriteString(fmt.Sprintf("执行时间: %s\n\n", time.Now().Format(time.RFC3339)))
-	b.WriteString(fmt.Sprintf("总技能数: %d\n\n", len(c.state.Skills)))
+	fmt.Fprintf(&b, "执行时间: %s\n\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&b, "总技能数: %d\n\n", len(c.state.Skills))
 
 	// 按状态分组
 	byState := make(map[SkillState][]CuratorSkill)
@@ -267,15 +267,15 @@ func (c *Curator) WriteRunReport(outputDir string, result *ReviewResult) error {
 	}
 
 	for state, skills := range byState {
-		b.WriteString(fmt.Sprintf("## %s (%d)\n\n", state, len(skills)))
+		fmt.Fprintf(&b, "## %s (%d)\n\n", state, len(skills))
 		for _, s := range skills {
-			b.WriteString(fmt.Sprintf("- **%s** — 最后使用: %s\n", s.Name, s.LastUsed.Format("2006-01-02")))
+			fmt.Fprintf(&b, "- **%s** — 最后使用: %s\n", s.Name, s.LastUsed.Format("2006-01-02"))
 		}
 		b.WriteString("\n")
 	}
 
 	if result != nil && result.Summary != "" {
-		b.WriteString(fmt.Sprintf("## 摘要\n\n%s\n", result.Summary))
+		fmt.Fprintf(&b, "## 摘要\n\n%s\n", result.Summary)
 	}
 
 	return os.WriteFile(reportPath, []byte(b.String()), 0600)

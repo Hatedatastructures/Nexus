@@ -11,7 +11,7 @@ import (
 // ───────────────────────────── 常量 ─────────────────────────────
 
 const (
-	defaultMaxChunkLen = 4000  // 默认最大 chunk 长度 (UTF-16 code units)
+	defaultMaxChunkLen = 4000       // 默认最大 chunk 长度 (UTF-16 code units)
 	chunkHeaderFmt     = "[%d/%d] " // chunk 头格式
 )
 

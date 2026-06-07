@@ -5,7 +5,9 @@ package cron
 import (
 	"context"
 	"fmt"
+
 	"log/slog"
+	pkgerrors "nexus-agent/internal/errors"
 	"strings"
 	"time"
 
@@ -35,7 +37,7 @@ const silentMarker = "[SILENT]"
 //  4. 通过适配器发送消息
 func DeliverResult(ctx context.Context, job *Job, result string, platformAdapters map[platforms.Platform]platforms.PlatformAdapter) error {
 	if job == nil {
-		return fmt.Errorf("作业不能为 nil")
+		return pkgerrors.New(pkgerrors.CronJob, "作业不能为 nil")
 	}
 
 	// 状态结果不投递
@@ -50,7 +52,7 @@ func DeliverResult(ctx context.Context, job *Job, result string, platformAdapter
 	}
 
 	// 如果没有平台适配器可用，仅记录日志
-	if platformAdapters == nil || len(platformAdapters) == 0 {
+	if len(platformAdapters) == 0 {
 		slog.Debug("Cron: no platform adapter available, skipping delivery", "job_id", job.ID)
 		return nil
 	}
@@ -107,7 +109,7 @@ func DeliverResult(ctx context.Context, job *Job, result string, platformAdapter
 	}
 
 	if failCount > 0 && successCount == 0 {
-		return fmt.Errorf("作业 '%s' 投递到 %d 个平台全部失败", job.ID, failCount)
+		return pkgerrors.New(pkgerrors.CronJob, fmt.Sprintf("作业 '%s' 投递到 %d 个平台全部失败", job.ID, failCount))
 	}
 
 	return nil
@@ -128,8 +130,8 @@ func buildDeliveryContent(job *Job, result string) string {
 	var buf strings.Builder
 
 	// Header
-	buf.WriteString(fmt.Sprintf("Cron 作业响应: %s\n", taskName))
-	buf.WriteString(fmt.Sprintf("(作业 ID: %s)\n", job.ID))
+	fmt.Fprintf(&buf, "Cron 作业响应: %s\n", taskName)
+	fmt.Fprintf(&buf, "(作业 ID: %s)\n", job.ID)
 	buf.WriteString("─────────────\n\n")
 
 	// 正文 (限制长度, rune 安全截断避免破坏多字节字符)
@@ -142,8 +144,8 @@ func buildDeliveryContent(job *Job, result string) string {
 
 	// Footer
 	buf.WriteString("\n\n─────────────\n")
-	buf.WriteString(fmt.Sprintf("执行时间: %s\n", time.Now().Format("2006-01-02 15:04:05")))
-	buf.WriteString(fmt.Sprintf("如需停止或管理此作业，发送新消息给我 (例如 \"停止提醒 %s\")。", taskName))
+	fmt.Fprintf(&buf, "执行时间: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&buf, "如需停止或管理此作业，发送新消息给我 (例如 \"停止提醒 %s\")。", taskName)
 
 	return buf.String()
 }

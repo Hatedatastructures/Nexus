@@ -6,7 +6,9 @@ package skill
 import (
 	"context"
 	"fmt"
+
 	"log/slog"
+	pkgerrors "nexus-agent/internal/errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,19 +21,19 @@ import (
 // 拒绝包含 ".."、"/"、"\" 或空字节的名称。
 func sanitizeSkillName(name string) error {
 	if name == "" {
-		return fmt.Errorf("技能名称为空")
+		return pkgerrors.New(pkgerrors.SkillIO, "技能名称为空")
 	}
 	if strings.Contains(name, "..") {
-		return fmt.Errorf("技能名称不能包含 '..'")
+		return pkgerrors.New(pkgerrors.SkillIO, "技能名称不能包含 '..'")
 	}
 	if strings.ContainsAny(name, "/\\") {
-		return fmt.Errorf("技能名称不能包含路径分隔符")
+		return pkgerrors.New(pkgerrors.SkillIO, "技能名称不能包含路径分隔符")
 	}
 	if strings.ContainsRune(name, 0) {
-		return fmt.Errorf("技能名称不能包含空字节")
+		return pkgerrors.New(pkgerrors.SkillIO, "技能名称不能包含空字节")
 	}
 	if len(name) > 64 {
-		return fmt.Errorf("技能名称长度不能超过 64 字符")
+		return pkgerrors.New(pkgerrors.SkillIO, "技能名称长度不能超过 64 字符")
 	}
 	return nil
 }
@@ -56,12 +58,12 @@ type Skill struct {
 // Manager 管理技能的全生命周期。
 // 支持加载、查询、创建、更新、删除、安装和启用/禁用操作。
 type Manager struct {
-	mu         sync.RWMutex
-	skillsDir  string             // 技能根目录 (~/.nexus/skills)
-	skills     map[string]*Skill  // 已加载的技能
-	disabled   []string           // 禁用的技能名称列表
-	loader     *SkillLoader       // 技能加载器
-	hub        *SkillsHub         // 技能中心客户端
+	mu        sync.RWMutex
+	skillsDir string            // 技能根目录 (~/.nexus/skills)
+	skills    map[string]*Skill // 已加载的技能
+	disabled  []string          // 禁用的技能名称列表
+	loader    *SkillLoader      // 技能加载器
+	hub       *SkillsHub        // 技能中心客户端
 }
 
 // NewManager 创建技能管理器
@@ -113,7 +115,7 @@ func (m *Manager) isDisabled(name string) bool {
 func (m *Manager) LoadAll(ctx context.Context) error {
 	skills, err := m.loader.DiscoverAll()
 	if err != nil {
-		return fmt.Errorf("加载技能失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.SkillIO, "加载技能失败", err)
 	}
 
 	m.mu.Lock()
@@ -142,7 +144,7 @@ func (m *Manager) Get(name string) (*Skill, error) {
 	// 缓存中未找到，尝试用加载器加载
 	loaded, err := m.loader.Load(name)
 	if err != nil {
-		return nil, fmt.Errorf("技能 '%s' 未找到", name)
+		return nil, pkgerrors.New(pkgerrors.SkillNotFound, fmt.Sprintf("技能 '%s' 未找到", name))
 	}
 
 	// 加载成功后缓存到内存
@@ -159,27 +161,27 @@ func (m *Manager) Get(name string) (*Skill, error) {
 // skill.Path 和 skill.Category 会被自动设置。
 func (m *Manager) Create(skill *Skill) error {
 	if skill == nil {
-		return fmt.Errorf("技能不能为 nil")
+		return pkgerrors.New(pkgerrors.SkillIO, "技能不能为 nil")
 	}
 	if skill.Name == "" {
-		return fmt.Errorf("技能名称为空")
+		return pkgerrors.New(pkgerrors.SkillIO, "技能名称为空")
 	}
 	if err := sanitizeSkillName(skill.Name); err != nil {
-		return fmt.Errorf("无效的技能名称: %w", err)
+		return pkgerrors.Wrap(pkgerrors.SkillIO, "无效的技能名称", err)
 	}
 	if skill.Description == "" {
-		return fmt.Errorf("技能描述为空")
+		return pkgerrors.New(pkgerrors.SkillIO, "技能描述为空")
 	}
 
 	skillDir := filepath.Join(m.skillsDir, skill.Name)
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
-		return fmt.Errorf("创建技能目录失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.SkillIO, "创建技能目录失败", err)
 	}
 
 	// 构建 SKILL.md 内容
 	skill.Path = filepath.Join(skillDir, "SKILL.md")
 	if err := m.writeSkillToDisk(skill); err != nil {
-		return fmt.Errorf("写入 SKILL.md 失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.SkillIO, "写入 SKILL.md 失败", err)
 	}
 
 	m.mu.Lock()
@@ -194,7 +196,7 @@ func (m *Manager) Create(skill *Skill) error {
 // 需要提供完整的 skill 对象。
 func (m *Manager) Update(name string, skill *Skill) error {
 	if skill == nil {
-		return fmt.Errorf("技能不能为 nil")
+		return pkgerrors.New(pkgerrors.SkillIO, "技能不能为 nil")
 	}
 
 	m.mu.Lock()
@@ -202,7 +204,7 @@ func (m *Manager) Update(name string, skill *Skill) error {
 
 	existing, ok := m.skills[name]
 	if !ok {
-		return fmt.Errorf("技能 '%s' 不存在", name)
+		return pkgerrors.New(pkgerrors.SkillNotFound, fmt.Sprintf("技能 '%s' 不存在", name))
 	}
 
 	// 保留原有路径
@@ -212,7 +214,7 @@ func (m *Manager) Update(name string, skill *Skill) error {
 	}
 
 	if err := m.writeSkillToDisk(skill); err != nil {
-		return fmt.Errorf("写入 SKILL.md 失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.SkillIO, "写入 SKILL.md 失败", err)
 	}
 
 	m.skills[name] = skill
@@ -227,7 +229,7 @@ func (m *Manager) Delete(name string) error {
 
 	skill, ok := m.skills[name]
 	if !ok {
-		return fmt.Errorf("技能 '%s' 不存在", name)
+		return pkgerrors.New(pkgerrors.SkillNotFound, fmt.Sprintf("技能 '%s' 不存在", name))
 	}
 
 	// 删除磁盘文件
@@ -259,7 +261,7 @@ func (m *Manager) Delete(name string) error {
 func (m *Manager) Install(ctx context.Context, source, identifier string) error {
 	skill, err := m.hub.Install(ctx, identifier)
 	if err != nil {
-		return fmt.Errorf("安装技能失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.SkillIO, "安装技能失败", err)
 	}
 
 	m.mu.Lock()
@@ -329,7 +331,7 @@ func (m *Manager) writeSkillToDisk(skill *Skill) error {
 	// 序列化为 YAML
 	fmBytes, err := yaml.Marshal(fm)
 	if err != nil {
-		return fmt.Errorf("序列化 frontmatter 失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.SkillIO, "序列化 frontmatter 失败", err)
 	}
 
 	// 组装完整的 SKILL.md
@@ -344,28 +346,27 @@ func (m *Manager) writeSkillToDisk(skill *Skill) error {
 	// 确保目录存在
 	dir := filepath.Dir(skill.Path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("创建目录失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.SkillIO, "创建目录失败", err)
 	}
 
 	// 原子写入 (临时文件 + 重命名)
 	tmpFile, err := os.CreateTemp(dir, ".skill_*.tmp")
 	if err != nil {
-		return fmt.Errorf("创建临时文件失败: %w", err)
+		return pkgerrors.Wrap(pkgerrors.SkillIO, "创建临时文件失败", err)
 	}
 	tmpPath := tmpFile.Name()
 
 	if _, err := tmpFile.WriteString(content); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("写入临时文件失败: %w", err)
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return pkgerrors.Wrap(pkgerrors.SkillIO, "写入临时文件失败", err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	if err := os.Rename(tmpPath, skill.Path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("原子重命名失败: %w", err)
+		_ = os.Remove(tmpPath)
+		return pkgerrors.Wrap(pkgerrors.SkillIO, "原子重命名失败", err)
 	}
 
 	return nil
 }
-

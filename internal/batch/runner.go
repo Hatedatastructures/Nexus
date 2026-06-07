@@ -9,7 +9,9 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+
 	"log/slog"
+	pkgerrors "nexus-agent/internal/errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -22,23 +24,23 @@ import (
 
 // Prompt 表示一个批处理 prompt。
 type Prompt struct {
-	Text        string            `json:"text"`
-	Model       string            `json:"model,omitempty"`
-	Container   string            `json:"container,omitempty"` // Docker/Modal/Singularity/Daytona
-	Metadata    map[string]string `json:"metadata,omitempty"`
+	Text      string            `json:"text"`
+	Model     string            `json:"model,omitempty"`
+	Container string            `json:"container,omitempty"` // Docker/Modal/Singularity/Daytona
+	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
 // Trajectory 表示一条处理轨迹。
 type Trajectory struct {
-	Prompt      string        `json:"prompt"`
-	Response    string        `json:"response"`
-	Model       string        `json:"model"`
-	ToolCalls   int           `json:"tool_calls"`
-	Tokens      int64         `json:"tokens"`
-	Duration    time.Duration `json:"duration"`
-	Completed   bool          `json:"completed"`
-	Error       string        `json:"error,omitempty"`
-	Timestamp   time.Time     `json:"timestamp"`
+	Prompt    string        `json:"prompt"`
+	Response  string        `json:"response"`
+	Model     string        `json:"model"`
+	ToolCalls int           `json:"tool_calls"`
+	Tokens    int64         `json:"tokens"`
+	Duration  time.Duration `json:"duration"`
+	Completed bool          `json:"completed"`
+	Error     string        `json:"error,omitempty"`
+	Timestamp time.Time     `json:"timestamp"`
 }
 
 // BatchResult 批处理结果。
@@ -58,8 +60,8 @@ type WorkerFunc func(ctx context.Context, prompt Prompt) (Trajectory, error)
 
 // BatchRunner 并行批处理运行器。
 type BatchRunner struct {
-	cfg      config.BatchConfig
-	workerFn WorkerFunc
+	cfg       config.BatchConfig
+	workerFn  WorkerFunc
 	outputDir string
 }
 
@@ -170,12 +172,12 @@ func (br *BatchRunner) Run(ctx context.Context, prompts []Prompt) (*BatchResult,
 	outputPath := br.outputPath()
 	f, err := os.Create(outputPath)
 	if err != nil {
-		return nil, fmt.Errorf("创建输出文件: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.FileIO, "创建输出文件", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	w := bufio.NewWriter(f)
-	defer w.Flush()
+	defer func() { _ = w.Flush() }()
 
 	for traj := range resultCh {
 		if traj.Error != "" {
@@ -192,7 +194,7 @@ func (br *BatchRunner) Run(ctx context.Context, prompts []Prompt) (*BatchResult,
 		if _, err := w.Write(data); err != nil {
 			slog.Warn("写入轨迹失败", "err", err)
 		}
-		w.WriteByte('\n')
+		_ = w.WriteByte('\n')
 
 		// 记录到恢复映射
 		br.saveResultHash(contentHash(traj.Prompt))
@@ -236,7 +238,7 @@ func (br *BatchRunner) loadExistingResults() (map[string]bool, error) {
 		if err := scanner.Err(); err != nil {
 			slog.Warn("读取轨迹文件出错", "path", path, "err", err)
 		}
-		f.Close()
+		_ = f.Close()
 	}
 
 	return results, nil
@@ -248,8 +250,8 @@ func (br *BatchRunner) saveResultHash(hash string) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	fmt.Fprintf(f, "%s\n", hash)
+	defer func() { _ = f.Close() }()
+	_, _ = fmt.Fprintf(f, "%s\n", hash)
 }
 
 func (br *BatchRunner) outputPath() string {
@@ -282,10 +284,10 @@ func MergeJSONL(outputDir string) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	w := bufio.NewWriter(out)
-	defer w.Flush()
+	defer func() { _ = w.Flush() }()
 
 	total := 0
 	for _, path := range matches {
@@ -299,15 +301,15 @@ func MergeJSONL(outputDir string) (string, int, error) {
 			line := scanner.Bytes()
 			var traj Trajectory
 			if json.Unmarshal(line, &traj) == nil && traj.Prompt != "" {
-				w.Write(line)
-				w.WriteByte('\n')
+				_, _ = w.Write(line)
+				_ = w.WriteByte('\n')
 				total++
 			}
 		}
 		if err := scanner.Err(); err != nil {
 			slog.Warn("读取轨迹文件出错", "path", path, "err", err)
 		}
-		f.Close()
+		_ = f.Close()
 	}
 
 	return outputPath, total, nil

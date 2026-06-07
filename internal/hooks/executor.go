@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
 	"log/slog"
+	pkgerrors "nexus-agent/internal/errors"
 	"os/exec"
 	"strings"
 	"time"
@@ -20,28 +22,28 @@ var allowedShellBasenames = map[string]bool{
 func validateHookCommand(cmd string) error {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
-		return fmt.Errorf("hook 命令为空")
+		return pkgerrors.New(pkgerrors.ConfigInvalid, "hook 命令为空")
 	}
 	if strings.ContainsAny(cmd, ";\n\r") ||
 		strings.Contains(cmd, "&&") ||
 		strings.Contains(cmd, "||") ||
 		strings.Contains(cmd, "$(") ||
 		strings.Contains(cmd, "`") {
-		return fmt.Errorf("hook 命令包含危险的 shell 元字符")
+		return pkgerrors.New(pkgerrors.ConfigInvalid, "hook 命令包含危险的 shell 元字符")
 	}
 	binPath, _, _ := strings.Cut(cmd, " ")
 	if strings.HasPrefix(binPath, "/") {
 		resolved, err := exec.LookPath(binPath)
 		if err != nil {
-			return fmt.Errorf("hook 命令路径不可解析: %s", binPath)
+			return pkgerrors.New(pkgerrors.ConfigInvalid, fmt.Sprintf("hook 命令路径不可解析: %s", binPath))
 		}
 		if resolved != binPath {
-			return fmt.Errorf("hook 命令路径被重定向: %s → %s", binPath, resolved)
+			return pkgerrors.New(pkgerrors.ConfigInvalid, fmt.Sprintf("hook 命令路径被重定向: %s → %s", binPath, resolved))
 		}
 		return nil
 	}
 	if !allowedShellBasenames[binPath] {
-		return fmt.Errorf("hook 命令 basename 不在白名单中: %s", binPath)
+		return pkgerrors.New(pkgerrors.ConfigInvalid, fmt.Sprintf("hook 命令 basename 不在白名单中: %s", binPath))
 	}
 	return nil
 }
@@ -70,7 +72,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, hook *ShellHook, event *Hoo
 
 	cmdStr := hook.Command()
 	if err := validateHookCommand(cmdStr); err != nil {
-		return nil, fmt.Errorf("hook 命令验证失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ConfigInvalid, "hook 命令验证失败", err)
 	}
 
 	parts := strings.Fields(cmdStr)
@@ -79,14 +81,14 @@ func (e *ShellExecutor) Execute(ctx context.Context, hook *ShellHook, event *Hoo
 	// 将事件序列化为 JSON 写入 stdin
 	eventJSON, err := json.Marshal(event)
 	if err != nil {
-		return nil, fmt.Errorf("序列化 hook 事件失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ConfigInvalid, "序列化 hook 事件失败", err)
 	}
 	cmd.Stdin = strings.NewReader(string(eventJSON))
 
 	// 捕获 stdout
 	stdout, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("hook 脚本执行失败: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ConfigInvalid, "hook 脚本执行失败", err)
 	}
 
 	// 解析响应
@@ -118,10 +120,10 @@ func parseResponse(data []byte) (*HookResponse, error) {
 		Decision string `json:"decision"`
 	}
 	if err := json.Unmarshal(data, &minimal); err != nil {
-		return nil, fmt.Errorf("无法解析 hook 响应: %w", err)
+		return nil, pkgerrors.Wrap(pkgerrors.ConfigInvalid, "无法解析 hook 响应", err)
 	}
 	if minimal.Decision == "" {
-		return nil, fmt.Errorf("hook 响应缺少 decision 字段")
+		return nil, pkgerrors.New(pkgerrors.ConfigInvalid, "hook 响应缺少 decision 字段")
 	}
 
 	return &HookResponse{Decision: minimal.Decision}, nil

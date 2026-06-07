@@ -43,29 +43,30 @@ func TestWorkerTransition(t *testing.T) {
 
 			// 通过合法路径到达 from 状态
 			// Pending → Running 是必经之路，到达 Running 后可继续转换
-			if tt.from == StateRunning {
+			switch tt.from {
+			case StateRunning:
 				if err := w.Transition(StateRunning); err != nil {
 					t.Fatalf("无法从 Pending 转换到 Running: %v", err)
 				}
-			} else if tt.from == StatePaused {
+			case StatePaused:
 				// Pending → Running → Paused
 				_ = w.Transition(StateRunning)
 				if err := w.Transition(StatePaused); err != nil {
 					t.Fatalf("无法从 Running 转换到 Paused: %v", err)
 				}
-			} else if tt.from == StateCompleted {
+			case StateCompleted:
 				// Pending → Running → Completed
 				_ = w.Transition(StateRunning)
 				if err := w.Transition(StateCompleted); err != nil {
 					t.Fatalf("无法从 Running 转换到 Completed: %v", err)
 				}
-			} else if tt.from == StateFailed {
+			case StateFailed:
 				// Pending → Running → Failed
 				_ = w.Transition(StateRunning)
 				if err := w.Transition(StateFailed); err != nil {
 					t.Fatalf("无法从 Running 转换到 Failed: %v", err)
 				}
-			} else if tt.from == StateCancelled {
+			case StateCancelled:
 				// Pending → Running → Cancelled
 				_ = w.Transition(StateRunning)
 				if err := w.Transition(StateCancelled); err != nil {

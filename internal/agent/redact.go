@@ -13,11 +13,7 @@ import (
 // ───────────────────────────── 配置 ─────────────────────────────
 
 // redactEnabled 使用原子操作保证并发安全。
-var redactEnabled atomic.Bool
-
-func init() {
-	redactEnabled.Store(true)
-}
+var redactEnabled = func() (v atomic.Bool) { v.Store(true); return }()
 
 // SetRedactEnabled 设置脱敏开关。
 func SetRedactEnabled(enabled bool) {
@@ -33,8 +29,8 @@ func IsRedactEnabled() bool {
 
 // prefixPattern 匹配已知 API 密钥前缀
 type prefixPattern struct {
-	prefix  string
-	minLen  int // 密钥最小长度
+	prefix string
+	minLen int // 密钥最小长度
 }
 
 var prefixPatterns = []prefixPattern{
@@ -82,8 +78,8 @@ var regexPatterns = []struct {
 // ───────────────────────────── 核心函数 ─────────────────────────────
 
 const (
-	prefixKeep = 6 // 保留前缀字符数
-	suffixKeep = 4 // 保留后缀字符数
+	prefixKeep = 6  // 保留前缀字符数
+	suffixKeep = 4  // 保留后缀字符数
 	minMaskLen = 18 // 触发遮蔽的最小长度
 )
 

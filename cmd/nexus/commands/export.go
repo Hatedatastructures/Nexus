@@ -11,7 +11,7 @@ import (
 // ExportCommand 实现 nexus export 命令。
 type ExportCommand struct{}
 
-func (c *ExportCommand) Name() string    { return "export" }
+func (c *ExportCommand) Name() string     { return "export" }
 func (c *ExportCommand) Synopsis() string { return "导出数据 (memory/config)" }
 
 func (c *ExportCommand) Run(args []string) {
@@ -98,8 +98,4 @@ func (c *ExportCommand) exportConfig() {
 	}
 
 	fmt.Println(string(jsonData))
-}
-
-func init() {
-	Register(&ExportCommand{})
 }

@@ -35,7 +35,7 @@ type MemoryHandler interface {
 // globalMemoryManager 存储全局的记忆管理器引用。
 // 在代理初始化时通过 SetMemoryManager 设置。
 var (
-	globalMemoryManager  MemoryHandler
+	globalMemoryManager   MemoryHandler
 	globalMemoryManagerMu sync.RWMutex
 )
 
@@ -171,10 +171,4 @@ func (t *MemoryTool) Execute(ctx context.Context, args map[string]any) (string, 
 	}
 
 	return string(result), nil
-}
-
-// ───────────────────────────── init 注册 ─────────────────────────────
-
-func init() {
-	GetRegistry().Register(&MemoryTool{})
 }

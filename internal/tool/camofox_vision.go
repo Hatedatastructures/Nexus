@@ -123,7 +123,11 @@ func (t *CamofoxVisionTool) Execute(ctx context.Context, args map[string]any) (s
 				Snapshot string `json:"snapshot"`
 			}
 			if json.Unmarshal(snapResp, &snapData) == nil && len(snapData.Snapshot) > 0 {
-				annotationContext = "\n\n可访问性树（元素引用用于交互）:\n" + snapData.Snapshot[:3000]
+				limit := len(snapData.Snapshot)
+					if limit > 3000 {
+						limit = 3000
+					}
+					annotationContext = "\n\n可访问性树（元素引用用于交互）:\n" + snapData.Snapshot[:limit]
 			}
 		}
 	}

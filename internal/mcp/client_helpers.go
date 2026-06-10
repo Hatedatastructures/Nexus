@@ -101,8 +101,12 @@ func (c *MCPClient) ListTools(ctx context.Context) ([]ToolInfo, error) {
 		if !ok {
 			continue
 		}
+		nameVal, ok := m["name"].(string)
+		if !ok || nameVal == "" {
+			continue
+		}
 		ti := ToolInfo{
-			Name:        m["name"].(string),
+			Name:        nameVal,
 			Description: "",
 		}
 		if desc, ok := m["description"].(string); ok {

@@ -48,7 +48,7 @@ func InitLogger(level, format, logDir string) (closeFn func()) {
 	if logDir != "" {
 		logFile, err := os.OpenFile(
 			filepath.Join(logDir, "agent.log"),
-			os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644,
+			os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600,
 		)
 		if err != nil {
 			slog.Warn("无法打开日志文件，仅输出到 stderr", "err", err)

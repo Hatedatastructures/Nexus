@@ -199,7 +199,11 @@ func (s *Scheduler) tickWithAdapters(ctx context.Context, adapters map[platforms
 	slog.Info("Cron: due jobs", "count", len(dueJobs))
 
 	for _, job := range dueJobs {
-		_ = s.manager.AdvanceNextRun(ctx, job)
+		if err := s.manager.AdvanceNextRun(ctx, job); err != nil {
+			slog.Warn("Cron: failed to advance next run time",
+				"job_id", job.ID, "error", err,
+			)
+		}
 
 		if err := s.executor.Execute(ctx, job); err != nil {
 			slog.Error("Cron: job execution failed",
@@ -217,7 +221,11 @@ func (s *Scheduler) tickWithAdapters(ctx context.Context, adapters map[platforms
 			)
 		}
 
-		_ = DeliverResult(ctx, job, job.LastStatus, adapters)
+		if err := DeliverResult(ctx, job, job.LastStatus, adapters); err != nil {
+			slog.Warn("Cron: result delivery failed",
+				"job_id", job.ID, "error", err,
+			)
+		}
 	}
 
 	return nil
